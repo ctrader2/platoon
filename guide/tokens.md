@@ -1,7 +1,9 @@
 # Features that use tokens
 
 Most of platoon spends nothing: the list, search by words, projects, notes you write yourself, tasks and themes all work
-without asking Claude anything. A few features do ask Claude, which uses your own Claude plan. They are **off by default**.
+without asking an AI anything. A few features do ask one, which uses your own plan: Claude's through Claude Code, or,
+when you pick one of OpenAI's models, your ChatGPT plan through Codex (see [Calls on Codex](#calls-on-codex)). They are
+**off by default**.
 
 ## The features
 
@@ -110,9 +112,30 @@ All of this is enforced in one place before any call starts:
   a job that only needs a short answer (about half the cost of a naming call). The helper Claude process that runs there is
   platoon's own: it is never shown as a conversation (not in the list, the counts, search or naming, whatever it is doing).
 
-The limit, the pause point, the model and how much is read are all [settings](settings-and-keys.md#smart-features), and
+The limit, the pause point, the models (see [Choosing a model](settings-and-keys.md#choosing-a-model)) and how much is
+read are all [settings](settings-and-keys.md#smart-features), and
 what platoon asks Claude for each feature can be changed too: see
 [System prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).
+
+## Calls on Codex
+
+The model decides the program: pick one of OpenAI's models (for the smart features, the project notes or a squad's
+verdict model) and those calls run on Codex instead of Claude Code. What is sent is the same as for Claude, and so are
+the switches, the daily limit and the back-off. The call is `codex exec` with your normal Codex sign-in:
+
+- **Read-only, not tool-less.** Codex can't switch its tools off, so the call runs in Codex's read-only sandbox: it can
+  read files and run commands that change nothing in the folder it runs in, but it can't write anything or reach the
+  network. Platoon's own calls run in `~/.cache/platoon/ai-work`, where there is nothing to read; a task's check runs in
+  the task's folder, which it is meant to read.
+- **Nothing of yours is used and nothing is kept.** It runs without your `config.toml` (no MCP servers, no hooks or
+  profiles of yours) and keeps no session, so it never shows in Codex's history or in platoon's list. The system prompt
+  goes in as the call's instructions and the request on its standard input; with an answer shaped by a JSON Schema,
+  the schema is written to a file in the work folder for the call and removed after it.
+- **Each call costs about 20,000 tokens before it starts.** Codex sends its own instructions with every call: 17,000 to
+  26,000 tokens even for a one-word question (most of them cached, which Codex still counts). Every token Codex reports
+  is counted against the daily limit, cached ones included, so on a small plan the smart features use it up much sooner
+  than on Claude: a project's notes or a hand-off now and then is fine, naming every session in the background is not.
+- **Codex reports no cost**, only tokens.
 
 ## `platoon tokens`
 
@@ -120,6 +143,10 @@ what platoon asks Claude for each feature can be changed too: see
 under it how many tokens each one used and in how many calls (the hand-off, tasks from a conversation, task checks and
 `platoon tokens test` appear there too, by name).
 
+It also names the model each setting uses and the program that runs it (`Model for smart features: Haiku (Claude
+Code)`, `Model for project notes: GPT-6-Luna (Codex)`), or says it isn't installed.
+
 `platoon tokens test` makes one tiny call the same way a feature would (master switch on, the daily limit, the plan pause
-and back-off all apply) and prints the reply, the tokens, the cost Claude reports and today's total; if a gate refuses it
-says why and how to switch it on.
+and back-off all apply), on the smart features' model, saying which program it asks (`Asking Codex (GPT-6-Luna) to reply
+with one word...`), and prints the reply, the tokens, the cost Claude reports (Codex reports none) and today's total; if
+a gate refuses it says why and how to switch it on.

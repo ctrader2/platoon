@@ -20,12 +20,15 @@ use super::{
     HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, Start, TaskLaunch, Tool, Transcript, TurnEnd, one_line, parse_iso_ms,
     tidy_reply, truncate_to,
 };
+use crate::ai::{Outcome, Request, classify, extract_json};
+use crate::ledger::{FailKind, Usage};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
     time::UNIX_EPOCH,
 };
@@ -40,9 +43,6 @@ const TEXT_MAX: usize = 300;
 /// The window before a rollout says (no reply yet: no tokens either). The models Codex lists have 272k windows; a
 /// rollout's own figure always wins.
 const DEFAULT_WINDOW: u64 = 272_000;
-
-/// Said when a one-shot call would run on Codex: platoon's own calls are Claude Code's for now.
-pub const NO_ONE_SHOT: &str = "platoon's own calls don't run on Codex yet";
 
 /// Where Codex keeps its state (`CODEX_HOME`, else `~/.codex`).
 /// The user's real one: code that a unit test runs reads a temporary root instead (`Reader::with_root`).
@@ -172,6 +172,124 @@ pub fn hook_answer(reply: &HookReply) -> HookAnswer {
         HookReply::SendBack(reason) | HookReply::Refuse(reason) => json!({"decision": "block", "reason": reason}).to_string(),
     };
     HookAnswer { stdout, stderr: String::new(), code: 0 }
+}
+
+// ---- a one-shot call (platoon's own) ---------------------------------------------------------------------------------
+
+/// Make `cmd` (Codex's program) a one-shot call of `model` for `req`: `codex exec` printing its events as JSON lines,
+/// keeping no session (`--ephemeral`), without the user's `config.toml` (`--ignore-user-config`: no MCP servers, no
+/// hooks of theirs; the sign-in is still Codex's own), the system prompt as `developer_instructions`, and the prompt on
+/// stdin (`-`: a prompt can be far longer than one argument may be, and nothing the user typed shows in the list of
+/// processes). The answer follows `schema_file` when the request gives a JSON Schema (Codex reads it from a file,
+/// which the caller writes and removes). Outside a git repository Codex refuses to run unless told it may
+/// (`--skip-git-repo-check`): platoon's own work folder is one, and so may be a task's folder.
+///
+/// Codex can't switch its tools off: `Tools::None` and `Tools::ReadOnly` both run in its read-only sandbox (`-s
+/// read-only`), where it can still read files and run commands that change nothing, but can't write or reach the
+/// network.
+pub fn one_shot(cmd: &mut Command, model: &str, req: &Request, cwd: &Path, schema_file: Option<&Path>) {
+    cmd.args(["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", model]);
+    cmd.arg("-c").arg(format!("model_reasoning_effort={}", toml_string(req.effort)));
+    cmd.arg("-c").arg(format!("developer_instructions={}", toml_string(&req.system)));
+    if let Some(file) = schema_file {
+        cmd.arg("--output-schema").arg(file);
+    }
+    if !in_git(cwd) {
+        cmd.arg("--skip-git-repo-check");
+    }
+    cmd.arg("-");
+}
+
+/// `text` as a TOML string, as `-c key=value` reads a value: quoted, so it is always text, whatever it holds.
+fn toml_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Is `dir` inside a git repository (a `.git` folder, or a worktree's `.git` file, in it or above it)?
+fn in_git(dir: &Path) -> bool {
+    dir.ancestors().any(|d| d.join(".git").exists())
+}
+
+/// What came out of a run of `codex exec --json`, understood. Pure: the runner feeds it the bytes. One JSON event per
+/// line: the answer is the text of the last `agent_message` item (with a schema, that text is the JSON), the usage is
+/// `turn.completed`'s; `turn.failed` and `error` events say what went wrong. `wants_json`: the request gave a schema,
+/// so an answer that isn't JSON is a failure.
+pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool, wants_json: bool) -> Outcome {
+    let out = String::from_utf8_lossy(stdout);
+    let err = String::from_utf8_lossy(stderr);
+    let (mut answer, mut usage, mut finished, mut problems) = (None, None, false, Vec::new());
+    for line in out.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        match v.get("type").and_then(Value::as_str) {
+            Some("item.completed") if v["item"]["type"] == "agent_message" => {
+                answer = v["item"]["text"].as_str().map(String::from);
+            }
+            Some("turn.completed") => {
+                finished = true;
+                usage = v.get("usage").filter(|u| u.is_object()).map(usage_of);
+            }
+            Some("turn.failed") => problems.extend(v["error"]["message"].as_str().map(String::from)),
+            Some("error") => problems.extend(v["message"].as_str().map(String::from)),
+            _ => {}
+        }
+    }
+    let fail = |kind: Option<FailKind>, detail: String| {
+        let said = format!("{} {err}", problems.join(" "));
+        let detail = if !problems.is_empty() { cut(&problems.join(" "), 200) } else { detail };
+        Err((kind.unwrap_or_else(|| classify(&said)), detail))
+    };
+    let result = match answer.filter(|a| !a.trim().is_empty()) {
+        // An `error` along the way that Codex got over (a dropped connection it retried) doesn't count once the turn
+        // has finished.
+        _ if !finished || !exited_ok => {
+            let detail = match (out.trim().is_empty(), err.trim().is_empty()) {
+                (true, true) => "no output".to_string(),
+                (_, false) => cut(&err, 200),
+                (false, true) => "Codex stopped before it finished its answer".to_string(),
+            };
+            fail(None, detail)
+        }
+        None => fail(Some(FailKind::Other), "Codex finished without an answer".into()),
+        Some(a) if wants_json && extract_json(&a).is_none() => {
+            fail(Some(FailKind::Other), format!("Codex's answer wasn't the JSON asked for: {}", cut(&a, 120)))
+        }
+        Some(a) => Ok(a),
+    };
+    Outcome { result, usage, cost_usd: 0.0 }
+}
+
+/// `turn.completed`'s usage as platoon counts it. Codex's `input_tokens` is everything sent, its cached part
+/// (`cached_input_tokens`, and `cache_write_input_tokens`) included, so those are taken out of `input` and counted
+/// apart: the total is every token sent plus every one written (`output_tokens`, its reasoning included). Codex's own
+/// instructions are most of a call: about 17,000 to 26,000 tokens even for a tiny question, mostly cached.
+fn usage_of(u: &Value) -> Usage {
+    let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let (sent, cached, written) = (n("input_tokens"), n("cached_input_tokens"), n("cache_write_input_tokens"));
+    Usage {
+        input: sent.saturating_sub(cached).saturating_sub(written),
+        cache_creation: written,
+        cache_read: cached,
+        output: n("output_tokens"),
+    }
+}
+
+fn cut(s: &str, n: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= n { one_line } else { format!("{}…", one_line.chars().take(n).collect::<String>()) }
 }
 
 // ---- models ---------------------------------------------------------------------------------------------------------
@@ -1161,5 +1279,118 @@ trust_level = "trusted"
         assert!(cache.get(&dir).iter().any(|(p, _)| *p == child.id()), "the first answer is waited for");
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    // ---- a one-shot call ----
+
+    fn args(cmd: &Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn a_one_shot_call_is_codex_exec_read_only_ephemeral_without_the_users_config_with_the_prompt_on_stdin() {
+        let mut req = Request::new("names", "Be brief.\nSay \"ok\" \\ nothing else.", "the prompt");
+        req.effort = "low";
+        let outside = tmp("exec-outside");
+        let mut cmd = Command::new("codex");
+        one_shot(&mut cmd, "gpt-6-luna", &req, &outside, None);
+        assert_eq!(
+            args(&cmd),
+            [
+                "exec",
+                "--json",
+                "--ephemeral",
+                "--ignore-user-config",
+                "-s",
+                "read-only",
+                "-m",
+                "gpt-6-luna",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                "-c",
+                "developer_instructions=\"Be brief.\\nSay \\\"ok\\\" \\\\ nothing else.\"",
+                "--skip-git-repo-check",
+                "-"
+            ]
+        );
+        assert!(!args(&cmd).iter().any(|a| a.contains("the prompt")), "the prompt goes on stdin");
+        // In a git repository (a worktree's `.git` is a file), with a schema: no skipping the check, the schema's file.
+        let repo = tmp("exec-repo");
+        fs::write(repo.join(".git"), "gitdir: /elsewhere\n").unwrap();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        req.json_schema = Some("{}".into());
+        req.effort = "medium";
+        let mut cmd = Command::new("codex");
+        one_shot(&mut cmd, "gpt-5.6-terra", &req, &repo.join("src"), Some(Path::new("/work/schema-1.json")));
+        let a = args(&cmd);
+        assert!(a.windows(2).any(|w| w == ["--output-schema", "/work/schema-1.json"]), "{a:?}");
+        assert!(a.contains(&"model_reasoning_effort=\"medium\"".to_string()) && !a.contains(&"--skip-git-repo-check".to_string()), "{a:?}");
+        assert_eq!(a.last().map(String::as_str), Some("-"));
+    }
+
+    #[test]
+    fn a_text_value_is_always_a_toml_string_whatever_it_holds() {
+        assert_eq!(toml_string("plain"), "\"plain\"");
+        assert_eq!(toml_string("42"), "\"42\"", "never a number");
+        assert_eq!(toml_string("a\tb\rc\u{1b}d"), "\"a\\tb\\rc\\u001Bd\"");
+        let parsed: toml::Value = toml::from_str(&format!("v = {}", toml_string("q\"uote\\back\nline é"))).unwrap();
+        assert_eq!(parsed["v"].as_str(), Some("q\"uote\\back\nline é"));
+    }
+
+    fn sample_exec() -> Vec<u8> {
+        fs::read(data().join("exec/exec-sample.jsonl")).unwrap()
+    }
+
+    #[test]
+    fn the_answer_is_the_last_agent_message_and_the_usage_turn_completed_s() {
+        // A real `codex exec --json --output-schema` run (Codex 0.163): a message, a command, the JSON answer.
+        let o = interpret(&sample_exec(), b"Reading additional input from stdin...\n", true, true);
+        assert_eq!(o.result, Ok("{\"colour\":\"teal\",\"files_read\":1}".to_string()));
+        // 26,038 sent, 12,800 of it cached: counted apart, nothing lost.
+        assert_eq!(o.usage, Some(Usage { input: 13_238, cache_creation: 0, cache_read: 12_800, output: 76 }));
+        assert_eq!(o.usage.unwrap().total(), 26_038 + 76);
+        assert_eq!(o.cost_usd, 0.0, "Codex says no cost");
+        // Without a schema any words are an answer.
+        let plain = b"{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5}}\n";
+        assert_eq!(interpret(plain, b"", true, false).result, Ok("ok".to_string()));
+    }
+
+    #[test]
+    fn every_way_a_codex_call_goes_wrong_is_a_failure_said_plainly_and_what_it_used_still_counts() {
+        let done = r#"{"type":"turn.completed","usage":{"input_tokens":20000,"cached_input_tokens":15000,"output_tokens":9}}"#;
+        let said = |t: &str| format!(r#"{{"type":"item.completed","item":{{"id":"i","type":"agent_message","text":{}}}}}"#, json!(t));
+        let lines = |l: &[&str]| l.join("\n").into_bytes();
+        // Nothing at all.
+        let o = interpret(b"", b"", true, true);
+        assert_eq!(o.result, Err((FailKind::Other, "no output".into())));
+        assert_eq!(o.usage, None);
+        // It stopped before the turn finished.
+        let o = interpret(&lines(&[r#"{"type":"thread.started"}"#, r#"{"type":"turn.started"}"#, &said("I'll look")]), b"", false, true);
+        assert_eq!(o.result, Err((FailKind::Other, "Codex stopped before it finished its answer".into())));
+        // A failed turn says why, and the kind is read from it; a non-zero exit with what it printed on stderr too.
+        let o = interpret(
+            &lines(&[r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}"#]),
+            b"",
+            false,
+            true,
+        );
+        assert_eq!(o.result, Err((FailKind::RateLimited, "You've hit your usage limit. Try again later.".into())));
+        let o = interpret(b"", b"Error: Not logged in. Run codex login.\n", false, true);
+        assert_eq!(o.result.unwrap_err().0, FailKind::NotSignedIn);
+        // A finished turn with no words, or words that aren't the JSON asked for.
+        let o = interpret(&lines(&[done]), b"", true, true);
+        assert_eq!(o.result, Err((FailKind::Other, "Codex finished without an answer".into())));
+        assert_eq!(o.usage.map(|u| u.total()), Some(20_009), "what it used counts even so");
+        let o = interpret(&lines(&[&said("I couldn't decide."), done]), b"", true, true);
+        assert_eq!(o.result, Err((FailKind::Other, "Codex's answer wasn't the JSON asked for: I couldn't decide.".into())));
+        // A finished turn that exited non-zero is not an answer either.
+        let o = interpret(&lines(&[&said("{}"), done]), b"something broke", false, true);
+        assert_eq!(o.result, Err((FailKind::Other, "something broke".into())));
+        // A dropped connection Codex got over doesn't spoil a turn that finished.
+        let o = interpret(&lines(&[r#"{"type":"error","message":"Reconnecting... 1/5"}"#, &said("{\"a\":1}"), done]), b"", true, true);
+        assert_eq!(o.result, Ok("{\"a\":1}".into()));
+        // Garbage lines are skipped.
+        let o = interpret(&lines(&["not json", &said("[1]"), "{oops", done]), b"", true, true);
+        assert_eq!(o.result, Ok("[1]".into()));
     }
 }

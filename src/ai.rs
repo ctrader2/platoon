@@ -5,9 +5,13 @@
 //! - A call happens only if the master switch AND the feature's own switch are on (`gate`), today's tokens are
 //!   under the daily limit, the plan isn't used above the pause point, and no back-off is running. The gate is
 //!   checked immediately before the child process starts.
-//! - The call is `claude -p` with the user's normal login: no tools, no settings, no saved session, no slash
-//!   commands, no MCP servers, a SHORT system prompt supplied by the caller and low effort (Claude's own system
-//!   prompt alone costs ~6,600 tokens a call). Never `--bare`: it needs an API key, which subscribers don't have.
+//! - The model decides the program (`agents::Catalog`): a Claude model's call is `claude -p` with the user's normal
+//!   login: no tools, no settings, no saved session, no slash commands, no MCP servers, a SHORT system prompt supplied
+//!   by the caller and low effort (Claude's own system prompt alone costs ~6,600 tokens a call). Never `--bare`: it
+//!   needs an API key, which subscribers don't have. An OpenAI model's call is `codex exec` (`codex::one_shot`):
+//!   ephemeral, without the user's config, in Codex's read-only sandbox (Codex can't switch its tools off), and about
+//!   17,000 to 26,000 tokens a call of Codex's own instructions, mostly cached. A model no installed program runs is
+//!   refused before anything starts (`model_of`).
 //! - It always runs in one fixed neutral folder (`work_dir`: `<cache dir>/ai-work`) with `PLATOON_AI=1` in its
 //!   environment, because Claude makes an empty folder under `~/.claude/projects` for every working directory it is
 //!   run in. The child registers itself with Claude like any session, so platoon hides everything whose working
@@ -211,7 +215,7 @@ impl Refusal {
             Refusal::BackedOff { kind, until, now } => {
                 format!(
                     "Smart features are paused after a failure ({}); trying again in {}.",
-                    kind.plain(),
+                    kind.plain(Agent::Claude),
                     wait_text(until.saturating_sub(*now))
                 )
             }
@@ -387,7 +391,7 @@ pub fn backoff_notice(settings: &Settings, cache: &Path, now: u64) -> Option<(St
         return None;
     }
     let b = Ledger::open(cache).load().backoff.filter(|b| b.until > now)?;
-    Some((format!("{}:{}", b.since, b.kind.name()), format!("Smart features paused: {}", b.kind.plain())))
+    Some((format!("{}:{}", b.since, b.kind.name()), format!("Smart features paused: {}", b.kind.plain(Agent::Claude))))
 }
 
 /// What one call needs. The caller writes the system prompt (short: Claude's own costs thousands of tokens) and the
@@ -508,8 +512,9 @@ pub enum AiError {
     Refused(Refusal),
     /// The caller cancelled (a switch was turned off): any result was thrown away.
     Cancelled,
-    /// It ran and failed. `detail` is Claude's own error text, cut short, for whoever is debugging: it is never saved.
-    Failed { kind: FailKind, detail: String },
+    /// It ran on `agent` and failed. `detail` is the agent's own error text, cut short, for whoever is debugging: it
+    /// is never saved.
+    Failed { agent: Agent, kind: FailKind, detail: String },
 }
 
 impl AiError {
@@ -517,8 +522,8 @@ impl AiError {
         match self {
             AiError::Refused(r) => r.plain(),
             AiError::Cancelled => "The request was cancelled.".into(),
-            AiError::Failed { kind, .. } => {
-                let mut s = kind.plain().to_string();
+            AiError::Failed { agent, kind, .. } => {
+                let mut s = kind.plain(*agent);
                 s[..1].make_ascii_uppercase();
                 s.push('.');
                 s
@@ -715,6 +720,7 @@ impl Runner {
         }
         if std::env::var_os("PLATOON_FORBID_REAL_CLAUDE").is_some() {
             return Err(AiError::Failed {
+                agent: Agent::Claude,
                 kind: FailKind::Other,
                 detail: "PLATOON_FORBID_REAL_CLAUDE is set and PLATOON_CLAUDE_BIN is not: refusing to run the real claude".into(),
             });
@@ -735,13 +741,21 @@ impl Runner {
         let program = self.providers.program(agent).unwrap_or_default().to_string();
         Self::check_program(&program)?;
         let ledger = Ledger::open(&self.cache);
-        let other = |detail: String| AiError::Failed { kind: FailKind::Other, detail };
+        let other = |detail: String| AiError::Failed { agent, kind: FailKind::Other, detail };
         let work = self.work_dir();
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
+        let cwd = req.cwd.clone().unwrap_or_else(|| work.clone());
+        // An agent that reads the answer's schema from a file gets one in the work folder, gone with the call.
+        let schema = match &req.json_schema {
+            Some(text) if agent.schema_in_file() => {
+                Some(SchemaFile::write(&work, text).map_err(|e| other(format!("couldn't write the answer's schema: {e}")))?)
+            }
+            _ => None,
+        };
 
         let mut cmd = Command::new(&program);
-        agent.one_shot(&mut cmd, &model, req).map_err(other)?;
-        cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))
+        agent.one_shot(&mut cmd, &model, req, &cwd, schema.as_ref().map(|s| s.0.as_path()));
+        cmd.current_dir(&cwd)
             .env("PLATOON_AI", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -810,11 +824,13 @@ impl Runner {
                 let _ = ledger.note_failure(now, FailKind::TimedOut);
             }
             return Err(AiError::Failed {
+                agent,
                 kind: FailKind::TimedOut,
                 detail: format!("no answer within {} seconds", req.timeout.as_secs()),
             });
         }
-        let outcome = agent.one_shot_outcome(&stdout, &stderr, status.is_some_and(|s| s.success()));
+        drop(schema);
+        let outcome = agent.one_shot_outcome(req, &stdout, &stderr, status.is_some_and(|s| s.success()));
         let ok = outcome.result.is_ok();
         // Whatever Claude said it used counts, even if the call failed. If it said nothing about a good call, a rough
         // figure still counts, so the daily limit can't be silently bypassed.
@@ -847,7 +863,7 @@ impl Runner {
                 if gated {
                     let _ = ledger.note_failure(now, kind);
                 }
-                Err(AiError::Failed { kind, detail })
+                Err(AiError::Failed { agent, kind, detail })
             }
         }
     }
@@ -875,6 +891,24 @@ pub fn model_of(settings: &Settings, req: &Request, catalog: &Catalog) -> Result
             }
             Err(Refusal::NoModel(why))
         }
+    }
+}
+
+/// A JSON Schema written to a file for one call (`Agent::schema_in_file`), removed when the call is over.
+struct SchemaFile(PathBuf);
+
+impl SchemaFile {
+    fn write(dir: &Path, schema: &str) -> io::Result<SchemaFile> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = dir.join(format!("schema-{}-{}.json", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        std::fs::write(&path, schema)?;
+        Ok(SchemaFile(path))
+    }
+}
+
+impl Drop for SchemaFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -995,7 +1029,8 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Prov
                 }
             }
             if let Some(b) = s.backoff {
-                let _ = writeln!(out, "Paused after a failure ({}): {}", b.kind.plain(), wait_text(b.until.saturating_sub(now)));
+                let _ =
+                    writeln!(out, "Paused after a failure ({}): {}", b.kind.plain(Agent::Claude), wait_text(b.until.saturating_sub(now)));
             }
             let _ = writeln!(out, "Settings file: {}", store.path().display());
             0
@@ -1086,9 +1121,16 @@ fn tokens_test(
                 u.cache_creation,
                 u.cache_read,
                 u.output,
-                if reply.usage_estimated { " - Claude did not report usage; this is a rough estimate" } else { "" }
+                if reply.usage_estimated {
+                    format!(" - {} did not report usage; this is a rough estimate", agent.short())
+                } else {
+                    String::new()
+                }
             );
-            let _ = writeln!(out, "Cost Claude reported: ${:.4}", reply.cost_usd);
+            // Claude Code says what a call cost; Codex doesn't.
+            if agent == Agent::Claude {
+                let _ = writeln!(out, "Cost Claude reported: ${:.4}", reply.cost_usd);
+            }
             today(out);
             0
         }
@@ -1100,9 +1142,11 @@ fn tokens_test(
             let _ = writeln!(err, "Cancelled.");
             1
         }
-        Err(AiError::Failed { kind, detail }) => {
-            let _ = writeln!(err, "The call failed: {}", AiError::Failed { kind, detail: String::new() }.plain());
-            let _ = writeln!(err, "  Claude said: {detail}");
+        Err(e @ AiError::Failed { .. }) => {
+            let _ = writeln!(err, "The call failed: {}", e.plain());
+            if let AiError::Failed { agent, detail, .. } = &e {
+                let _ = writeln!(err, "  {} said: {detail}", agent.short());
+            }
             if let Some(b) = Ledger::open(cache).load().backoff {
                 let _ = writeln!(err, "Smart features now wait {} before trying again.", wait_text(b.until.saturating_sub(usage::now())));
             }
@@ -1600,10 +1644,17 @@ pub(crate) mod tests {
     #[test]
     fn plain_messages_never_show_the_error_text_and_read_as_sentences() {
         for kind in [FailKind::NotSignedIn, FailKind::RateLimited, FailKind::Network, FailKind::TimedOut, FailKind::Other] {
-            let m = AiError::Failed { kind, detail: "SECRET stuff".into() }.plain();
+            let m = AiError::Failed { agent: Agent::Claude, kind, detail: "SECRET stuff".into() }.plain();
             assert!(!m.contains("SECRET") && m.ends_with('.') && m.chars().next().unwrap().is_uppercase(), "{m}");
         }
-        assert_eq!(AiError::Failed { kind: FailKind::NotSignedIn, detail: String::new() }.plain(), "Claude isn't signed in.");
+        assert_eq!(
+            AiError::Failed { agent: Agent::Claude, kind: FailKind::NotSignedIn, detail: String::new() }.plain(),
+            "Claude isn't signed in."
+        );
+        assert_eq!(
+            AiError::Failed { agent: Agent::Codex, kind: FailKind::NotSignedIn, detail: String::new() }.plain(),
+            "Codex isn't signed in."
+        );
     }
 
     #[test]
@@ -1734,6 +1785,125 @@ pub(crate) mod tests {
         assert_eq!(f.runner().run(&off, &Request::new("names", "s", "p")), Err(AiError::Refused(Refusal::MasterOff)));
     }
 
+    // ---- calls on Codex ----
+
+    /// A runner with Claude Code's stand-in `f` and Codex's stand-in `codex` (its folder holding the sample model list).
+    fn with_codex(f: &Fake, codex: &crate::testkit::AiFake, name: &str) -> Runner {
+        let root = crate::agents::tests::codex_with_models(name).root;
+        Runner::new(&f.cache, Providers { claude: Some(f.script.clone()), codex: Some(codex.as_codex(&root)) })
+    }
+
+    #[test]
+    fn a_smart_features_call_on_an_openai_model_runs_codex_exec_the_agreed_way_in_the_work_folder() {
+        let f = Fake::ok("codex-names");
+        let codex = crate::testkit::AiFake::codex("codex-names");
+        codex.reply(1, "the answer");
+        let mut s = on();
+        s.ai_model = Some("gpt-6-luna".into());
+        let reply = with_codex(&f, &codex, "codex-names").run(&s, &req()).unwrap();
+        assert!(!f.ran(), "Claude Code's program is not run for an OpenAI model");
+        assert_eq!((reply.text.as_str(), reply.model.as_str()), ("the answer", "gpt-6-luna"));
+        assert_eq!(
+            codex.argv(1),
+            [
+                "exec",
+                "--json",
+                "--ephemeral",
+                "--ignore-user-config",
+                "-s",
+                "read-only",
+                "-m",
+                "gpt-6-luna",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                "-c",
+                "developer_instructions=\"Be brief.\"",
+                "--skip-git-repo-check",
+                "-"
+            ]
+        );
+        assert_eq!(codex.stdin(1), "Name these:\nfirst\nsecond", "the prompt arrives on stdin, whole");
+        assert_eq!(fs::canonicalize(codex.cwd(1)).unwrap(), fs::canonicalize(f.cache.join("ai-work")).unwrap(), "the neutral folder");
+        assert!(codex.env(1).lines().any(|l| l == "PLATOON_AI=1"));
+        // Codex's own instructions are most of what a call costs: every token it reports counts, cached ones too.
+        assert_eq!(reply.usage, Usage { input: 8_200, cache_creation: 0, cache_read: 12_800, output: 40 });
+        assert_eq!((reply.cost_usd, reply.usage_estimated), (0.0, false));
+        let day = Ledger::open(&f.cache).today(usage::now());
+        assert_eq!((day.tokens(), day.calls), (21_040, 1));
+        // No schema file was left behind, and none was asked for.
+        assert!(fs::read_dir(f.cache.join("ai-work")).unwrap().next().is_none(), "the work folder is left empty");
+    }
+
+    #[test]
+    fn a_tasks_check_on_codex_runs_read_only_in_the_tasks_folder_with_its_schema_in_a_file_that_goes_after() {
+        let f = Fake::ok("codex-check");
+        let codex = crate::testkit::AiFake::codex("codex-check");
+        codex.reply(1, r#"{"done":true,"boxes":[],"findings":[]}"#);
+        let folder = f.dir.join("worktree");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join(".git"), "gitdir: /somewhere/.git/worktrees/task-1\n").unwrap();
+        let runner = with_codex(&f, &codex, "codex-check");
+        let (text, tokens) = crate::verdict::run(&runner, "gpt-5.6-terra", &folder, "the task".into(), Duration::from_secs(20)).unwrap();
+        assert_eq!(text, r#"{"done":true,"boxes":[],"findings":[]}"#);
+        assert_eq!(tokens, 21_040);
+        let argv = codex.argv(1);
+        let at = |flag: &str| argv.iter().position(|a| a == flag).map(|i| argv[i + 1].clone());
+        assert_eq!((at("-s").as_deref(), at("-m").as_deref()), (Some("read-only"), Some("gpt-5.6-terra")), "{argv:?}");
+        assert!(argv.contains(&"model_reasoning_effort=\"medium\"".to_string()), "{argv:?}");
+        assert!(!argv.contains(&"--skip-git-repo-check".to_string()), "a task's folder is in git: {argv:?}");
+        let schema = at("--output-schema").unwrap();
+        assert!(schema.starts_with(&f.cache.join("ai-work").display().to_string()), "in platoon's work folder: {schema}");
+        assert_eq!(codex.schema(1), crate::verdict::SCHEMA, "the schema, whole, while the call ran");
+        assert!(!Path::new(&schema).exists(), "and gone after");
+        assert!(codex.has_arg(1, &format!("developer_instructions={}", toml_quoted(crate::verdict::SYSTEM))), "{argv:?}");
+        assert_eq!(fs::canonicalize(codex.cwd(1)).unwrap(), fs::canonicalize(&folder).unwrap(), "in the task's folder");
+        assert_eq!(codex.stdin(1), "the task");
+    }
+
+    /// `text` quoted as the TOML string `-c` reads (what `codex::one_shot` gives `developer_instructions`).
+    fn toml_quoted(text: &str) -> String {
+        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+    }
+
+    #[test]
+    fn a_codex_call_that_goes_wrong_is_said_as_codexs_backs_off_and_its_schema_file_still_goes() {
+        let f = Fake::ok("codex-fail");
+        let codex = crate::testkit::AiFake::codex("codex-fail");
+        let mut s = on();
+        s.ai_model = Some("gpt-6-luna".into());
+        let runner = with_codex(&f, &codex, "codex-fail");
+        codex.out(1, r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}"#);
+        codex.exit_code(1);
+        let e = runner.run(&s, &req()).unwrap_err();
+        assert_eq!(e, AiError::Failed { agent: Agent::Codex, kind: FailKind::RateLimited, detail: "You've hit your usage limit.".into() });
+        assert_eq!(e.plain(), "Your Codex plan limit was reached.");
+        assert!(Ledger::open(&f.cache).load().backoff.is_some(), "a failure backs off");
+        // With a schema (a description search's ranking, say): the file goes whatever happened.
+        let _ = fs::remove_file(f.cache.join("ai-usage.json"));
+        let mut find = Request::new("find", "s", "p");
+        find.json_schema = Some("{}".into());
+        find.user_initiated = true;
+        codex.out(2, "");
+        codex.exit_code(0);
+        let e = runner.run(&s, &find).unwrap_err();
+        assert!(matches!(&e, AiError::Failed { agent: Agent::Codex, detail, .. } if detail == "no output"), "{e:?}");
+        assert!(!codex.schema(2).is_empty(), "it had its schema");
+        assert!(fs::read_dir(f.cache.join("ai-work")).unwrap().next().is_none(), "and nothing is left in the work folder");
+        // A program that isn't there.
+        let gone = Runner::new(
+            &f.cache,
+            Providers {
+                claude: None,
+                codex: Some(crate::agents::CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: f.dir.clone() }),
+            },
+        );
+        let _ = fs::remove_file(f.cache.join("ai-usage.json"));
+        let mut s = on();
+        s.ai_model = Some("gpt-6-luna".into());
+        let e = gone.run(&s, &req()).unwrap_err();
+        assert!(matches!(&e, AiError::Failed { detail, .. } if detail.contains("couldn't find")), "{e:?}");
+    }
+
     #[test]
     fn a_refused_call_never_starts_anything() {
         let f = Fake::ok("refused");
@@ -1841,7 +2011,7 @@ pub(crate) mod tests {
         let f = Fake::ok("missing");
         let r = Runner::with_program(&f.cache, "/nonexistent/claude-fake").run(&on(), &req());
         match r {
-            Err(AiError::Failed { kind: FailKind::Other, detail }) => assert!(detail.contains("couldn't find"), "{detail}"),
+            Err(AiError::Failed { kind: FailKind::Other, detail, .. }) => assert!(detail.contains("couldn't find"), "{detail}"),
             other => panic!("{other:?}"),
         }
         assert!(Ledger::open(&f.cache).load().backoff.is_some(), "a program that can't be found backs off too");

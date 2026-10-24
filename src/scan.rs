@@ -31,8 +31,8 @@ pub struct ScanEnv<'a> {
     pub cache: &'a Path,
     /// Claude's own folder (`~/.claude`), where the transcripts are.
     pub root: &'a Path,
-    /// What runs a call: `claude`, or a stand-in.
-    pub program: String,
+    /// The AI programs a call may run on (stand-ins in tests).
+    pub providers: crate::agents::Providers,
     /// Both stdin and stdout are a terminal.
     pub interactive: bool,
 }
@@ -241,7 +241,7 @@ fn name_active(
         let cancel = ai::Cancel::new();
         req.cancel = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        let (runner_settings, runner2) = (settings.clone(), Runner::with_program(env.cache, &env.program));
+        let (runner_settings, runner2) = (settings.clone(), Runner::new(env.cache, env.providers.clone()));
         thread::spawn(move || {
             let _ = tx.send(runner2.run(&runner_settings, &req));
         });
@@ -316,6 +316,11 @@ mod tests {
     use crate::testkit::{AiFake, World};
     use std::fs;
 
+    /// Claude Code run as `program`, no Codex.
+    fn claude_only(program: &str) -> crate::agents::Providers {
+        crate::agents::Providers { claude: Some(program.to_string()), codex: None }
+    }
+
     fn on(w: &World, change: impl FnOnce(&mut Settings)) {
         let mut s = settings::load(&w.config).0;
         s.tokens_enabled = true;
@@ -347,7 +352,7 @@ mod tests {
     }
 
     fn run(w: &World, fake: &AiFake, typed: &str, interactive: bool, interrupted: &dyn Fn() -> bool) -> (ScanOutcome, String) {
-        let env = ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, program: fake.script.clone(), interactive };
+        let env = ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, providers: claude_only(&fake.script), interactive };
         let mut out = Vec::new();
         let outcome = offer_scan(&env, &mut std::io::Cursor::new(typed.as_bytes().to_vec()), &mut out, interrupted);
         (outcome, String::from_utf8(out).unwrap())
@@ -436,7 +441,8 @@ mod tests {
         assert!(first_line.contains("61 active sessions") && first_line.contains("roughly 3 calls"), "{first_line}");
         // The same figure the function gives for those digests.
         let held = {
-            let env = ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, program: fake.script.clone(), interactive: true };
+            let env =
+                ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, providers: claude_only(&fake.script), interactive: true };
             load_world(&env, &settings::load(&w.config).0)
         };
         let s = settings::load(&w.config).0;
@@ -582,7 +588,7 @@ mod tests {
             config: &w.config,
             cache: &w.cache,
             root: &w.root,
-            program: "/nonexistent/claude-not-here".into(),
+            providers: claude_only("/nonexistent/claude-not-here"),
             interactive: true,
         };
         let mut out = Vec::new();

@@ -140,8 +140,8 @@ pub type Said = Option<String>;
 pub struct Places {
     pub config: PathBuf,
     pub cache: PathBuf,
-    /// `claude`, or `PLATOON_CLAUDE_BIN`.
-    pub claude: String,
+    /// The AI programs the check of the work may run on.
+    pub providers: crate::agents::Providers,
     pub check_timeout: Duration,
 }
 
@@ -273,7 +273,7 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
     let model = verdict_model(&at.config, project, &t);
     let claim = end.last_message.as_deref().unwrap_or_default();
     let m = verdict::gather("git", &t, &store.body(&t), claim);
-    let runner = crate::ai::Runner::with_program(&at.cache, &at.claude);
+    let runner = crate::ai::Runner::new(&at.cache, at.providers.clone());
     let ran = verdict::run(&runner, &model, Path::new(&m.folder), verdict::prompt(&m), at.check_timeout);
     let file = tickets::task_dir(&at.config, project, number).join(tickets::VERDICT_FILE);
     let now = crate::usage::now();
@@ -324,7 +324,7 @@ pub fn run_hook(name: &str) -> i32 {
         let at = Places {
             config: crate::archive::config_dir(),
             cache: crate::usage::cache_dir(),
-            claude: crate::agents::Agent::Claude.program(),
+            providers: crate::agents::Providers::here(),
             check_timeout: verdict::TIMEOUT,
         };
         hook(name, &input, &at)
@@ -378,7 +378,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         Places {
             config: d.to_path_buf(),
             cache: d.join("cache"),
-            claude: script.to_string_lossy().into_owned(),
+            providers: crate::agents::Providers { claude: Some(script.to_string_lossy().into_owned()), codex: None },
             check_timeout: Duration::from_secs(20),
         }
     }

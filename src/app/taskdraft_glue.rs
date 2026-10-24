@@ -230,6 +230,7 @@ impl App {
                 Ok(a) => Some(a),
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => Some(DraftAnswer::Done(Err(AiError::Failed {
+                    agent: self.smart_agent(),
                     kind: crate::ledger::FailKind::Other,
                     detail: "the call ended without an answer".into(),
                 }))),

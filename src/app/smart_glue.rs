@@ -151,6 +151,12 @@ impl App {
         Runner::new(&self.cache, providers).with_clock_offset(self.smart.offset)
     }
 
+    /// The agent the smart features' calls run on: their model's (Claude Code when it can't be told).
+    pub(super) fn smart_agent(&self) -> Agent {
+        let catalog = self.catalog();
+        self.settings.get().smart_model_in(&catalog).and_then(|m| catalog.agent_of(&m)).unwrap_or(Agent::Claude)
+    }
+
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.
     pub(super) fn spawn_call(&self, settings: Settings, req: Request) -> Receiver<Answer> {
         let (tx, rx) = channel();
@@ -316,9 +322,11 @@ impl App {
                 self.smart.flight = Some(fl);
                 return;
             }
-            Err(TryRecvError::Disconnected) => {
-                Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })
-            }
+            Err(TryRecvError::Disconnected) => Err(AiError::Failed {
+                agent: self.smart_agent(),
+                kind: crate::ledger::FailKind::Other,
+                detail: "the call ended without an answer".into(),
+            }),
         };
         match answer {
             Ok(reply) => self.take_names(fl, reply, now),
@@ -617,9 +625,11 @@ impl App {
                 self.smart.find_flight = Some(fl);
                 return;
             }
-            Err(TryRecvError::Disconnected) => {
-                Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })
-            }
+            Err(TryRecvError::Disconnected) => Err(AiError::Failed {
+                agent: self.smart_agent(),
+                kind: crate::ledger::FailKind::Other,
+                detail: "the call ended without an answer".into(),
+            }),
         };
         // The dialog was closed or the words changed while it ran: nobody is waiting for the answer any more.
         if self.search.find.state != FindState::Asking {

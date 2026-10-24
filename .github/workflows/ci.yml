@@ -44,7 +44,7 @@ jobs:
         # The runner's own shellcheck, which may be older than yours: older ones warn about more.
         run: |
           shellcheck --version | sed -n 2p
-          shellcheck scripts/*.sh tests/fake-claude.sh tests/fake-codex-server.sh
+          shellcheck scripts/*.sh tests/fake-claude.sh tests/fake-codex-server.sh tests/fake-codex-exec.sh
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy

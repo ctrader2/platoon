@@ -12,6 +12,12 @@ here.
   update uses **Model for project notes** (Settings, Projects tab), which is Sonnet unless you pick another. On Haiku, an
   update could leave out a change it had just been shown (a feature taken back out stayed in the notes), and shortening
   notes over the limit kept about twice as many lines that were no longer true.
+- **platoon's own calls run on Codex for an OpenAI model.** Names and summaries, Describe it, project descriptions and
+  notes, the hand-off, tasks from a conversation and a task's check run as `codex exec` when their model is one of
+  OpenAI's: ephemeral, without your `config.toml`, in Codex's read-only sandbox (Codex can't switch its tools off), the
+  request on standard input. Every token Codex reports counts against the daily limit; its own instructions are about
+  20,000 tokens a call. `platoon tokens test` says which program it asks. Conversations of Codex's still aren't
+  named, described or handed off.
 - **Every model setting offers the models installed, by name.** The model for smart features, the new model for project
   notes and a squad's verdict model offer Claude Code's models (Opus, Sonnet, Haiku, Fable) when Claude Code is
   installed and Codex's (as Codex lists them in its `models_cache.json`) when Codex is; the model decides the program

@@ -261,6 +261,16 @@ pub struct AiFake {
 
 impl AiFake {
     pub fn new(name: &str) -> AiFake {
+        AiFake::with_script(name, "fake-claude", include_str!("../tests/fake-claude.sh"))
+    }
+
+    /// A stand-in for `codex exec --json` (`tests/fake-codex-exec.sh`), recording and answering the same way, its
+    /// answer wrapped in Codex's JSON events; `out` and `exit_code` make the ways a call goes wrong.
+    pub fn codex(name: &str) -> AiFake {
+        AiFake::with_script(name, "fake-codex", include_str!("../tests/fake-codex-exec.sh"))
+    }
+
+    fn with_script(name: &str, file: &str, text: &str) -> AiFake {
         let dir = removed_at_exit(std::env::temp_dir().join(format!(
             "platoon-aifake-{name}-{}-{}",
             std::process::id(),
@@ -269,11 +279,43 @@ impl AiFake {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("calls")).unwrap();
         let d = dir.display();
-        let body = include_str!("../tests/fake-claude.sh").replace("@DIR@", &d.to_string());
-        let script = dir.join("fake-claude");
+        let body = text.replace("@DIR@", &d.to_string());
+        let script = dir.join(file);
         fs::write(&script, body).unwrap();
         fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         AiFake { script: script.display().to_string(), dir }
+    }
+
+    /// (Codex's stand-in) Print `text` as it is for call `k` (0: every call) instead of an answer.
+    pub fn out(&self, k: usize, text: &str) {
+        let name = if k == 0 { "out.default".to_string() } else { format!("out.{k}") };
+        fs::write(self.dir.join(name), text).unwrap();
+    }
+
+    /// (Codex's stand-in) End every call with this exit code.
+    pub fn exit_code(&self, code: i32) {
+        fs::write(self.dir.join("exit"), code.to_string()).unwrap();
+    }
+
+    /// (Codex's stand-in) The JSON Schema file call `k` was given, as it was while the call ran; "" when none.
+    pub fn schema(&self, k: usize) -> String {
+        self.call_file(k, "schema")
+    }
+
+    /// (Codex's stand-in) The usage `turn.completed` reports.
+    pub fn codex_usage(&self, input: u64, cached: u64, output: u64) {
+        fs::write(
+            self.dir.join("usage"),
+            format!(
+                r#"{{"input_tokens":{input},"cached_input_tokens":{cached},"cache_write_input_tokens":0,"output_tokens":{output},"reasoning_output_tokens":0}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// The program as a Codex the runner can use: this stand-in and a Codex folder (`root`).
+    pub fn as_codex(&self, root: &std::path::Path) -> crate::agents::CodexAt {
+        crate::agents::CodexAt { program: self.script.clone(), root: root.to_path_buf() }
     }
 
     pub fn calls(&self) -> usize {

@@ -1,8 +1,8 @@
 //! The verdict: an independent check, before a task is Done, that its work does what the task asked.
 //!
-//! When a task's session stops, the `task-stop` hook (`taskrun.rs`) asks a fresh `claude -p` on the squad's
-//! `verdict_model` to judge the work. It runs in the task's folder with read-only tools (`Read`, `Grep`, `Glob`: no
-//! shell, no edits), outside the token gate (`ai::PART_OF_A_TASK`), and it is given (`prompt`): the task's text with
+//! When a task's session stops, the `task-stop` hook (`taskrun.rs`) asks a fresh one-shot call on the squad's
+//! `verdict_model` to judge the work (`claude -p`, or `codex exec` for an OpenAI model). It runs in the task's folder
+//! with read-only tools (Claude Code's `Read`, `Grep`, `Glob`: no shell, no edits; Codex's read-only sandbox), outside the token gate (`ai::PART_OF_A_TASK`), and it is given (`prompt`): the task's text with
 //! its "Done when" boxes, the session's last message (what it says it did) and, in git, the diff of the task's branch
 //! from where it started (`gather`) and what is not committed yet. Its answer follows a JSON Schema (`SCHEMA`): `done`,
 //! each box `met` with its evidence, and its findings, each with the exact text at the line it names. platoon looks

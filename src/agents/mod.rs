@@ -138,25 +138,38 @@ impl Agent {
         }
     }
 
-    /// Make `cmd` (the agent's program) a one-shot call of `model` for `req`: no session kept, the prompt on stdin,
-    /// the answer as JSON. Err (said plainly) when this agent can't make platoon's own calls yet: nothing is run then.
-    pub fn one_shot(self, cmd: &mut Command, model: &str, req: &Request) -> Result<(), String> {
+    /// Does a one-shot call's JSON Schema go in a file (Codex's `--output-schema`) rather than on the command line?
+    pub fn schema_in_file(self) -> bool {
         match self {
-            Agent::Claude => {
-                claude::one_shot(cmd, model, req);
-                Ok(())
-            }
-            Agent::Codex => Err(codex::NO_ONE_SHOT.into()),
+            Agent::Claude => false,
+            Agent::Codex => true,
+        }
+    }
+
+    /// Make `cmd` (the agent's program) a one-shot call of `model` for `req`, run in `cwd`: no session kept, the
+    /// prompt on stdin, the answer as JSON. `schema_file`: where the request's JSON Schema was written, for an agent
+    /// that reads it from a file (`schema_in_file`).
+    pub fn one_shot(self, cmd: &mut Command, model: &str, req: &Request, cwd: &Path, schema_file: Option<&Path>) {
+        match self {
+            Agent::Claude => claude::one_shot(cmd, model, req),
+            Agent::Codex => codex::one_shot(cmd, model, req, cwd, schema_file),
         }
     }
 
     /// What a one-shot call's output says: its answer, or why there is none, and what it used.
-    pub fn one_shot_outcome(self, stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
+    pub fn one_shot_outcome(self, req: &Request, stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         match self {
             Agent::Claude => claude::interpret(stdout, stderr, exited_ok),
-            Agent::Codex => {
-                Outcome { result: Err((crate::ledger::FailKind::Other, codex::NO_ONE_SHOT.into())), usage: None, cost_usd: 0.0 }
-            }
+            Agent::Codex => codex::interpret(stdout, stderr, exited_ok, req.json_schema.is_some()),
+        }
+    }
+
+    /// What the agent is called in a sentence about its plan or its answers: "Claude isn't signed in", "your Codex
+    /// plan".
+    pub fn short(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude",
+            Agent::Codex => "Codex",
         }
     }
 

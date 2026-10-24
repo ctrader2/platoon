@@ -401,7 +401,11 @@ impl App {
                 messages: None,
                 git: None,
                 spent: None,
-                answer: Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() }),
+                answer: Err(AiError::Failed {
+                    agent: self.smart_agent(),
+                    kind: crate::ledger::FailKind::Other,
+                    detail: "the call ended without an answer".into(),
+                }),
             },
         };
         // The box was closed while it ran: nobody is waiting for this.

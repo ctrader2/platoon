@@ -7,6 +7,7 @@
 //! lose each other's numbers. A file that can't be understood is treated as empty: the counting starts over
 //! rather than the app failing. Days older than `KEEP_DAYS` are dropped on every write.
 
+use crate::agents::Agent;
 use serde_json::{Map, Value, json};
 use std::{
     collections::BTreeMap,
@@ -80,14 +81,15 @@ impl FailKind {
             .unwrap_or(FailKind::Other)
     }
 
-    /// The reason in plain words, for after "Smart features paused: ".
-    pub fn plain(self) -> &'static str {
+    /// The reason in plain words, for after "Smart features paused: ", about the agent the call ran on.
+    pub fn plain(self, agent: Agent) -> String {
+        let a = agent.short();
         match self {
-            FailKind::NotSignedIn => "Claude isn't signed in",
-            FailKind::RateLimited => "your Claude plan limit was reached",
-            FailKind::Network => "Claude can't be reached (is the internet down?)",
-            FailKind::TimedOut => "Claude took too long to answer",
-            FailKind::Other => "Claude returned an error",
+            FailKind::NotSignedIn => format!("{a} isn't signed in"),
+            FailKind::RateLimited => format!("your {a} plan limit was reached"),
+            FailKind::Network => format!("{a} can't be reached (is the internet down?)"),
+            FailKind::TimedOut => format!("{a} took too long to answer"),
+            FailKind::Other => format!("{a} returned an error"),
         }
     }
 

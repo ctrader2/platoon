@@ -462,3 +462,36 @@ fn the_question_never_holds_up_starting_platoon_or_changes_the_gate() {
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }
+
+#[test]
+fn with_an_openai_model_the_test_call_asks_codex_and_says_so() {
+    let lab = Lab::new("tok-codex");
+    let claude = lab.good();
+    // Codex: a folder with its list of models, and a stand-in for `codex exec`.
+    let (codex_home, fake) = (lab.base.join("codex"), lab.base.join("codex-fake"));
+    fs::create_dir_all(&codex_home).unwrap();
+    fs::create_dir_all(fake.join("calls")).unwrap();
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/models_cache.json"), codex_home.join("models_cache.json")).unwrap();
+    let script = fake.join("codex");
+    fs::write(&script, include_str!("fake-codex-exec.sh").replace("@DIR@", &fake.display().to_string())).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(fake.join("reply.default"), "ok").unwrap();
+    lab.settings(json!({"tokens_enabled": true, "ai_model": "gpt-6-luna"}));
+    let mut env = lab.env(&claude);
+    env.push(("CODEX_HOME", codex_home.display().to_string()));
+    env.push(("PLATOON_CODEX_BIN", script.display().to_string()));
+    let mut t = Term::spawn(&["tokens", "test"], &env, &lab.base, 24, 100);
+    assert_eq!(t.wait_exit(), 0);
+    let screen = t.flat();
+    assert!(screen.contains("Asking Codex (GPT-6-Luna) to reply with one word...") && screen.contains("Reply: ok"), "{screen}");
+    assert!(screen.contains("Tokens used: 21,040") && !screen.contains("Cost Claude reported"), "{screen}");
+    assert!(!lab.ran(), "Claude Code was not asked");
+    let argv = fs::read_to_string(fake.join("calls/1.argv")).unwrap();
+    assert!(argv.starts_with("exec\n--json\n--ephemeral\n--ignore-user-config\n-s\nread-only\n-m\ngpt-6-luna\n"), "{argv}");
+    // And `platoon tokens` names it, and the program that runs it.
+    let mut t = Term::spawn(&["tokens"], &env, &lab.base, 24, 100);
+    assert_eq!(t.wait_exit(), 0);
+    let screen = t.flat();
+    assert!(screen.contains("Model for smart features: GPT-6-Luna (Codex)"), "{screen}");
+    assert!(screen.contains("Model for project notes: Sonnet (Claude Code)"), "{screen}");
+}

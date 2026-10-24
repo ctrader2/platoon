@@ -467,8 +467,8 @@ pub struct Env {
     pub root: PathBuf,
     /// Codex's folder, where its sessions' rollouts are; None when there is none to read.
     pub codex: Option<PathBuf>,
-    /// The program that runs a call; None means `PLATOON_CLAUDE_BIN`, else `claude`.
-    pub program: Option<String>,
+    /// The AI programs a call may run on; None means the ones this computer has (`Providers::here`).
+    pub providers: Option<crate::agents::Providers>,
 }
 
 impl Env {
@@ -478,13 +478,13 @@ impl Env {
             cache: usage::cache_dir(),
             root: claude::claude_root(),
             codex: Some(codex::codex_root()),
-            program: None,
+            providers: None,
         }
     }
 
     fn runner(&self) -> Runner {
-        match &self.program {
-            Some(p) => Runner::with_program(&self.cache, p),
+        match &self.providers {
+            Some(p) => Runner::new(&self.cache, p.clone()),
             None => Runner::from_env(&self.cache),
         }
     }
@@ -820,7 +820,8 @@ mod tests {
                 fs::create_dir_all(d).unwrap();
             }
             let fake = AiFake::new(name);
-            let env = Env { config, cache, root, codex: None, program: Some(fake.script.clone()) };
+            let providers = crate::agents::Providers { claude: Some(fake.script.clone()), codex: None };
+            let env = Env { config, cache, root, codex: None, providers: Some(providers) };
             let mut s = Settings { tokens_enabled: true, ..Settings::default() };
             s.set_feature(FEATURE, true);
             crate::settings::save(&env.config, &s).unwrap();
@@ -1436,6 +1437,29 @@ mod tests {
         let Round::Refused(why) = update_once(&r.env, &id) else { panic!("refused") };
         assert!(why.starts_with("GPT-6-Luna needs Codex") && why.contains("Model for project notes"), "{why}");
         assert_eq!(r.fake.calls(), 1);
+    }
+
+    #[test]
+    fn with_an_openai_notes_model_the_update_runs_on_codex_read_only() {
+        let mut r = Rig::new("notes-codex");
+        let codex = AiFake::codex("notes-codex");
+        let root = crate::agents::tests::codex_with_models("notes-codex").root;
+        r.env.providers = Some(crate::agents::Providers { claude: Some(r.fake.script.clone()), codex: Some(codex.as_codex(&root)) });
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.notes_model = Some("gpt-6-luna".into());
+        crate::settings::save(&r.env.config, &s).unwrap();
+        codex.reply(1, r#"{"decisions":["Baskets are session based"]}"#);
+        codex.codex_usage(30_000, 20_000, 100);
+        assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
+        assert_eq!((r.fake.calls(), codex.calls()), (0, 1), "Codex wrote the notes, Claude Code wasn't asked");
+        let argv = codex.argv(1);
+        assert_eq!(&argv[..8], ["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", "gpt-6-luna"]);
+        assert!(codex.stdin(1).contains("Add a basket page to the shop"), "the material goes on stdin");
+        assert!(r.notes(&id).contains("Baskets are session based"));
+        let day = Ledger::open(&r.env.cache).today(usage::now());
+        assert_eq!(day.features.get(FEATURE).map(|f| f.tokens), Some(30_100), "its tokens are counted, cached ones too");
     }
 
     #[test]

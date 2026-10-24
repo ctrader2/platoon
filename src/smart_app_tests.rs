@@ -179,6 +179,23 @@ fn a_call_is_small_and_made_the_agreed_way() {
 }
 
 #[test]
+fn with_an_openai_model_claude_code_conversations_are_named_by_codex() {
+    let w = World::new("sm-codex");
+    simple(&w, "aaa", "please fix the login redirect", 300);
+    smart(&w, |s| s.ai_model = Some("gpt-6-luna".into()));
+    let fake = AiFake::new("sm-codex");
+    let codex = AiFake::codex("sm-codex");
+    let mut app = app_with(&w, &fake);
+    let root = crate::agents::tests::codex_with_models("sm-codex").root;
+    app.set_providers_for_test(crate::agents::Providers { claude: Some(fake.script.clone()), codex: Some(codex.as_codex(&root)) });
+    app.settle_ai_for_test(10);
+    assert_eq!((fake.calls(), codex.calls()), (0, 1), "the model decides the program");
+    assert_eq!(&codex.argv(1)[..8], ["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", "gpt-6-luna"]);
+    assert!(codex.stdin(1).contains("please fix the login redirect"));
+    assert_eq!(row(&app, "aaa").name, "Codex name 1.1");
+}
+
+#[test]
 fn what_is_sent_is_the_first_message_the_last_few_cut_short_one_reply_line_and_nothing_else() {
     let w = World::new("sm-digest");
     let long = format!("{} end-marker", "word ".repeat(100));
