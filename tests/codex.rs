@@ -188,6 +188,39 @@ fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_docu
     until("the stand-in to exit", || !alive(pid));
 }
 
+/// With Claude Code and Codex both installed, `n` asks which one after the folder: Codex starts `codex --no-daemon` in a
+/// platoon host, offering tasks, and is remembered. Before Codex saves the conversation (its first message) the new
+/// session already has its row, running, as a new Claude Code session has.
+#[test]
+fn n_asks_which_agent_and_a_new_codex_session_has_its_row_before_its_first_message() {
+    let w = World::new("codex-new");
+    let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 140);
+    t.wait_for_all(&["Identify colour from notes.txt", "Active  3"]);
+    t.send(b"n");
+    t.wait_for("New session");
+    t.send(w.work.to_string_lossy().as_bytes());
+    t.send(b"\r");
+    t.wait_for_all(&["Start in Claude Code or Codex?", "Claude Code", "The one you choose is picked here next time.", "enter start"]);
+    t.send(b"\x1b[B\r");
+    t.wait_for_all(&[&format!("fake-codex args:--no-daemon cwd:{}", w.work.display()), "fake-codex env project:none offer:1"]);
+    assert_eq!(fs::read_to_string(w.base.join("codex-args")).unwrap(), "--no-daemon\n");
+    let (pid, sock) = find_host(&w.cache).expect("a host runs it");
+    let info: serde_json::Value = serde_json::from_str(&fs::read_to_string(sock.with_extension("json")).unwrap()).unwrap();
+    assert_eq!((info["agent"].as_str(), info["args"].clone()), (Some("codex"), serde_json::json!(["--no-daemon"])));
+    // Back to the list: the new session is a row of its own, Codex's, running, before anything was sent.
+    t.send(&[0]);
+    t.wait_for_all(&["Active  4", "enter open"]);
+    let screen = t.stable();
+    let row = screen.lines().find(|l| l.contains(" work ") && l.contains("Codex")).unwrap_or_else(|| panic!("no row:\n{screen}"));
+    assert!(row.contains('●'), "running: {row}");
+    t.send(b"q");
+    t.wait_exit();
+    let settings: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.base.join("config/settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["new_session_agent"], "codex", "remembered");
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    until("the stand-in to exit", || !alive(pid));
+}
+
 /// `platoon <args>` with `input` on stdin, in this world, with no terminal: (exit code, stdout, stderr).
 fn run(w: &World, args: &[&str], input: &str) -> (i32, String, String) {
     run_with(w, &[], args, input)

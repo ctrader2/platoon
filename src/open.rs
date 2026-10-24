@@ -56,19 +56,29 @@ fn ask(question: &str) -> bool {
     io::stdin().read_line(&mut line).is_ok() && matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// The agent a new session started here runs: the one the user last chose in platoon (`n`), while it is installed,
+/// else the one installed (Claude Code first). There is no question to ask in a plain terminal.
+fn new_session_agent() -> Result<Agent, String> {
+    let remembered = crate::settings::load(&crate::archive::config_dir()).0.new_session_agent;
+    crate::agents::Providers::here()
+        .new_session_agent(remembered.as_deref())
+        .ok_or_else(|| "neither Claude Code nor Codex is installed on this computer".to_string())
+}
+
 /// Find, resume, or start the session's host. Returns where to connect.
 fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String> {
-    // A new session is Claude Code's, and so is a saved one unless it is Codex's.
-    let agent = Agent::Claude;
-    let root = claude_root();
     let hosts = host::discover();
     let Some(arg) = arg else {
+        let agent = new_session_agent()?;
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         let env = [(crate::sessionhook::OFFER_ENV, "1")];
         let args = agent.args(Start::New(None));
         return host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols)
             .map(|(h, _)| h);
     };
+    // A saved conversation is Claude Code's unless it is Codex's.
+    let agent = Agent::Claude;
+    let root = claude_root();
 
     let live = guard::live_entries(&root);
     let all = Reader::with_root(root.clone()).live();
@@ -187,8 +197,7 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     }
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let at_ms = crate::usage::now().saturating_sub(2) * 1000;
-    // A new session is Claude Code's.
-    let agent = Agent::Claude;
+    let agent = new_session_agent()?;
     let (info, _) = host::launch(
         &host::Dirs::from_env(),
         agent,

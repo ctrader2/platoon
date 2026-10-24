@@ -45,6 +45,7 @@ mod board_glue;
 mod editor_glue;
 mod handoff_glue;
 mod merged_glue;
+mod newsession_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
@@ -58,6 +59,7 @@ pub use board_glue::{BRow, BoardState, ListItem};
 #[cfg(test)]
 pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
+pub use newsession_glue::AgentPick;
 pub use notes_glue::{Changes, EditorPick, FileEdit, FileOf, NotesEdit, NotesWindow};
 pub use projects_glue::{
     AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_SQUADS, TOP_TASKS, TOPS,
@@ -235,6 +237,8 @@ pub enum Hit {
     EditorRow(usize),
     /// A row of `v`'s list of editors.
     FileEditorRow(usize),
+    /// An agent of a new session's question (`n` with Claude Code and Codex both installed).
+    AgentRow(usize),
     /// A color of the color and badge box.
     Slot(usize),
     /// One of the two panes of a project's screen: gives it the focus.
@@ -362,6 +366,8 @@ pub enum Mode {
     TaskProject,
     /// The tasks drafted from a conversation, before any is made (`td.draft`).
     TaskDraft,
+    /// Which agent a new session starts in, Claude Code or Codex (`agent_pick`).
+    PickAgent,
 }
 
 pub struct Picker {
@@ -588,6 +594,8 @@ pub struct App {
     pub wt: worktree_glue::WtState,
     /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup.
     pub td: taskdraft_glue::DraftState,
+    /// `n`'s question of the agent a new session starts in, while it is open.
+    agent_pick: Option<AgentPick>,
     /// The code editor (`v`): the questions before it opens, the request the event loop takes.
     pub ed: editor_glue::EdState,
     /// The first line of the notes in view.
@@ -872,6 +880,7 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
+            agent_pick: None,
             epick: EditorPick {
                 project: String::new(),
                 instructions: None,
@@ -1407,6 +1416,9 @@ impl App {
         for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &crate::procs::pid_alive) {
             self.joined_project(&project, &session);
         }
+        // A new Codex session has no conversation until its first message: its row stands for its host meanwhile (never
+        // placed in a project above: it is placed by its real id once Codex saves it).
+        let live = self.with_unsaved(live);
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
         }
@@ -1628,6 +1640,34 @@ impl App {
         live
     }
 
+    /// `live`, and for each new Codex session one of platoon's hosts runs that holds no conversation yet (Codex saves it,
+    /// and takes its lock, with the first message), a stand-in whose id is `model::unsaved_id`: its row is there, open
+    /// to `enter`, from the moment the session starts, as a new Claude Code session's is (Claude registers itself at
+    /// once). It goes when Codex holds the conversation (the same process, by its real id) or the host is gone.
+    fn with_unsaved(&self, mut live: Vec<Live>) -> Vec<Live> {
+        let started = |h: &HostInfo| {
+            std::fs::metadata(&h.sock).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        };
+        let new: Vec<Live> = self
+            .hosts
+            .iter()
+            .filter(|h| h.agent == Agent::Codex && h.session().is_none() && !live.iter().any(|l| l.pid == h.claude_pid))
+            .map(|h| Live {
+                agent: Agent::Codex,
+                pid: h.claude_pid,
+                id: crate::model::unsaved_id(h.claude_pid),
+                cwd: h.dir.clone(),
+                name: None,
+                started_at: started(h).map_or_else(|| usage::now() * 1000, |d| d.as_millis() as u64),
+                busy: false,
+                background: None,
+                parked: None,
+            })
+            .collect();
+        live.extend(new);
+        live
+    }
+
     /// The conversations to list: every saved one that has a real prompt, plus anything running (even before
     /// its first prompt is saved), newest activity first. Running-state fields are filled in by the caller.
     fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
@@ -1820,9 +1860,11 @@ impl App {
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
                     let project = self.picker.project.clone();
-                    self.launch_in(Agent::Claude, dir, Start::New(None), project.as_deref(), true);
+                    self.new_session_in(dir, project);
                 }
             }
+            (Action::Confirm, Mode::PickAgent) => self.take_agent_pick(),
+            (Action::Cancel, Mode::PickAgent) => self.cancel_agent_pick(),
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
             (Action::Cancel, Mode::Themes) => self.close_theme_list(),
             (Action::Confirm, Mode::Search) => self.confirm_search(),
@@ -2067,6 +2109,9 @@ impl App {
 
     /// Open the box for renaming the selected conversation, with the name it shows now.
     fn open_rename(&mut self) {
+        if self.refuse_unsaved("renamed") {
+            return;
+        }
         let Some(s) = self.selected_session() else {
             self.notify("No session selected");
             return;
@@ -2487,6 +2532,9 @@ impl App {
     }
 
     fn toggle_archive(&mut self) {
+        if self.refuse_unsaved("archived") {
+            return;
+        }
         let Some(s) = self.selected_session() else {
             self.notify("No session selected");
             return;
@@ -3024,6 +3072,14 @@ impl App {
                 KeyCode::Char('G') | KeyCode::End => self.epick.selected = self.epick.options.len().saturating_sub(1),
                 _ => {}
             },
+            Mode::PickAgent => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Up | KeyCode::Left | KeyCode::BackTab => self.move_agent_pick(-1),
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => self.move_agent_pick(1),
+                _ => {}
+            },
             Mode::PickFileEditor => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -3199,6 +3255,7 @@ impl App {
                     Mode::TaskDraft => self.scroll_draft(if up { -3 } else { 3 }),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
+                    Mode::PickAgent => self.move_agent_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
                     Mode::Handoff => self.handoff_wheel(up),
@@ -3226,6 +3283,7 @@ impl App {
                     Some(Hit::EditorRow(i)) => self.epick.selected = i,
                     Some(Hit::FileEditorRow(i)) if i == self.file_pick().selected => self.act(Action::Confirm),
                     Some(Hit::FileEditorRow(i)) => self.move_file_editor_pick(i as i32 - self.file_pick().selected as i32),
+                    Some(Hit::AgentRow(i)) => self.click_agent_pick(i),
                     Some(Hit::Slot(i)) => self.look.slot = i,
                     Some(Hit::Pane(p)) => self.pane = p,
                     Some(Hit::TicketRow(i)) if self.board_showing() && self.tk.open.is_none() => self.click_board_row(i),

@@ -370,3 +370,253 @@ fn a_conversation_open_in_another_codex_window_is_shown_running_and_never_opened
     let s = app.sessions.iter().find(|s| s.id == PLANNING).unwrap();
     assert!(s.procs.is_empty() && !s.held_elsewhere(), "closed there: an ordinary conversation again");
 }
+
+// ---- new sessions: `n` asks which agent, and a new Codex session's row before Codex saves it -----------------------------
+
+/// `n`, then the folder `dir` typed into the picker and taken.
+fn new_session_in(app: &mut App, dir: &std::path::Path) {
+    key(app, KeyCode::Char('n'));
+    assert!(matches!(app.mode, Mode::Picker));
+    for c in dir.to_string_lossy().chars() {
+        key(app, KeyCode::Char(c));
+    }
+    key(app, KeyCode::Enter);
+}
+
+fn cell_of(term: &Terminal<TestBackend>, needle: &str) -> ratatui::buffer::Cell {
+    let buf = term.backend().buffer();
+    for y in 0..buf.area.height {
+        let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        if let Some(at) = line.find(needle) {
+            return buf[(line[..at].chars().count() as u16, y)].clone();
+        }
+    }
+    panic!("{needle:?} isn't on the screen")
+}
+
+/// Where the question drew agent `i`'s row (its clickable area).
+fn agent_row(app: &App, i: usize) -> ratatui::layout::Rect {
+    app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::AgentRow(k) if *k == i)).map(|(r, _)| *r).unwrap()
+}
+
+/// The cell of agent `i`'s name in the question: (the row's start, the mark, the star, then the name).
+fn agent_name_cell(term: &Terminal<TestBackend>, app: &App, i: usize) -> ratatui::buffer::Cell {
+    let r = agent_row(app, i);
+    term.backend().buffer()[(r.x + 4, r.y)].clone()
+}
+
+/// Nothing about a new session's agent is in the settings file.
+fn nothing_remembered(w: &World) -> bool {
+    fs::read_to_string(w.config.join("settings.json")).map_or(true, |t| !t.contains("new_session_agent"))
+}
+
+#[test]
+fn with_both_installed_n_asks_which_agent_with_the_last_choice_picked_and_remembers_it() {
+    let w = world("codex-new-both");
+    let work = w.base.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let mut app = w.codex_app();
+    assert_eq!(app.providers().installed(), [Agent::Claude, Agent::Codex]);
+    new_session_in(&mut app, &work);
+    assert!(matches!(app.mode, Mode::PickAgent), "asked, nothing started yet");
+    assert!(app.launched.is_empty());
+    let p = app.agent_pick().unwrap();
+    assert_eq!((p.options.as_slice(), p.selected, p.last), (&[Agent::Claude, Agent::Codex][..], 0, None), "Claude Code first");
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let shown = screen(&mut term, &app);
+    for want in [
+        "New session",
+        "Start in Claude Code or Codex?",
+        "Claude Code",
+        "Codex",
+        "The one you choose is picked here next time.",
+        "enter start",
+    ] {
+        assert!(shown.contains(want), "{want}:\n{shown}");
+    }
+    let t = app.effective_theme().clone();
+    assert_eq!(agent_name_cell(&term, &app, 0).symbol(), "C");
+    assert_eq!(agent_name_cell(&term, &app, 0).bg, t.surface, "the picked one on the selection's fill");
+    assert_eq!(agent_name_cell(&term, &app, 1).bg, t.bg);
+    assert_eq!(cell_of(&term, "The one you choose").fg, crate::ui::hint_fg(&t));
+
+    // Codex, by the keys: started, with the offer, and remembered.
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(app.launched.len(), 1);
+    let l = &app.launched[0];
+    assert_eq!((l.agent, l.dir.as_str(), l.args.as_slice()), (Agent::Codex, work.to_str().unwrap(), &["--no-daemon".to_string()][..]));
+    assert_eq!(l.env, [("PLATOON_OFFER_TASKS".to_string(), "1".to_string())]);
+    assert_eq!(settings::load(&w.config).0.new_session_agent.as_deref(), Some("codex"));
+
+    // Next time Codex is picked in advance and starred: enter is the one extra key.
+    new_session_in(&mut app, &work);
+    let p = app.agent_pick().unwrap();
+    assert_eq!((p.selected, p.last), (1, Some(Agent::Codex)));
+    key(&mut app, KeyCode::Up);
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("★ your last choice: enter starts it again."), "{shown}");
+    assert_eq!(cell_of(&term, "★ Codex").fg, t.accent, "the star on the one chosen last time");
+    assert_eq!(agent_name_cell(&term, &app, 0).bg, t.surface);
+    // A click picks, a click on the picked one starts.
+    let row = agent_row(&app, 1);
+    let click = ratatui::crossterm::event::MouseEvent {
+        kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        column: row.x + 4,
+        row: row.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.on_mouse(click);
+    assert_eq!(app.agent_pick().map(|p| p.selected), Some(1));
+    app.on_mouse(click);
+    assert_eq!(app.launched.iter().map(|l| l.agent).collect::<Vec<_>>(), [Agent::Codex, Agent::Codex]);
+
+    // Claude Code chosen: remembered in its turn, and started as before (no first message, the offer).
+    new_session_in(&mut app, &work);
+    key(&mut app, KeyCode::Up);
+    key(&mut app, KeyCode::Enter);
+    let l = app.launched.last().unwrap();
+    assert_eq!((l.agent, l.args.is_empty()), (Agent::Claude, true));
+    assert_eq!(settings::load(&w.config).0.new_session_agent.as_deref(), Some("claude"));
+}
+
+#[test]
+fn esc_in_the_question_starts_nothing_and_remembers_nothing() {
+    let w = world("codex-new-esc");
+    let work = w.base.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let mut app = w.codex_app();
+    new_session_in(&mut app, &work);
+    assert!(matches!(app.mode, Mode::PickAgent));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List) && app.agent_pick().is_none());
+    assert!(app.launched.is_empty());
+    assert!(nothing_remembered(&w));
+}
+
+#[test]
+fn with_one_agent_installed_n_starts_it_without_asking() {
+    // Claude Code only (a unit test's app without a Codex folder): as ever.
+    let w = World::new("codex-new-claude-only");
+    let work = w.base.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let mut app = w.app();
+    new_session_in(&mut app, &work);
+    assert!(matches!(app.mode, Mode::List), "no question");
+    assert_eq!(app.launched.iter().map(|l| (l.agent, l.args.len())).collect::<Vec<_>>(), [(Agent::Claude, 0)]);
+    // Codex only.
+    let w = world("codex-new-codex-only");
+    fs::create_dir_all(&work).unwrap();
+    let mut app = w.codex_app();
+    let codex = app.providers().codex.clone();
+    app.set_providers_for_test(crate::agents::Providers { claude: None, codex });
+    new_session_in(&mut app, &work);
+    assert!(matches!(app.mode, Mode::List), "no question");
+    assert_eq!(
+        app.launched.iter().map(|l| (l.agent, l.args.clone())).collect::<Vec<_>>(),
+        [(Agent::Codex, vec!["--no-daemon".to_string()])]
+    );
+    assert!(nothing_remembered(&w), "nothing was chosen, nothing written");
+}
+
+/// A host of platoon's running a new Codex session as process `pid`, in `dir`.
+fn new_codex_host(w: &World, pid: u32, dir: &std::path::Path) -> crate::host::HostInfo {
+    crate::host::HostInfo {
+        agent: Agent::Codex,
+        claude_pid: pid,
+        host_pid: 1,
+        dir: dir.to_string_lossy().into_owned(),
+        args: Agent::Codex.args(crate::agents::Start::New(None)),
+        sock: w.base.join(format!("{pid}.sock")),
+    }
+}
+
+#[test]
+fn a_new_codex_session_has_a_row_before_its_first_message_that_opens_it_and_keeps_nothing_under_its_id() {
+    let w = world("codex-unsaved");
+    let work = w.base.join("fresh");
+    fs::create_dir_all(&work).unwrap();
+    let mut app = w.codex_app();
+    let pid = 4_000_321;
+    app.refresh_with(vec![new_codex_host(&w, pid, &work)], false);
+    let id = crate::model::unsaved_id(pid);
+    let s = app.sessions.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("no row for the new session"));
+    assert_eq!((s.agent, s.name.as_str(), s.model.as_deref(), s.status), (Agent::Codex, "fresh", None, Status::Idle));
+    assert!(s.unsaved() && s.procs.len() == 1 && s.procs[0].hosted);
+    let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
+    let shown = screen(&mut term, &app);
+    let line = shown.lines().find(|l| l.contains("fresh")).unwrap_or_else(|| panic!("{shown}"));
+    assert!(line.contains("Codex") && line.contains('●'), "a running Codex row: {line}");
+    select(&mut app, &id);
+    assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(pid)), "enter shows it");
+    for (k, what) in [('a', "archived"), ('r', "renamed"), ('m', "put in a project"), ('h', "handed on"), ('t', "drafted into tasks")] {
+        key(&mut app, KeyCode::Char(k));
+        assert!(matches!(app.mode, Mode::List), "{k}");
+        assert_eq!(
+            app.active_notice(),
+            Some(
+                format!("\"fresh\" has no conversation yet: Codex saves it when you send your first message. Then it can be {what}.")
+                    .as_str()
+            ),
+        );
+    }
+    assert!(!w.config.join("archive.json").exists() && !w.config.join("names.json").exists() && !w.config.join("projects.json").exists());
+    // A resumed conversation's host is not a new one; a host gone takes its row with it.
+    let mut resumed = new_codex_host(&w, pid, &work);
+    resumed.args = Agent::Codex.args(crate::agents::Start::Resume(FINISHED));
+    app.refresh_with(vec![resumed], false);
+    assert!(!app.sessions.iter().any(|s| s.unsaved()));
+    app.refresh_with(Vec::new(), false);
+    assert!(!app.sessions.iter().any(|s| s.unsaved()));
+}
+
+/// The row of a new Codex session gives way to its conversation's once Codex saves it and holds it, in the same process.
+/// Linux (`flock`, `/proc/locks`).
+#[cfg(target_os = "linux")]
+#[test]
+fn once_codex_saves_the_new_conversation_its_row_takes_over_from_the_new_sessions() {
+    use std::process::{Command, Stdio};
+    let w = world("codex-unsaved-saved");
+    let work = w.base.join("fresh");
+    fs::create_dir_all(&work).unwrap();
+    let id = "01a30000-0000-7000-8000-00000000beef";
+    let locks = w.codex().join("thread-writer-locks");
+    fs::create_dir_all(&locks).unwrap();
+    // The stand-in "codex": waits for its first message (the file `go`), then holds the conversation's lock itself.
+    let go = w.base.join("go");
+    let script = format!(
+        "while [ ! -e '{}' ]; do sleep 0.02; done; exec flock '{}' sleep 60",
+        go.display(),
+        locks.join(format!("{id}.lock")).display()
+    );
+    let mut codex = Command::new("sh").args(["-c", &script]).stdin(Stdio::null()).spawn().unwrap();
+    let mut app = w.codex_app();
+    let host = new_codex_host(&w, codex.id(), &work);
+    app.refresh_with(vec![host.clone()], false);
+    assert!(app.sessions.iter().any(|s| s.id == crate::model::unsaved_id(codex.id())));
+    // The first message: Codex writes the rollout and takes the lock.
+    let day = w.codex().join("sessions/2026/10/24");
+    fs::create_dir_all(&day).unwrap();
+    let lines = [
+        json!({"timestamp":"2026-10-24T09:00:00.000Z","type":"session_meta","payload":{"id":id,"cwd":work,"originator":"codex-tui","cli_version":"0.163.0","source":"cli"}}),
+        json!({"timestamp":"2026-10-24T09:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello there codex"}]}}),
+    ];
+    fs::write(day.join(format!("rollout-2026-10-24T09-00-00-{id}.jsonl")), lines.map(|l| l.to_string()).join("\n") + "\n").unwrap();
+    fs::write(&go, "").unwrap();
+    let start = std::time::Instant::now();
+    loop {
+        app.refresh_with(vec![host.clone()], false);
+        if app.sessions.iter().any(|s| s.id == id && !s.procs.is_empty()) {
+            break;
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "the saved conversation never took over");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let s = app.sessions.iter().find(|s| s.id == id).unwrap();
+    assert_eq!((s.procs[0].pid, s.procs[0].hosted), (codex.id(), true), "the same process, platoon's");
+    assert!(!app.sessions.iter().any(|s| s.unsaved()), "one row, the conversation's");
+    let _ = codex.kill();
+    let _ = codex.wait();
+}

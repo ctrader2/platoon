@@ -165,6 +165,10 @@ pub struct Settings {
     pub ai_find_wide_candidates: u64,
     /// Once a day at most, ask GitHub whether a newer platoon is out (`versions.rs`): platoon's only network request.
     pub update_check: bool,
+    /// The agent the user last started a new session in (`n` asks when both are installed): `claude` or `codex` as the
+    /// file says (`Agent::id`), picked in advance the next time. None until the user has chosen once; a word platoon
+    /// doesn't know reads as none and stays in the file until they choose.
+    pub new_session_agent: Option<String>,
 }
 
 impl Default for Settings {
@@ -201,6 +205,7 @@ impl Default for Settings {
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
             update_check: true,
+            new_session_agent: None,
         }
     }
 }
@@ -344,6 +349,7 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
             update_check: o.get("update_check").and_then(Value::as_bool).unwrap_or(d.update_check),
+            new_session_agent: o.get("new_session_agent").and_then(Value::as_str).map(str::to_string),
         }
         .clamped(),
     )
@@ -431,6 +437,10 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
     object.insert("update_check".into(), json!(s.update_check));
+    // Written only once the user has chosen (`n`'s question): until then nothing is remembered.
+    if let Some(a) = &s.new_session_agent {
+        object.insert("new_session_agent".into(), json!(a));
+    }
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
     let mut features = match object.get("token_features") {
@@ -1886,6 +1896,27 @@ mod tests {
         save(&d, &Settings { ai_daily_tokens: 5, ai_batch_size: 0, ..s }).unwrap();
         let v = saved(&d);
         assert_eq!((v["ai_daily_tokens"].as_u64(), v["ai_batch_size"].as_u64()), (Some(MIN_DAILY_TOKENS), Some(MIN_BATCH)));
+    }
+
+    #[test]
+    fn the_agent_new_sessions_start_in_is_written_only_once_chosen_and_kept_as_written() {
+        let d = dir("new-session-agent");
+        write(&d, r#"{"mine":[1]}"#);
+        let s = load(&d).0;
+        assert_eq!(s.new_session_agent, None);
+        save(&d, &s).unwrap();
+        assert!(saved(&d).get("new_session_agent").is_none(), "nothing chosen yet: nothing written");
+        save(&d, &Settings { new_session_agent: Some("codex".into()), ..s }).unwrap();
+        assert_eq!((saved(&d)["new_session_agent"].clone(), saved(&d)["mine"].clone()), (json!("codex"), json!([1])));
+        assert_eq!(load(&d).0.new_session_agent.as_deref(), Some("codex"));
+        // A word this version doesn't know is kept as it is (it reads as no choice: `Providers::new_session_agent`).
+        write(&d, r#"{"new_session_agent":"gemini"}"#);
+        let s = load(&d).0;
+        assert_eq!(s.new_session_agent.as_deref(), Some("gemini"));
+        save(&d, &s).unwrap();
+        assert_eq!(saved(&d)["new_session_agent"], json!("gemini"));
+        write(&d, r#"{"new_session_agent":5}"#);
+        assert_eq!(load(&d).0.new_session_agent, None);
     }
 
     #[test]

@@ -7,8 +7,8 @@ group them into projects with shared notes, and start tasks that follow a squad'
 
 [Full tour (MP4)](demo/platoon-tour.mp4)
 
-platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) today, on Linux and macOS, and lists and opens your
-[Codex](https://github.com/openai/codex) conversations beside it when Codex is installed.
+platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) today, on Linux and macOS, and lists, opens and
+starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is installed.
 
 ## What it does
 

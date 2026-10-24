@@ -153,6 +153,9 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `update_check` is `true` or `false`; anything else there means the default (`true`).
+- `new_session_agent` is `claude` or `codex`: the program you last started a new session in when `n` asked (with both
+  installed). It isn't in the file until you have chosen once, and it is picked in advance the next time; `platoon open`
+  with no id starts a new session in it too.
 - `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30,
   `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300,
   3 to 20 and 50 to 1000.

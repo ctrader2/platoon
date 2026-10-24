@@ -263,6 +263,9 @@ impl App {
     /// changes nothing: no conversation selected, it is in no project, its project is archived, its folder is
     /// gone, there is nothing in it yet, or the gate says no.
     pub(super) fn start_handoff(&mut self) {
+        if self.refuse_unsaved("handed on") {
+            return;
+        }
         let Some(s) = self.selected_session() else {
             self.notify("No session selected");
             return;

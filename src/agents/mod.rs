@@ -504,6 +504,18 @@ impl Providers {
         }
     }
 
+    /// The agents installed here, Claude Code first.
+    pub fn installed(&self) -> Vec<Agent> {
+        Agent::ALL.into_iter().filter(|&a| self.program(a).is_some()).collect()
+    }
+
+    /// The agent a new session starts in: `remembered` (the one the user last chose, as the settings file says it) while
+    /// it is installed, else the first installed (Claude Code before Codex). None with neither.
+    pub fn new_session_agent(&self, remembered: Option<&str>) -> Option<Agent> {
+        let installed = self.installed();
+        remembered.and_then(Agent::from_id).filter(|a| installed.contains(a)).or_else(|| installed.first().copied())
+    }
+
     /// Codex's folder, when Codex is installed.
     pub fn codex_root(&self) -> Option<&Path> {
         self.codex.as_ref().map(|c| c.root.as_path())
@@ -1020,6 +1032,21 @@ pub(crate) mod tests {
         assert_eq!(c.agent_of("gpt-6-luna"), Some(Agent::Codex));
         assert_eq!(c.of_agent(Agent::Claude).count(), 4);
         assert_eq!((c.default_smart().as_deref(), c.default_notes().as_deref()), (Some("haiku"), Some("sonnet")));
+    }
+
+    #[test]
+    fn a_new_session_starts_in_the_agent_last_chosen_while_it_is_installed_else_in_the_first_installed() {
+        let codex = || Some(CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: PathBuf::from("/nonexistent") });
+        let both = Providers { claude: Some("claude".into()), codex: codex() };
+        assert_eq!(both.installed(), [Agent::Claude, Agent::Codex]);
+        assert_eq!(both.new_session_agent(None), Some(Agent::Claude), "nothing chosen yet: Claude Code first");
+        assert_eq!(both.new_session_agent(Some("codex")), Some(Agent::Codex));
+        assert_eq!(both.new_session_agent(Some("gemini")), Some(Agent::Claude), "a word platoon doesn't know is no choice");
+        let only_codex = Providers { claude: None, codex: codex() };
+        assert_eq!(only_codex.new_session_agent(Some("claude")), Some(Agent::Codex), "the one chosen isn't here any more");
+        let only_claude = Providers { claude: Some("claude".into()), codex: None };
+        assert_eq!(only_claude.new_session_agent(Some("codex")), Some(Agent::Claude));
+        assert_eq!(Providers::default().new_session_agent(Some("claude")), None);
     }
 
     #[test]

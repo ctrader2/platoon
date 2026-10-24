@@ -106,6 +106,9 @@ impl App {
 
     /// `t` on a session's row.
     pub(super) fn draft_tasks_key(&mut self) {
+        if self.refuse_unsaved("drafted into tasks") {
+            return;
+        }
         match self.selected_session().map(|s| s.id.clone()) {
             Some(id) => self.start_task_draft(&id),
             None => self.notify("No session selected"),

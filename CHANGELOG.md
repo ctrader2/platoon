@@ -14,6 +14,11 @@ here.
   description line. A Codex conversation is handed on to a new Codex session (`codex --no-daemon` with the document as
   its first message), in the same folder and project; when the conversation's program isn't installed any more, `h`
   says so and starts nothing.
+- **`n` starts a Codex session too.** With Claude Code and Codex both installed, `n` asks after the folder "Start in
+  Claude Code or Codex?", with your last choice picked in advance (`enter` starts it) and remembered in the settings
+  (`new_session_agent`); `esc` starts nothing. With one installed, that one starts without a question. `platoon open`
+  with no id starts the one chosen last. A new Codex session (`codex --no-daemon`) has its row, running and open to
+  `enter`, from the start, before Codex saves the conversation with your first message.
 - **Codex sessions platoon starts offer to make tasks too.** A Codex session platoon starts or resumes is told, through
   platoon's Codex hook, to ask once, in its reply, "Ready to create tasks?" when the conversation settles on work to
   hand off, and on a yes to make them with `platoon task add` (Codex asks you to allow that command).

@@ -286,6 +286,7 @@ fn draw_all(f: &mut Frame, app: &App) {
             draw_editor_pick(f, app, full)
         }
         Mode::PickFileEditor => draw_file_editor_pick(f, app, full),
+        Mode::PickAgent => draw_agent_pick(f, app, full),
         Mode::Changes => draw_changes(f, app, full),
         Mode::Handoff => draw_handoff(f, app, full),
         Mode::SquadPick => tasks_view::draw_squad_list(f, app, full),
@@ -3081,6 +3082,46 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(hint_fg(t))), note);
     let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// `n`'s question when Claude Code and Codex are both installed: which one the new session starts in. The one chosen
+/// last time is starred and already picked, so `enter` starts it again.
+fn draw_agent_pick(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let Some(pick) = app.agent_pick() else { return };
+    app.hits.borrow_mut().clear();
+    let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 52), h);
+    popup_ground(f, t, area, r, true);
+    let block = modal_block(t, "New session");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, list, note, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
+    f.render_widget(Paragraph::new(fit_end("Start in Claude Code or Codex?", head.width as usize)).style(Style::new().fg(t.text)), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    for (i, agent) in pick.options.iter().enumerate().take(list.height as usize) {
+        let rect = Rect::new(list.x, list.y + i as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::AgentRow(i)));
+        let sel = i == pick.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let star = if pick.last == Some(*agent) { app.star() } else { " " };
+        let spans = vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(format!("{star} "), base.fg(t.accent)),
+            Span::styled(fit(agent.name(), (rect.width as usize).saturating_sub(4)), base.fg(t.text)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+    let foot_note = match pick.last {
+        Some(_) => format!("{} your last choice: enter starts it again.", app.star()),
+        None => "The one you choose is picked here next time.".to_string(),
+    };
+    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(hint_fg(t))), note);
+    let hints: [Hint; 3] = [("enter", "start", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }
 

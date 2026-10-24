@@ -75,7 +75,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | Key | Does |
 | --- | --- |
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach`; a Codex one open in another Codex window is [left where it is](#codex-conversations) |
-| `n` | new session (pick a folder) |
+| `n` | new session: pick a folder; with Claude Code and Codex both installed, then [which one](#new-sessions-in-claude-code-or-codex) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
@@ -170,8 +170,20 @@ The [smart features](tokens.md) (generated names and summaries, "Describe it"), 
 [hand-off](projects.md#handing-work-on-to-a-new-session) (`h`) and [drafting tasks](tasks-and-squads.md#making-tasks-from-a-conversation)
 (`t`) work on Codex conversations as on Claude Code's: they read what you typed and a line of Codex's last reply, never
 a tool's output. The name Codex gives a conversation stays its description line, as Claude Code's own title does, and
-platoon's generated name is its name. A Codex conversation is handed on to a new **Codex** session. New sessions (`n`,
-`platoon open` with no id) and [tasks](tasks-and-squads.md) are Claude Code's.
+platoon's generated name is its name. A Codex conversation is handed on to a new **Codex** session. [Tasks](tasks-and-squads.md)
+are Claude Code's.
+
+### New sessions in Claude Code or Codex
+
+With both installed, `n` asks after the folder: **Start in Claude Code or Codex?** The one you chose last time is starred
+and already picked, so `enter` starts it again; `↑` `↓` (or a click) pick the other, and `esc` starts nothing. Your
+choice is remembered (`new_session_agent` in the [settings file](settings-and-keys.md#the-settings-file)). With only one
+of them installed there is no question: that one starts. `platoon open` with no id starts the one you chose last.
+
+A new Codex session starts as `codex --no-daemon` in the folder, under platoon, like any session. Codex saves a
+conversation only when you send your first message, so until then its row stands for the session itself: its folder's
+name, `Codex` under MODEL, running. `enter` opens it; archiving, renaming, `m`, `h` and `t` wait for that first message
+(they say so). Once Codex saves the conversation, its own row takes over.
 
 ## Background sessions
 
@@ -306,7 +318,7 @@ so the terminal's own selection and copy work as usual.
 ## See a session live from a regular terminal
 
 ```
-platoon open                  # start a new session in this directory
+platoon open                  # start a new session in this directory (in the program you chose last with n)
 platoon open a1b2             # join a session by (a prefix of) its id, resuming it if nothing is running
 platoon open --project shop   # start a new session in this directory, in a project (by its name)
 ```

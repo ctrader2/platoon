@@ -603,6 +603,9 @@ impl App {
     // ---- the project picker (`m`) -----------------------------------------------------------------------------
 
     pub(super) fn open_assign(&mut self) {
+        if self.refuse_unsaved("put in a project") {
+            return;
+        }
         let Some(s) = self.selected_session() else {
             self.notify("No session selected");
             return;

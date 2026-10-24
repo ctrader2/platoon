@@ -45,6 +45,17 @@ pub enum NameSource {
     Platoon,
 }
 
+/// What the id of a row begins with when the row is a new Codex session platoon started that has no conversation yet:
+/// Codex saves a new conversation, and so gives it its id, only with the first message, so until then the row stands
+/// for the host's process (`unsaved_id`). Nothing is ever kept under such an id (archive, names, projects): the row's
+/// actions that would keep something say why not, and once Codex saves the conversation its real row takes over.
+pub const UNSAVED: &str = "unsaved:";
+
+/// The row id of the new session platoon started as process `pid`, before it has a conversation (`UNSAVED`).
+pub fn unsaved_id(pid: u32) -> String {
+    format!("{UNSAVED}{pid}")
+}
+
 /// One conversation (a session id), whether or not anything is running it.
 pub struct Session {
     pub id: String,
@@ -99,6 +110,11 @@ impl Session {
     /// start? Then platoon never opens it a second time, never stops it and never archives it: the user closes it there.
     pub fn held_elsewhere(&self) -> bool {
         self.agent.keeps_one_writer() && self.procs.iter().any(|p| !p.hosted)
+    }
+
+    /// Is this the row of a new session that has no conversation of its own yet (`UNSAVED`)?
+    pub fn unsaved(&self) -> bool {
+        self.id.starts_with(UNSAVED)
     }
 
     pub fn rehaystack(&mut self) {
