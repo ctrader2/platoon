@@ -245,7 +245,12 @@ fn run_with(w: &World, extra: &[(&str, String)], args: &[&str], input: &str) -> 
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    // A hook may end without reading its input (one of a program switched off does, at once): the pipe it never read
+    // is then closed, and that is no failure. Anything else is.
+    match child.stdin.take().unwrap().write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("couldn't send the hook its input: {e}"),
+        _ => {}
+    }
     let out = child.wait_with_output().unwrap();
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
