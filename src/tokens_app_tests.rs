@@ -262,7 +262,7 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     }
     // The master's explanation is shown while it is selected, in plain words.
     let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("your own Claude plan") && flat.contains("Off nothing is sent"), "{shown}");
+    assert!(flat.contains("your own plan (Claude's, or Codex's") && flat.contains("Off nothing is sent"), "{shown}");
     let fg_at = |term: &Terminal<TestBackend>, row_word: &str, word: &str| {
         let buf = term.backend().buffer();
         (0..buf.area.height).find_map(|y| {

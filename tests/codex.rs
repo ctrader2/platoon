@@ -58,6 +58,8 @@ impl World {
             ("PLATOON_CACHE_DIR", dir("cache")),
             ("PLATOON_CONFIG_DIR", dir("config")),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
+            // Claude Code installed beside Codex, whatever this machine's path has (setup does both parts).
+            (NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1.into()),
             ("CODEX_HOME", self.codex.to_string_lossy().into()),
             ("PLATOON_CODEX_BIN", fake_codex(&self.base).to_string_lossy().into()),
             ("FAKE_CODEX_ARGS", dir("codex-args")),

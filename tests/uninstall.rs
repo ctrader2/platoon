@@ -67,6 +67,8 @@ impl World {
             .env("PLATOON_NO_UPDATE_CHECK", "1")
             // Never the real Codex (its folder here is this world's `~/.codex`).
             .env("PLATOON_CODEX_BIN", common::NO_REAL_CODEX[1].1)
+            // Claude Code installed, whatever this machine's path has: setup does its steps.
+            .env(common::NO_REAL_CLAUDE.0, common::NO_REAL_CLAUDE.1)
             .env("NO_COLOR", "1")
             .stdin(Stdio::null());
         c

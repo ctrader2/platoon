@@ -148,23 +148,34 @@ pub fn enable_hint(settings_path: &Path) -> String {
     )
 }
 
-/// The one line non-interactive setup prints.
-pub fn setup_hint() -> String {
+/// The one line non-interactive setup prints. `agent`: the one the smart features' model runs on here.
+pub fn setup_hint(agent: Agent) -> String {
     format!(
-        "Smart features that use your Claude tokens are off. To turn them on, run `platoon setup` in a terminal, or press s in platoon and switch on \"{MASTER_LABEL}\"."
+        "Smart features that use your {} tokens are off. To turn them on, run `platoon setup` in a terminal, or press s in platoon and switch on \"{MASTER_LABEL}\".",
+        agent.short()
     )
 }
 
-/// The question `platoon setup` asks (default: no).
-pub fn consent_text() -> String {
-    let mut t = String::from("Smart features (optional)\n\nplatoon can use your own Claude plan to add:\n");
+/// The question `platoon setup` asks (default: no), about the plan of `agent`, the one the smart features' model runs
+/// on here (Codex on a computer with only Codex).
+pub fn consent_text(agent: Agent) -> String {
+    let plan = match agent {
+        Agent::Claude => "Claude plan",
+        Agent::Codex => "ChatGPT plan, through Codex,",
+    };
+    let mut t = format!("Smart features (optional)\n\nplatoon can use your own {plan} to add:\n");
     for f in FEATURES {
         t.push_str(&format!("  - {}: {}\n", f.label, f.description));
     }
-    t.push_str(
-        "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each session (for a \
-         project's notes, more of that reply), in small batches, and it counts against your Claude plan. Nothing is sent if you say no.\n",
-    );
+    t.push_str(&match agent {
+        Agent::Claude => "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each session (for \
+             a project's notes, more of that reply), in small batches, and it counts against your Claude plan. Nothing is sent if you say no.\n"
+            .to_string(),
+        Agent::Codex => "\nIf you say yes, platoon sends Codex the prompts you typed plus one line of the last reply for each session (for a \
+             project's notes, more of that reply), in small batches, and it counts against your plan's Codex limits; each call also \
+             costs about 20,000 tokens of Codex's own instructions. Nothing is sent if you say no.\n"
+            .to_string(),
+    });
     t.push_str(&format!(
         "You can switch this off at any time: press s in platoon, then turn off \"{MASTER_LABEL}\".\n\nTurn these features on?"
     ));

@@ -24,9 +24,31 @@ fn dirs(name: &str) -> (PathBuf, PathBuf) {
     (claude, cache)
 }
 
+/// The computer a test's platoon runs on: Claude Code installed (`common::NO_REAL_CLAUDE`, a program that can't run),
+/// no Codex.
+fn with_claude() -> Vec<(&'static str, Option<String>)> {
+    vec![(common::NO_REAL_CLAUDE.0, Some(common::NO_REAL_CLAUDE.1.to_string()))]
+}
+
+/// A computer with neither Claude Code nor this machine's own `claude` or `codex` on the path (whatever the machine
+/// running the tests has), plus `extra`.
+fn without_claude(extra: &[(&'static str, String)]) -> Vec<(&'static str, Option<String>)> {
+    let path: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .filter(|d| !d.join("claude").exists() && !d.join("codex").exists())
+        .collect();
+    let mut env = vec![("PLATOON_CLAUDE_BIN", None), ("PATH", Some(std::env::join_paths(path).unwrap().to_string_lossy().into_owned()))];
+    env.extend(extra.iter().map(|(k, v)| (*k, Some(v.clone()))));
+    env
+}
+
 fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Output {
-    Command::new(BIN)
-        .env("PLATOON_NO_UPDATE_CHECK", "1")
+    platoon_on(claude, cache, &with_claude(), args)
+}
+
+/// `platoon <args>` with `env` set (None: taken out) after the usual environment.
+fn platoon_on(claude: &PathBuf, cache: &PathBuf, env: &[(&str, Option<String>)], args: &[&str]) -> std::process::Output {
+    let mut c = Command::new(BIN);
+    c.env("PLATOON_NO_UPDATE_CHECK", "1")
         .envs(common::NO_REAL_CODEX)
         .args(args)
         .env("CLAUDE_CONFIG_DIR", claude)
@@ -34,9 +56,14 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         // Never the real one: `platoon themes` reads the user's theme files from here.
         .env("PLATOON_CONFIG_DIR", cache.parent().unwrap().join("config"))
         .env("NO_COLOR", "1")
-        .env_remove("PLATOON_SKIP_SETUP_CHECK")
-        .output()
-        .unwrap()
+        .env_remove("PLATOON_SKIP_SETUP_CHECK");
+    for (k, v) in env {
+        match v {
+            Some(v) => c.env(k, v),
+            None => c.env_remove(k),
+        };
+    }
+    c.output().unwrap()
 }
 
 fn text(b: &[u8]) -> String {
@@ -97,6 +124,11 @@ fn setup_installs_no_skill_and_refuses_arguments() {
 
 /// Runs `platoon` in a real terminal; returns the screen text once it shows `wait_for`, then quits it.
 fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String {
+    run_in_terminal_on(claude, cache, &with_claude(), wait_for)
+}
+
+/// `run_in_terminal` with `env` set (None: taken out) after the usual environment.
+fn run_in_terminal_on(claude: &PathBuf, cache: &PathBuf, env: &[(&str, Option<String>)], wait_for: &str) -> String {
     let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 90, pixel_width: 0, pixel_height: 0 }).unwrap();
     let mut cmd = CommandBuilder::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
@@ -108,6 +140,12 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
+    for (k, v) in env {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        }
+    }
     let mut child = pair.slave.spawn_command(cmd).unwrap();
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().unwrap();
@@ -375,4 +413,40 @@ fn version_prints_the_name_and_cargo_version_and_needs_no_setup() {
         assert_eq!(text(&out.stdout), format!("platoon {}\n", env!("CARGO_PKG_VERSION")), "{flag}");
     }
     assert_eq!(fs::read_dir(&claude).unwrap().count(), 0, "nothing written");
+}
+
+#[test]
+fn with_only_codex_platoon_starts_without_claude_codes_setup_and_setup_leaves_claudes_settings_alone() {
+    let (claude, cache) = dirs("codex-only");
+    let codex = cache.parent().unwrap().join("codex");
+    fs::create_dir_all(&codex).unwrap();
+    // Codex is installed (its folder is there); its program can't run, so setup can't have it trust the hooks.
+    let env = without_claude(&[("CODEX_HOME", codex.display().to_string())]);
+    let out = platoon_on(&claude, &cache, &env, &["setup"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let shown = text(&out.stdout);
+    assert!(shown.contains("Claude Code isn't installed on this computer, so there is nothing to set up for it."), "{shown}");
+    assert!(!shown.contains("Status line") && !shown.contains("Session guard"), "no Claude Code steps: {shown}");
+    assert!(shown.contains("Codex") && shown.matches("added").count() == 3 && shown.contains("All set"), "{shown}");
+    assert!(!claude.join("settings.json").exists(), "Claude Code's settings are left alone");
+    assert!(codex.join("hooks.json").exists(), "Codex's notes hooks are in");
+    // And platoon starts: no setup gate for a program that isn't there, and Codex's plan in the header.
+    let screen = run_in_terminal_on(&claude, &cache, &env, "No sessions yet");
+    assert!(screen.contains("No sessions yet") && !screen.contains("one-time setup"), "{screen}");
+    assert!(screen.contains("Codex plan: no figure yet") && !screen.contains("plan usage: off"), "{screen}");
+}
+
+#[test]
+fn with_neither_platoon_and_its_setup_say_plainly_what_to_install() {
+    let (claude, cache) = dirs("neither");
+    let env = without_claude(&[]);
+    for args in [&[][..], &["setup"]] {
+        let out = platoon_on(&claude, &cache, &env, args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        let err = text(&out.stderr);
+        assert!(err.contains("neither is installed on this computer") && err.contains("Install one of them"), "{args:?}: {err}");
+        assert!(err.contains("Claude Code: https://") && err.contains("Codex: https://"), "{err}");
+        assert!(text(&out.stdout).is_empty(), "{args:?}");
+    }
+    assert!(!claude.join("settings.json").exists(), "nothing written");
 }

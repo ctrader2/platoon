@@ -7,7 +7,7 @@
 //! block starting platoon. Codex runs a hook only once it is trusted: setup has Codex itself trust exactly the hooks it
 //! wrote (`trust_codex`), and uninstall has it forget them (`forget_codex_trust`).
 
-use crate::agents::{codex, codex_server};
+use crate::agents::{Agent, codex, codex_server};
 use crate::{ai, settings};
 use serde_json::{Value, json};
 use std::{
@@ -86,6 +86,8 @@ pub enum Outcome {
 }
 
 pub struct Report {
+    /// Claude Code is installed, and these are its steps' outcomes (`STEPS` order).
+    pub claude: bool,
     pub outcomes: Vec<Outcome>,
     /// Set when settings.json was rewritten.
     pub saved: Option<PathBuf>,
@@ -502,8 +504,24 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { outcomes, saved, backed_up, notes, codex: None })
+    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None })
 }
+
+impl Report {
+    /// Setup on a computer without Claude Code: its settings are left alone, and nothing of it blocks starting.
+    pub fn without_claude() -> Report {
+        Report { claude: false, outcomes: Vec::new(), saved: None, backed_up: false, notes: Vec::new(), codex: None }
+    }
+}
+
+/// What `platoon` and `platoon setup` say on a computer with neither Claude Code nor Codex, instead of starting.
+pub const NOTHING_INSTALLED: &str = "platoon manages the sessions of Claude Code and of OpenAI's Codex, and neither is \
+installed on this computer: platoon looks for `claude` and `codex` on your PATH, and for Codex's folder (~/.codex, or \
+$CODEX_HOME).
+
+Install one of them (or both) and sign in, then run platoon again:
+  Claude Code: https://docs.anthropic.com/en/docs/claude-code
+  Codex: https://github.com/openai/codex";
 
 /// This platoon's full path, and as a hook command writes it (quoted when it holds a space).
 fn this_program() -> Result<(String, String), String> {
@@ -656,12 +674,13 @@ pub enum TokenQuestion {
 /// features? Asked only in a terminal and only until it has been answered; the default is no; nothing else in
 /// setup, and nothing about starting platoon, depends on it. `interactive` is whether both stdin and stdout are a
 /// terminal (a parameter so tests can give it a script).
-pub fn ask_about_tokens(config: &Path, interactive: bool, input: &mut dyn BufRead, out: &mut dyn Write) -> TokenQuestion {
+pub fn ask_about_tokens(config: &Path, interactive: bool, agent: Agent, input: &mut dyn BufRead, out: &mut dyn Write) -> TokenQuestion {
     let (mut current, corrupt) = settings::load(config);
     if corrupt {
         let _ = writeln!(
             out,
-            "\nYour settings file couldn't be read, so platoon left the smart features (which use your Claude tokens) off and didn't ask about them."
+            "\nYour settings file couldn't be read, so platoon left the smart features (which use your {} tokens) off and didn't ask about them.",
+            agent.short()
         );
         return TokenQuestion::SettingsUnreadable;
     }
@@ -669,10 +688,10 @@ pub fn ask_about_tokens(config: &Path, interactive: bool, input: &mut dyn BufRea
         return TokenQuestion::AlreadyAsked;
     }
     if !interactive {
-        let _ = writeln!(out, "\n{}", ai::setup_hint());
+        let _ = writeln!(out, "\n{}", ai::setup_hint(agent));
         return TokenQuestion::NotInteractive;
     }
-    let _ = write!(out, "\n{} [y/N] ", ai::consent_text());
+    let _ = write!(out, "\n{} [y/N] ", ai::consent_text(agent));
     let _ = out.flush();
     let mut line = String::new();
     if input.read_line(&mut line).unwrap_or(0) == 0 {
@@ -725,6 +744,9 @@ fn row(ok: Option<bool>, step: &Step, detail: &str, color: bool) -> String {
 /// What `platoon setup` prints after running.
 pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     let mut out = vec!["platoon setup".to_string(), String::new()];
+    if !r.claude {
+        out.push("Claude Code isn't installed on this computer, so there is nothing to set up for it.".into());
+    }
     for (step, o) in STEPS.iter().zip(&r.outcomes) {
         out.push(match o {
             Outcome::AlreadyDone => row(Some(true), step, "already done", color),
@@ -1006,12 +1028,37 @@ mod tests {
 
     fn ask(config: &Path, interactive: bool, typed: &str) -> (TokenQuestion, String) {
         let mut out = Vec::new();
-        let q = ask_about_tokens(config, interactive, &mut std::io::Cursor::new(typed.as_bytes().to_vec()), &mut out);
+        let q = ask_about_tokens(config, interactive, Agent::Claude, &mut std::io::Cursor::new(typed.as_bytes().to_vec()), &mut out);
         (q, String::from_utf8(out).unwrap())
     }
 
     fn cfg(name: &str) -> PathBuf {
         tmp(name).join("config")
+    }
+
+    #[test]
+    fn on_a_computer_with_only_codex_the_question_is_about_codex_and_says_what_a_call_costs() {
+        let c = cfg("ask-codex");
+        let mut out = Vec::new();
+        let q = ask_about_tokens(&c, true, Agent::Codex, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out);
+        assert_eq!(q, TokenQuestion::Answered(false));
+        let shown = String::from_utf8(out).unwrap();
+        for want in ["your own ChatGPT plan, through Codex, to add", "sends Codex the prompts you typed", "about 20,000 tokens"] {
+            assert!(shown.contains(want), "{want:?}: {shown}");
+        }
+        assert!(!shown.contains("Claude"), "{shown}");
+        let mut out = Vec::new();
+        ask_about_tokens(&cfg("ask-codex-quiet"), false, Agent::Codex, &mut std::io::Cursor::new(Vec::new()), &mut out);
+        assert!(String::from_utf8(out).unwrap().contains("use your Codex tokens are off"));
+    }
+
+    #[test]
+    fn without_claude_code_the_report_says_so_and_lists_no_claude_steps() {
+        let r = Report::without_claude();
+        let shown = render_report(&r, Path::new("/nowhere"), false);
+        assert!(shown.contains("Claude Code isn't installed on this computer, so there is nothing to set up for it."), "{shown}");
+        assert!(STEPS.iter().all(|s| !shown.contains(s.name)) && shown.contains("All set"), "{shown}");
+        assert!(NOTHING_INSTALLED.contains("neither is installed") && NOTHING_INSTALLED.contains("Install one of them"));
     }
 
     #[test]
@@ -1188,7 +1235,14 @@ mod tests {
             assert!(r.error.as_deref().is_some_and(|e| e.contains("hooks.json")), "{:?}", r.error);
             assert_eq!(fs::read_to_string(codex.join("hooks.json")).unwrap(), bad);
             assert!(!codex.join("hooks.json.platoon-bak").exists());
-            let report = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(r) };
+            let report = Report {
+                claude: true,
+                outcomes: vec![Outcome::AlreadyDone; 4],
+                saved: None,
+                backed_up: false,
+                notes: vec![],
+                codex: Some(r),
+            };
             let shown = render_report(&report, &codex, false);
             assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
         }
@@ -1197,7 +1251,8 @@ mod tests {
     #[test]
     fn the_report_says_what_codex_will_ask_and_a_claude_only_report_is_as_before() {
         let root = tmp("codex-report");
-        let claude_only = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: None };
+        let claude_only =
+            Report { claude: true, outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: None };
         let shown = render_report(&claude_only, &root, false);
         assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
         let codex = run_codex(&root.join("codex"));
@@ -1335,7 +1390,14 @@ mod tests {
         // The report: each step says what Codex says of it, and Codex won't ask.
         report.trust = Some(trust);
         let shown = render_report(
-            &Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(report) },
+            &Report {
+                claude: true,
+                outcomes: vec![Outcome::AlreadyDone; 4],
+                saved: None,
+                backed_up: false,
+                notes: vec![],
+                codex: Some(report),
+            },
             &codex,
             false,
         );
@@ -1355,7 +1417,14 @@ mod tests {
         let mut again = run_codex(&codex);
         again.trust = Some(trust);
         let shown = render_report(
-            &Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(again) },
+            &Report {
+                claude: true,
+                outcomes: vec![Outcome::AlreadyDone; 4],
+                saved: None,
+                backed_up: false,
+                notes: vec![],
+                codex: Some(again),
+            },
             &codex,
             false,
         );

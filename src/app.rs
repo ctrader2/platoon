@@ -1095,7 +1095,8 @@ impl App {
         }
         self.news_rx = Some(versions::spawn(versions::Checks {
             cache: self.cache.clone(),
-            claude: versions::claude_program(),
+            // Claude Code's version only where it is installed.
+            claude: self.providers.claude.as_ref().and(versions::claude_program()),
             curl: "curl".into(),
             url: versions::RELEASES_API.into(),
             update_check: self.settings.get().update_check,

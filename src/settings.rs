@@ -880,8 +880,9 @@ fn smart_items() -> Vec<Item> {
     let mut v = Vec::new();
     v.push(Item {
         name: MASTER_LABEL,
-        explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus part \
-                  of Claude's last reply, in small batches. While this is Off nothing is sent, and turning it Off stops any call in progress.",
+        explain: "Lets platoon use your own plan (Claude's, or Codex's for an OpenAI model) for the smart features below. It sends \
+                  the messages you typed plus part of the last reply, in small batches. While this is Off nothing is sent, and turning \
+                  it Off stops any call in progress.",
         kind: Kind::Steps,
         choices: &[0, 1],
         get: |s| u64::from(s.tokens_enabled),

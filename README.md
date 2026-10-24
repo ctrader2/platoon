@@ -34,8 +34,8 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 ## Install
 
-You need Linux or macOS, Claude Code installed as `claude` and signed in, and a terminal of at least 60 by 14. Any one
-of these:
+You need Linux or macOS, Claude Code (`claude`) or Codex (`codex`) installed and signed in (tasks need Claude Code for
+now), and a terminal of at least 60 by 14. Any one of these:
 
 ```
 brew install ctrader2/tap/platoon                    # Homebrew (macOS, Linux)
@@ -66,7 +66,8 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 - **Its own folders**: `~/.config/platoon` and `~/.cache/platoon`, and a `<repo>-worktrees` folder beside a repository
   when a task works on it.
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update
-  themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
+  themselves use your Claude plan (or your ChatGPT plan through Codex, for an OpenAI model), so they are off until you
+  turn them on, with a daily limit.
 - **A task's session edits files without asking** (Claude Code's "accept edits" mode, after plan mode for a squad that
   plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. When
   the session stops, a fresh Claude that can only read checks the work against the task before it is Done (it uses

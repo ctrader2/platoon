@@ -3,11 +3,12 @@
 ## What you need
 
 - Linux or macOS.
-- Claude Code, installed as `claude` and signed in. platoon runs
-  your sessions with it and reads its files (see [What platoon changes](what-platoon-changes.md)).
-- Optional: OpenAI's Codex CLI (`codex`). When it is on this computer, platoon lists and opens its conversations too
-  (see [Codex conversations](sessions.md#codex-conversations)), and `platoon setup` gives its sessions the project notes
-  hooks.
+- Claude Code (installed as `claude`), OpenAI's Codex CLI (`codex`), or both, signed in. platoon runs your sessions
+  with them and reads their files (see [What platoon changes](what-platoon-changes.md)). With Claude Code, everything
+  works; with only Codex, platoon lists and opens Codex's conversations (see
+  [Codex conversations](sessions.md#codex-conversations)), keeps projects and their notes, and runs its smart features
+  on Codex's models, but tasks need Claude Code for now (see [A computer with only Codex](#a-computer-with-only-codex)).
+  With neither, `platoon` says what to install instead of starting.
 - Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
 - `git`, for [tasks](tasks-and-squads.md#starting-a-task) (they work in git worktrees) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
@@ -41,8 +42,8 @@ Whichever you choose, platoon was last checked with the Claude Code version name
 
 ## Set it up: `platoon setup`
 
-`platoon setup` is a one-time step, and `platoon` won't start until it's done. It shows a checklist of what it changes in
-Claude Code's `settings.json` (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`). When that file is already
+`platoon setup` is a one-time step, and where Claude Code is installed `platoon` won't start until it's done. It shows a
+checklist of what it changes in Claude Code's `settings.json` (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`). When that file is already
 there, it backs it up first, as `settings.json.platoon-bak` beside it (and says so), and leaves everything else in it
 alone, your own hooks included.
 
@@ -85,10 +86,21 @@ understand), setup says why, and Codex asks you once instead: the next time you 
 review. Approve them there. Until you do they simply don't run; nothing else in platoon waits for them, and the rest of
 setup is unaffected.
 
-After the checklist, setup asks one more question: may platoon use your Claude plan for its
-[smart features](tokens.md)? The answer is "no" unless you say yes; see
+After the checklist, setup asks one more question: may platoon use your Claude plan (on a computer with only Codex,
+your ChatGPT plan through Codex) for its [smart features](tokens.md)? The answer is "no" unless you say yes; see
 [Turning them on](tokens.md#turning-them-on).
 
+### A computer with only Codex
+
+Claude Code is installed when `claude` is on your path (or `PLATOON_CLAUDE_BIN` names it). Where it isn't, `platoon setup`
+says so and leaves Claude Code's settings alone (it doesn't create `~/.claude/settings.json`), and `platoon` starts
+without asking for Claude Code's steps: only Codex's hooks are set up, and they never block starting. The models offered
+are Codex's own (the first one Codex lists is the default for the smart features and the notes), the header shows Codex's
+plan, and the check for a newer Claude Code is skipped. A task's session runs on Claude Code for now, so starting a task
+says it needs Claude Code.
+
+With neither Claude Code nor Codex, `platoon` and `platoon setup` say plainly that there is nothing to manage and where to
+get each, and change nothing.
 ### Running it again
 
 Running `platoon setup` again is harmless: finished steps show as already done, and a step whose command points at a

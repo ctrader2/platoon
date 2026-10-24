@@ -18,6 +18,11 @@ here.
   request on standard input. Every token Codex reports counts against the daily limit; its own instructions are about
   20,000 tokens a call. `platoon tokens test` says which program it asks. Conversations of Codex's still aren't
   named, described or handed off.
+- **platoon runs on a computer with only Codex.** Claude Code's setup steps are asked for, and block starting, only
+  where Claude Code is installed (`claude` on the path, or `PLATOON_CLAUDE_BIN`); with only Codex, `platoon setup` leaves
+  Claude Code's settings alone and sets up Codex's hooks, and platoon starts, lists Codex's conversations and offers
+  Codex's models. The Claude Code version check runs only where it is installed. With neither, `platoon` and `platoon
+  setup` say what to install instead of starting.
 - **Limits per program.** Claude Code's calls and Codex's are counted apart: each against the daily limit, each with
   its own back-off after a failure ("Codex isn't signed in" doesn't stop Claude's calls), and the pause above plan usage
   follows the plan of the program the call would use. Codex's limits come from its saved sessions, whatever windows the

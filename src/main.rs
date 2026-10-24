@@ -250,8 +250,18 @@ fn statusline() -> io::Result<()> {
 
 /// Refuse to continue until setup is complete. Only the UI and `open` are gated; the commands Claude
 /// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
+/// Claude Code's steps are asked for only where Claude Code is installed (Codex's never block); with neither Claude
+/// Code nor Codex there is nothing to manage, and platoon says what to install.
 fn require_setup() {
-    if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
+    if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_some() {
+        return;
+    }
+    let providers = agents::Providers::here();
+    if providers.claude.is_none() && providers.codex.is_none() {
+        eprintln!("{}", setup::NOTHING_INSTALLED);
+        std::process::exit(1);
+    }
+    if providers.claude.is_some() {
         let states = setup::check(&agents::claude::claude_root());
         if !setup::ready(&states) {
             eprintln!("{}", setup::render_blocked(&states, use_color(true)));
@@ -276,23 +286,28 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = agents::claude::claude_root();
-    match setup::run(&root) {
+    let providers = agents::Providers::here();
+    if providers.claude.is_none() && providers.codex.is_none() {
+        eprintln!("{}", setup::NOTHING_INSTALLED);
+        std::process::exit(1);
+    }
+    // Claude Code's steps only where Claude Code is installed: its settings are left alone otherwise.
+    let claude = if providers.claude.is_some() { setup::run(&root) } else { Ok(setup::Report::without_claude()) };
+    match claude {
         Ok(mut report) => {
             // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
-            let codex = agents::codex::codex_root();
-            let path = std::env::var("PATH").unwrap_or_default();
-            let program = agents::codex::program();
-            if agents::codex::installed(&codex, &program, &path) {
-                let mut c = setup::run_codex(&codex);
+            if let Some(agents::CodexAt { program, root: codex }) = &providers.codex {
+                let mut c = setup::run_codex(codex);
                 // Running setup is the user's say-so: Codex itself is asked to trust the hooks setup wrote.
                 if c.error.is_none() {
                     let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map_or_else(|| codex.clone(), std::path::PathBuf::from);
-                    c.trust = Some(setup::trust_codex(&codex, &program, &home, agents::codex_server::TIME_BOX));
+                    c.trust = Some(setup::trust_codex(codex, program, &home, agents::codex_server::TIME_BOX));
                 }
                 report.codex = Some(c);
             }
-            // A Claude Code newer than the one this platoon was checked with is said here every time.
-            report.notes.extend(versions::setup_line(versions::claude_program().as_deref(), versions::off_by_env()));
+            // A Claude Code newer than the one this platoon was checked with is said here every time (where it is installed).
+            let claude_program = providers.claude.as_ref().and(versions::claude_program());
+            report.notes.extend(versions::setup_line(claude_program.as_deref(), versions::off_by_env()));
             println!("{}", setup::render_report(&report, &root, use_color(false)));
         }
         Err(e) => {
@@ -303,11 +318,12 @@ fn setup() -> io::Result<()> {
     // The one extra question. It never changes what setup did or the exit code.
     use std::io::IsTerminal;
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let answer = setup::ask_about_tokens(&archive::config_dir(), interactive, &mut io::stdin().lock(), &mut io::stdout());
+    let agent = ai::smart_agent(&settings::load(&archive::config_dir()).0, &providers.catalog());
+    let answer = setup::ask_about_tokens(&archive::config_dir(), interactive, agent, &mut io::stdin().lock(), &mut io::stdout());
     // Yes now, or yes before and nothing named yet: the first pass over the active conversations, right here.
     if matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
         let (config, cache) = (archive::config_dir(), usage::cache_dir());
-        let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, providers: agents::Providers::here(), interactive };
+        let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, providers, interactive };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
     Ok(())
