@@ -17,8 +17,9 @@ here.
 - **`n` starts a Codex session too.** With Claude Code and Codex both installed, `n` asks after the folder "Start in
   Claude Code or Codex?", with your last choice picked in advance (`enter` starts it) and remembered in the settings
   (`new_session_agent`); `esc` starts nothing. With one installed, that one starts without a question. `platoon open`
-  with no id starts the one chosen last. A new Codex session (`codex --no-daemon`) has its row, running and open to
-  `enter`, from the start, before Codex saves the conversation with your first message.
+  with no id starts the one chosen last. A new Codex session (`codex --no-daemon`) has one row, running and open to
+  `enter`, from the start: named by its folder and in its project once Codex has opened it, before Codex saves the
+  conversation with your first message.
 - **The screens name the program that answers.** With a Codex model, the hand-off box ("Asking Codex what to hand
   on…"), Describe it, tasks from a conversation, the system-prompt settings and the notice after editing one say Codex,
   not Claude; a project's notes request names Codex's reply for a Codex session; with both programs installed, the

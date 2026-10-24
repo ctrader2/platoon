@@ -185,6 +185,26 @@ pub fn live_descendants(pid: u32) -> Option<Vec<u32>> {
     descendants(&table()?, pid)
 }
 
+/// The folder process `pid` works in, or None when the system won't say (gone, another user's). Linux reads
+/// `/proc/<pid>/cwd`; elsewhere (macOS) `lsof` is asked, which is slow enough that callers keep the answer.
+pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
+    if Path::new("/proc/self/stat").exists() {
+        return fs::read_link(format!("/proc/{pid}/cwd")).ok();
+    }
+    let out = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    lsof_cwd(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The folder in `lsof -d cwd -Fn`'s answer: its `n` line.
+fn lsof_cwd(text: &str) -> Option<std::path::PathBuf> {
+    text.lines().find_map(|l| l.strip_prefix('n')).filter(|p| p.starts_with('/')).map(std::path::PathBuf::from)
+}
+
 pub fn pid_alive(pid: u32) -> bool {
     // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
     let exists = unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) };
@@ -262,6 +282,16 @@ fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_process_s_working_folder_is_read_and_lsofs_answer_parsed() {
+        let here = std::env::current_dir().unwrap();
+        let got = cwd(std::process::id()).expect("our own working folder");
+        assert_eq!(fs::canonicalize(got).unwrap(), fs::canonicalize(&here).unwrap());
+        assert_eq!(cwd(4_000_000_000), None, "no such process");
+        assert_eq!(lsof_cwd("p123\nfcwd\nn/Users/u/shop\n"), Some(std::path::PathBuf::from("/Users/u/shop")));
+        assert_eq!(lsof_cwd("p123\n"), None);
+    }
+
     use super::*;
 
     #[test]

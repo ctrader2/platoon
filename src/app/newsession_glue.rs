@@ -77,10 +77,10 @@ impl App {
         self.launch_in(agent, p.dir, Start::New(None), p.project.as_deref(), true);
     }
 
-    /// Is the selected row a new Codex session with no conversation yet (`model::UNSAVED`)? Then it can't be `what`
-    /// ("archived", "renamed", ...): said, and true.
+    /// Is the selected row a new Codex session with no saved conversation yet (`Session::unsaved`)? Then it can't be
+    /// `what` ("archived", "renamed", ...): said, and true.
     pub(super) fn refuse_unsaved(&mut self, what: &str) -> bool {
-        let Some(name) = self.selected_session().filter(|s| s.unsaved()).map(|s| s.name.clone()) else { return false };
+        let Some(name) = self.selected_session().filter(|s| s.unsaved).map(|s| s.name.clone()) else { return false };
         self.notify(format!("\"{name}\" has no conversation yet: Codex saves it when you send your first message. Then it can be {what}."));
         true
     }

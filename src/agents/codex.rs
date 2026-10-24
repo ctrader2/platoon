@@ -12,7 +12,9 @@
 //! - `session_index.jsonl`: the names Codex gives conversations, one line per change (the latest line wins).
 //! - `thread-writer-locks/<id>.lock`: held while a conversation is open. Codex keeps one writer per conversation
 //!   itself, so the holder of the lock is the one process running it (sometimes Codex's shared background server,
-//!   which runs many and is never signalled).
+//!   which runs many and is never signalled). A new conversation's lock is taken as soon as the session opens (after
+//!   Codex's own update and folder-trust questions), before any message and so before its rollout exists: such a
+//!   conversation is `Live::unsaved`, its folder the holder's own (`procs::cwd`).
 //! - `config.toml`: the MCP servers (`[mcp_servers.<name>]`), for idle stop. Read only: Codex rewrites it itself.
 //! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `HOOKS`).
 
@@ -816,6 +818,8 @@ pub struct Reader {
     root: PathBuf,
     /// Rollouts found so far, by conversation id (finding one walks the folders of every day Codex was used).
     found: Mutex<HashMap<String, PathBuf>>,
+    /// The working folders of lock holders asked so far, by pid (`cwd_of`).
+    cwds: Mutex<HashMap<u32, String>>,
     #[cfg(target_os = "macos")]
     lsof: Mutex<lsof::Cache>,
 }
@@ -829,6 +833,7 @@ impl Reader {
         Self {
             root,
             found: Mutex::new(HashMap::new()),
+            cwds: Mutex::new(HashMap::new()),
             #[cfg(target_os = "macos")]
             lsof: Mutex::new(lsof::Cache::default()),
         }
@@ -847,6 +852,13 @@ impl Reader {
         let p = find_rollout(&self.root, id)?;
         found.insert(id.to_string(), p.clone());
         Some(p)
+    }
+
+    /// The working folder of process `pid` ("" when the system won't say), remembered: asked only for a conversation
+    /// that has no rollout yet, which on macOS means running `lsof` once.
+    fn cwd_of(&self, pid: u32) -> String {
+        let mut cwds = self.cwds.lock().unwrap_or_else(|e| e.into_inner());
+        cwds.entry(pid).or_insert_with(|| crate::procs::cwd(pid).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()).clone()
     }
 
     /// The lock files there are: (conversation id, path).
@@ -893,10 +905,16 @@ impl Reader {
             .map(|(pid, id)| {
                 let lock = locks.iter().find(|(l, _)| *l == id).map(|(_, p)| p.clone()).unwrap_or_default();
                 let rollout = self.rollout(&id);
+                // Before the first message there is no rollout to say where it runs: the holder's own folder says.
+                let cwd = match rollout.as_deref() {
+                    Some(r) => rollout_cwd(r).unwrap_or_default(),
+                    None => self.cwd_of(pid),
+                };
                 Live {
                     agent: super::Agent::Codex,
                     pid,
-                    cwd: rollout.as_deref().and_then(rollout_cwd).unwrap_or_default(),
+                    cwd,
+                    unsaved: rollout.is_none(),
                     busy: rollout.as_deref().and_then(busy) == Some(true),
                     started_at: since(&lock).map_or(0, |d| d.as_millis() as u64),
                     id,

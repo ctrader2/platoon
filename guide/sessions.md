@@ -182,8 +182,10 @@ of them installed there is no question: that one starts. `platoon open` with no 
 
 A new Codex session starts as `codex --no-daemon` in the folder, under platoon, like any session. Codex saves a
 conversation only when you send your first message, so until then its row stands for the session itself: its folder's
-name, `Codex` under MODEL, running. `enter` opens it; archiving, renaming, `m`, `h` and `t` wait for that first message
-(they say so). Once Codex saves the conversation, its own row takes over.
+name, `Codex` under MODEL, running, and in its project as soon as Codex has opened it (after Codex's own questions,
+such as an update or trusting the folder). `enter` opens it; archiving, renaming, `m`, `h` and `t` wait for that first
+message (they say so). Once Codex saves the conversation, the row shows it: its branch, model and the name Codex gives
+it. A Codex session started outside platoon that hasn't been sent anything yet shows the folder its process works in.
 
 ## Background sessions
 

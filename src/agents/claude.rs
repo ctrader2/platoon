@@ -532,6 +532,7 @@ fn live_from(v: &Value) -> Option<Live> {
         busy: v["status"].as_str() == Some("busy") && parked.is_none(),
         background,
         parked,
+        unsaved: false,
     })
 }
 

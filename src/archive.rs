@@ -337,6 +337,7 @@ mod tests {
     fn session(id: &str, last_active_secs: u64, running: bool) -> Session {
         Session {
             id: id.into(),
+            unsaved: false,
             agent: crate::agents::Agent::Claude,
             name: id.into(),
             dir: String::new(),

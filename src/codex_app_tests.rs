@@ -544,7 +544,7 @@ fn a_new_codex_session_has_a_row_before_its_first_message_that_opens_it_and_keep
     let id = crate::model::unsaved_id(pid);
     let s = app.sessions.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("no row for the new session"));
     assert_eq!((s.agent, s.name.as_str(), s.model.as_deref(), s.status), (Agent::Codex, "fresh", None, Status::Idle));
-    assert!(s.unsaved() && s.procs.len() == 1 && s.procs[0].hosted);
+    assert!(s.unsaved && s.procs.len() == 1 && s.procs[0].hosted);
     let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
     let shown = screen(&mut term, &app);
     let line = shown.lines().find(|l| l.contains("fresh")).unwrap_or_else(|| panic!("{shown}"));
@@ -567,16 +567,19 @@ fn a_new_codex_session_has_a_row_before_its_first_message_that_opens_it_and_keep
     let mut resumed = new_codex_host(&w, pid, &work);
     resumed.args = Agent::Codex.args(crate::agents::Start::Resume(FINISHED));
     app.refresh_with(vec![resumed], false);
-    assert!(!app.sessions.iter().any(|s| s.unsaved()));
+    assert!(!app.sessions.iter().any(|s| s.unsaved));
     app.refresh_with(Vec::new(), false);
-    assert!(!app.sessions.iter().any(|s| s.unsaved()));
+    assert!(!app.sessions.iter().any(|s| s.unsaved));
 }
 
-/// The row of a new Codex session gives way to its conversation's once Codex saves it and holds it, in the same process.
-/// Linux (`flock`, `/proc/locks`).
+/// A new Codex session in the order the real Codex 0.163 goes through it, from a project's screen: first no lock (its own
+/// update and trust questions: the stand-in row), then the conversation's lock held by the host's own child with no
+/// rollout yet (the session's prompt, nothing sent: the real id, the host's folder, still unsaved), then the rollout
+/// (the first message). One row at every stage, in the project from the moment its id is known. Linux (`flock`,
+/// `/proc/locks`).
 #[cfg(target_os = "linux")]
 #[test]
-fn once_codex_saves_the_new_conversation_its_row_takes_over_from_the_new_sessions() {
+fn a_new_codex_session_is_one_row_before_the_lock_while_held_unsaved_and_once_saved() {
     use std::process::{Command, Stdio};
     let w = world("codex-unsaved-saved");
     let work = w.base.join("fresh");
@@ -584,19 +587,64 @@ fn once_codex_saves_the_new_conversation_its_row_takes_over_from_the_new_session
     let id = "01a30000-0000-7000-8000-00000000beef";
     let locks = w.codex().join("thread-writer-locks");
     fs::create_dir_all(&locks).unwrap();
-    // The stand-in "codex": waits for its first message (the file `go`), then holds the conversation's lock itself.
-    let go = w.base.join("go");
+    // The stand-in "codex": waits for the session to open (the file `open`), then holds the conversation's lock itself,
+    // in the same process (`exec`), as the real one does from then on.
+    let open = w.base.join("open");
     let script = format!(
         "while [ ! -e '{}' ]; do sleep 0.02; done; exec flock '{}' sleep 60",
-        go.display(),
+        open.display(),
         locks.join(format!("{id}.lock")).display()
     );
-    let mut codex = Command::new("sh").args(["-c", &script]).stdin(Stdio::null()).spawn().unwrap();
+    let mut codex = Command::new("sh").args(["-c", &script]).current_dir(&w.base).stdin(Stdio::null()).spawn().unwrap();
     let mut app = w.codex_app();
+    let project = app.projects.create("Web shop").unwrap();
+    // Started from the project's screen: placed by its pid once its id shows up.
+    crate::projects::note_launch(app.cache_for_test(), codex.id(), &project, crate::testkit::now_ms() - 5_000).unwrap();
     let host = new_codex_host(&w, codex.id(), &work);
+    let rows = |app: &App| app.sessions.iter().filter(|s| s.procs.iter().any(|p| p.pid == codex.id())).count();
+
+    // 1. Nothing held yet: the stand-in.
     app.refresh_with(vec![host.clone()], false);
-    assert!(app.sessions.iter().any(|s| s.id == crate::model::unsaved_id(codex.id())));
-    // The first message: Codex writes the rollout and takes the lock.
+    let stand_in = crate::model::unsaved_id(codex.id());
+    assert!(app.sessions.iter().any(|s| s.id == stand_in && s.unsaved));
+    assert_eq!(rows(&app), 1);
+    assert_eq!(app.projects.project_id_of(&stand_in), None, "nothing is kept under a stand-in's id");
+
+    // 2. The session is open: Codex holds the conversation, no rollout yet.
+    fs::write(&open, "").unwrap();
+    let start = std::time::Instant::now();
+    while !app.sessions.iter().any(|s| s.id == id) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "the held conversation never showed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.refresh_with(vec![host.clone()], false);
+    }
+    assert_eq!(rows(&app), 1, "the stand-in gave way");
+    let s = app.sessions.iter().find(|s| s.id == id).unwrap();
+    assert_eq!(
+        (s.name.as_str(), s.cwd.as_str(), s.unsaved),
+        ("fresh", work.to_str().unwrap(), true),
+        "the host's folder, not the process's"
+    );
+    assert_eq!((s.procs[0].pid, s.procs[0].hosted), (codex.id(), true));
+    assert_eq!(app.projects.project_id_of(id), Some(project.as_str()), "placed by its pid, with its real id");
+    let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
+    let shown = screen(&mut term, &app);
+    let line = shown.lines().find(|l| l.contains("fresh")).unwrap_or_else(|| panic!("{shown}"));
+    assert!(line.contains("Codex") && line.contains("Web shop"), "named by its folder, in its project: {line}");
+    select(&mut app, id);
+    for (k, what) in [('a', "archived"), ('r', "renamed"), ('m', "put in a project"), ('h', "handed on"), ('t', "drafted into tasks")] {
+        key(&mut app, KeyCode::Char(k));
+        assert!(matches!(app.mode, Mode::List), "{k}");
+        assert_eq!(
+            app.active_notice(),
+            Some(
+                format!("\"fresh\" has no conversation yet: Codex saves it when you send your first message. Then it can be {what}.")
+                    .as_str()
+            ),
+        );
+    }
+
+    // 3. The first message: Codex writes the rollout.
     let day = w.codex().join("sessions/2026/10/24");
     fs::create_dir_all(&day).unwrap();
     let lines = [
@@ -604,21 +652,64 @@ fn once_codex_saves_the_new_conversation_its_row_takes_over_from_the_new_session
         json!({"timestamp":"2026-10-24T09:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello there codex"}]}}),
     ];
     fs::write(day.join(format!("rollout-2026-10-24T09-00-00-{id}.jsonl")), lines.map(|l| l.to_string()).join("\n") + "\n").unwrap();
-    fs::write(&go, "").unwrap();
-    let start = std::time::Instant::now();
-    loop {
-        app.refresh_with(vec![host.clone()], false);
-        if app.sessions.iter().any(|s| s.id == id && !s.procs.is_empty()) {
-            break;
-        }
-        assert!(start.elapsed() < std::time::Duration::from_secs(10), "the saved conversation never took over");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    app.refresh_with(vec![host.clone()], false);
     let s = app.sessions.iter().find(|s| s.id == id).unwrap();
-    assert_eq!((s.procs[0].pid, s.procs[0].hosted), (codex.id(), true), "the same process, platoon's");
-    assert!(!app.sessions.iter().any(|s| s.unsaved()), "one row, the conversation's");
+    assert_eq!((s.unsaved, s.description.as_str(), s.name.as_str()), (false, "hello there codex", "fresh"));
+    assert_eq!(rows(&app), 1);
+    assert_eq!(app.projects.project_id_of(id), Some(project.as_str()));
     let _ = codex.kill();
     let _ = codex.wait();
+}
+
+#[test]
+fn each_stage_of_a_new_codex_session_is_one_row_with_the_hosts_folder() {
+    use crate::agents::Live;
+    let host = |pid: u32| crate::host::HostInfo {
+        agent: Agent::Codex,
+        claude_pid: pid,
+        host_pid: 1,
+        dir: "/home/u/shop".into(),
+        args: Agent::Codex.args(crate::agents::Start::New(None)),
+        sock: "/nonexistent/s.sock".into(),
+    };
+    let held = |pid: u32, cwd: &str, unsaved: bool| Live {
+        agent: Agent::Codex,
+        pid,
+        id: "01a30000-0000-7000-8000-00000000beef".into(),
+        cwd: cwd.into(),
+        name: None,
+        started_at: 5,
+        busy: false,
+        background: None,
+        parked: None,
+        unsaved,
+    };
+    let rows = |live: Vec<Live>| crate::app::new_codex_sessions(live, &[host(7)], |_| 9);
+    let shape = |l: &Live| (l.id.clone(), l.cwd.clone(), l.unsaved, l.started_at);
+    // Before the lock: one stand-in, the host's folder.
+    assert_eq!(rows(Vec::new()).iter().map(shape).collect::<Vec<_>>(), [(crate::model::unsaved_id(7), "/home/u/shop".into(), true, 9)]);
+    // Held, no rollout (the process's own folder, or none, from `Reader::live`): the host's folder wins, no stand-in.
+    for cwd in ["", "/somewhere/else"] {
+        let got = rows(vec![held(7, cwd, true)]);
+        assert_eq!(
+            got.iter().map(shape).collect::<Vec<_>>(),
+            [("01a30000-0000-7000-8000-00000000beef".into(), "/home/u/shop".into(), true, 5)]
+        );
+    }
+    // Saved: as its rollout says.
+    let got = rows(vec![held(7, "/home/u/shop/sub", false)]);
+    assert_eq!(
+        got.iter().map(shape).collect::<Vec<_>>(),
+        [("01a30000-0000-7000-8000-00000000beef".into(), "/home/u/shop/sub".into(), false, 5)]
+    );
+    // Held by a process that isn't a host's: left as it is (its own folder); the host still has its stand-in.
+    let got = rows(vec![held(8, "/elsewhere", true)]);
+    assert_eq!(got.len(), 2);
+    assert_eq!(shape(&got[0]), ("01a30000-0000-7000-8000-00000000beef".into(), "/elsewhere".into(), true, 5));
+    // A resumed conversation's host is never a new session.
+    let mut resumed = host(7);
+    resumed.args = Agent::Codex.args(crate::agents::Start::Resume("01a1517c-414d-7902-93d1-efa74830493d"));
+    assert!(crate::app::new_codex_sessions(Vec::new(), &[resumed], |_| 9).is_empty());
 }
 
 // ---- the screens name the program that answers ----------------------------------------------------------------------

@@ -721,6 +721,39 @@ pub struct App {
     pub launched: Vec<Launched>,
 }
 
+/// A new Codex session goes through three stages, and has one row in each: before Codex holds a conversation (its own
+/// update and folder-trust questions), Codex holding one it hasn't saved (no rollout until the first message), and the
+/// saved conversation. `live` (with platoon's hosts' Codex holders already told by the host's child, `App::live_now`)
+/// gets, for each new Codex session of `hosts` that holds nothing yet, a stand-in whose id is `model::unsaved_id`, its
+/// folder the host's and its start `started(host)`; and a conversation a host's child holds and hasn't saved takes the
+/// host's folder (there is no rollout to say it). Both are `unsaved`. A stand-in goes once its process holds a
+/// conversation, so no session is ever two rows.
+pub(crate) fn new_codex_sessions(mut live: Vec<Live>, hosts: &[HostInfo], started: impl Fn(&HostInfo) -> u64) -> Vec<Live> {
+    for l in live.iter_mut().filter(|l| l.agent == Agent::Codex && l.unsaved) {
+        if let Some(h) = hosts.iter().find(|h| h.claude_pid == l.pid) {
+            l.cwd.clone_from(&h.dir);
+        }
+    }
+    let new: Vec<Live> = hosts
+        .iter()
+        .filter(|h| h.agent == Agent::Codex && h.session().is_none() && !live.iter().any(|l| l.pid == h.claude_pid))
+        .map(|h| Live {
+            agent: Agent::Codex,
+            pid: h.claude_pid,
+            id: crate::model::unsaved_id(h.claude_pid),
+            cwd: h.dir.clone(),
+            name: None,
+            started_at: started(h),
+            busy: false,
+            background: None,
+            parked: None,
+            unsaved: true,
+        })
+        .collect();
+    live.extend(new);
+    live
+}
+
 /// One session a unit test's app would have started (see `App::launched`).
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1416,8 +1449,8 @@ impl App {
         for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &crate::procs::pid_alive) {
             self.joined_project(&project, &session);
         }
-        // A new Codex session has no conversation until its first message: its row stands for its host meanwhile (never
-        // placed in a project above: it is placed by its real id once Codex saves it).
+        // A new Codex session holds no conversation until it has opened (Codex's own questions first): its row stands for
+        // its host meanwhile, never placed in a project above. Once it holds one, it is placed above by its real id.
         let live = self.with_unsaved(live);
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
@@ -1455,6 +1488,8 @@ impl App {
                 s.unread = false;
                 continue;
             };
+            // Saved since the row was built (the first message): the index brings the rest at its next pass.
+            s.unsaved &= ls.iter().all(|l| l.unsaved);
             // Only interactive copies can fall out of sync with each other. A background session is run by
             // Claude's own service: it is never marked stale and never counts toward "several copies". Nor does a
             // parked one: it handed the conversation over and no longer writes to it.
@@ -1640,32 +1675,16 @@ impl App {
         live
     }
 
-    /// `live`, and for each new Codex session one of platoon's hosts runs that holds no conversation yet (Codex saves it,
-    /// and takes its lock, with the first message), a stand-in whose id is `model::unsaved_id`: its row is there, open
-    /// to `enter`, from the moment the session starts, as a new Claude Code session's is (Claude registers itself at
-    /// once). It goes when Codex holds the conversation (the same process, by its real id) or the host is gone.
-    fn with_unsaved(&self, mut live: Vec<Live>) -> Vec<Live> {
+    /// `live` with the new Codex sessions of platoon's hosts as `new_codex_sessions` makes them.
+    fn with_unsaved(&self, live: Vec<Live>) -> Vec<Live> {
         let started = |h: &HostInfo| {
-            std::fs::metadata(&h.sock).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            std::fs::metadata(&h.sock)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or_else(|| usage::now() * 1000, |d| d.as_millis() as u64)
         };
-        let new: Vec<Live> = self
-            .hosts
-            .iter()
-            .filter(|h| h.agent == Agent::Codex && h.session().is_none() && !live.iter().any(|l| l.pid == h.claude_pid))
-            .map(|h| Live {
-                agent: Agent::Codex,
-                pid: h.claude_pid,
-                id: crate::model::unsaved_id(h.claude_pid),
-                cwd: h.dir.clone(),
-                name: None,
-                started_at: started(h).map_or_else(|| usage::now() * 1000, |d| d.as_millis() as u64),
-                busy: false,
-                background: None,
-                parked: None,
-            })
-            .collect();
-        live.extend(new);
-        live
+        new_codex_sessions(live, &self.hosts, started)
     }
 
     /// The conversations to list: every saved one that has a real prompt, plus anything running (even before
@@ -1712,7 +1731,8 @@ impl App {
     /// A running conversation whose transcript isn't saved yet (nothing sent), described by what its agent says of
     /// the process running it.
     fn session_from_live(&self, l: &Live) -> Session {
-        self.session(l.agent, l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
+        let s = self.session(l.agent, l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at);
+        Session { unsaved: l.unsaved, ..s }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1743,6 +1763,7 @@ impl App {
         let haystack = Session::make_haystack(&name, &dir, &[], branch.as_deref(), &description, &summary);
         Session {
             id,
+            unsaved: false,
             agent,
             name,
             name_source,

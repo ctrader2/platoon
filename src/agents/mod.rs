@@ -731,6 +731,10 @@ pub struct Live {
     /// alive but no longer works on the conversation, and its registry status is never set back to idle, so a parked
     /// entry is never `busy` and never counts as a copy that writes to the conversation.
     pub parked: Option<String>,
+    /// The agent holds the conversation but hasn't saved it yet: there is no transcript to read, and nothing should be
+    /// kept under its id until there is. Codex holds a new conversation (its writer lock) as soon as the session opens
+    /// but writes its rollout only with the first message; Claude Code's entries are never this.
+    pub unsaved: bool,
 }
 
 impl Live {
