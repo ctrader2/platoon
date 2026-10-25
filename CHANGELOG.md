@@ -202,7 +202,7 @@ here.
 
 <!-- "unreleased" becomes the date (YYYY-MM-DD) in the commit that is tagged v1.0.0. -->
 
-The first public release. platoon works with Claude Code (last checked with 2.1.288) on Linux and macOS.
+The first public release. platoon works with Claude Code (last checked with 2.1.310) on Linux and macOS.
 
 ### Added
 

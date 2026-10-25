@@ -95,7 +95,7 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   Anthropic and OpenAI.
 
 platoon reads Claude Code's and Codex's own files, which aren't a documented format, so an update of either can break
-something. It was last checked with Claude Code 2.1.288 and Codex 0.164.0, and says so when yours is newer.
+something. It was last checked with Claude Code 2.1.310 and Codex 0.164.0, and says so when yours is newer.
 → [What platoon changes](guide/what-platoon-changes.md)
 
 ## Uninstall

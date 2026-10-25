@@ -133,7 +133,7 @@ your `codex` for their versions (`claude --version`, `codex --version`; each onl
 newer it says so once, in a line above the key hints:
 
 ```
-Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). If something looks wrong, update platoon.
+Claude Code 2.2.0 is newer than this platoon was checked with (2.1.310). If something looks wrong, update platoon.
 Codex 0.165.0 is newer than this platoon was checked with (0.164.0). If something looks wrong, update platoon.
 ```
 
