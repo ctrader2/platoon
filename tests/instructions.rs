@@ -198,6 +198,9 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.wait_for_flat("System prompt for the hand-off Enter to change");
     assert!(!file.exists());
     assert!(fs::read_to_string(lab.prompts().join("hand-off.md.bak")).unwrap().contains("Keep it to one screen."));
+    // The footer is the frame's last row, so it can still be on its way after the entry's line has changed: wait for
+    // it too before reading the whole frame.
+    t.wait_gone("r restore");
     let screen = t.stable();
     assert!(!footer(&screen).contains("restore"), "no restore once it is the default again:\n{screen}");
 

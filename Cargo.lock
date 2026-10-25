@@ -225,6 +225,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix",
@@ -1141,6 +1142,7 @@ name = "platoon-tui"
 version = "1.0.0"
 dependencies = [
  "arboard",
+ "crossterm",
  "fuzzy-matcher",
  "libc",
  "portable-pty",

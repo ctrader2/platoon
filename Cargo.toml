@@ -21,6 +21,10 @@ path = "src/main.rs"
 
 [dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+# Only to switch on how crossterm (ratatui's) reads the keyboard: "use-dev-tty" waits with poll(), which keeps reporting
+# input that is there. Its default waits with mio, edge-triggered, and drops the keyboard's readiness when a resize
+# signal is handled in the same wake-up: a key pressed as the window resized then waits for the next key.
+crossterm = { version = "0.29.0", default-features = false, features = ["use-dev-tty"] }
 fuzzy-matcher = "0.3.7"
 libc = "0.2.189"
 portable-pty = "0.9.0"
