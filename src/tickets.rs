@@ -3,7 +3,7 @@
 //! file of its own the user edits: what it should do and its "Done when" boxes), one folder it works in, the squad
 //! suggested for it (or the one it runs with), and a state.
 //!
-//! A task runs as one ordinary Claude Code session (`taskrun.rs`): in a git worktree of its folder on the branch
+//! A task runs as one ordinary Claude Code or Codex session (`taskrun.rs`): in a git worktree of its folder on the branch
 //! `task/<N>`, or in the folder itself when that is not in git. The session's own hooks move the task along: the plan
 //! is ready, a question, a permission prompt, the user typed, the turn ended (and the work was checked).
 //!

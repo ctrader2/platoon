@@ -1606,9 +1606,9 @@ mod tests {
 
     // --- background sessions (run by Claude's own service) -------------------------------------------
 
-    const BG_ID: &str = "dffac639-c805-47ba-b57c-3767f4f768d8";
+    const BG_ID: &str = "feedf00d-9999-4aaa-8bbb-cccccccccccc";
 
-    /// A saved conversation that Claude's service is running in the background (attach id `dffac639`), an ordinary
+    /// A saved conversation that Claude's service is running in the background (attach id `feedf00d`), an ordinary
     /// idle one next to it, and the real process standing in for the background one.
     fn bg_world(name: &str) -> (World, u32) {
         let mut w = World::new(name);
@@ -1630,7 +1630,7 @@ mod tests {
         assert_eq!(s.status, Status::Background);
         assert_eq!(
             s.procs.iter().map(|p| (p.pid, p.background.as_deref(), p.hosted, p.stale)).collect::<Vec<_>>(),
-            [(pid, Some("dffac639"), false, false)]
+            [(pid, Some("feedf00d"), false, false)]
         );
         assert!(!s.unread && !s.archived);
         assert_eq!(session(&app, "plain-1").status, Status::Idle, "everything else is as before");
@@ -1656,7 +1656,7 @@ mod tests {
         let _keep = w.live("plain-1", "/srv/beta", 1, "idle");
         let child = std::process::Command::new("sleep").arg("30").spawn();
         let mut child = child.unwrap();
-        w.register_bg(child.id(), "e418370e-da3f-4c80-a610-e00ad633d874", "/srv/beta", 2, "e418370e", true);
+        w.register_bg(child.id(), "5ca1ab1e-0000-4000-8000-000000000bb1", "/srv/beta", 2, "5ca1ab1e", true);
         let app = w.app();
         assert_eq!(ids(&app), ["plain-1"]);
         let _ = child.kill();
@@ -1668,7 +1668,7 @@ mod tests {
         let (w, _pid) = bg_world("bg-plan");
         let mut app = w.app();
         app.selected = row_of(&app, BG_ID);
-        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("dffac639".into())));
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("feedf00d".into())));
         // Nothing platoon would confirm or end: no dialog, no process to take over.
         app.selected = row_of(&app, "plain-1");
         assert_eq!(app.jump_plan(), Some(JumpPlan::Resume), "an idle conversation is resumed as always");
@@ -1678,9 +1678,9 @@ mod tests {
     fn once_a_platoon_host_shows_it_the_row_joins_that_host_and_the_attach_client_is_not_a_second_copy() {
         let (w, pid) = bg_world("bg-host");
         let mut app = w.app();
-        // The host's own process is a plain `claude attach dffac639`: it has no registry entry (not among the live
+        // The host's own process is a plain `claude attach feedf00d`: it has no registry entry (not among the live
         // processes) but its arguments say which background session it shows.
-        let host = crate::host::HostInfo { args: vec!["attach".into(), "dffac639".into()], ..hosted(4_000_000) };
+        let host = crate::host::HostInfo { args: vec!["attach".into(), "feedf00d".into()], ..hosted(4_000_000) };
         app.refresh_with(vec![host], false);
         app.selected = row_of(&app, BG_ID);
         let s = session(&app, BG_ID);
@@ -1695,7 +1695,7 @@ mod tests {
         let other = crate::host::HostInfo { args: vec!["attach".into(), "12345678".into()], ..hosted(4_000_001) };
         let resumed = crate::host::HostInfo { args: vec!["--resume".into(), BG_ID.into()], ..hosted(4_000_002) };
         app.refresh_with(vec![other, resumed], false);
-        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("dffac639".into())));
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("feedf00d".into())));
         assert!(!session(&app, BG_ID).procs[0].hosted);
     }
 
@@ -1814,11 +1814,11 @@ mod tests {
 
     // --- a session parked when it moved to the background (Claude Code's `parkedJobId`) ------------------
 
-    const PARKED_ID: &str = "5036bf6c-a34c-4727-b2a1-3b35ef10c9c1";
-    const JOB_ID: &str = "a70fa3de-47d5-404e-8578-aab19d24f8a9";
+    const PARKED_ID: &str = "c0ffee00-1111-4222-8333-444444444444";
+    const JOB_ID: &str = "beefcafe-5555-4666-8777-888888888888";
 
     /// A conversation whose interactive process handed it to a background session (a fork with its own id, job
-    /// `a70fa3de`) and stays alive, parked, its registry status stuck at "busy"; an ordinary idle one beside it.
+    /// `beefcafe`) and stays alive, parked, its registry status stuck at "busy"; an ordinary idle one beside it.
     /// With `job_runs`, the background session is still running. Returns the parked process's pid.
     fn parked_world(name: &str, job_runs: bool) -> (World, u32) {
         let mut w = World::new(name);
@@ -1828,7 +1828,7 @@ mod tests {
             w.transcript(JOB_ID, "/tmp", "plan the release", 20);
             w.live_bg(JOB_ID, "/tmp", 2);
         }
-        let pid = w.live_parked(PARKED_ID, "/tmp", 1, "a70fa3de");
+        let pid = w.live_parked(PARKED_ID, "/tmp", 1, "beefcafe");
         (w, pid)
     }
 
@@ -1840,7 +1840,7 @@ mod tests {
         assert_eq!(s.status, Status::Moved, "never Busy, whatever its registry status says");
         assert_eq!(
             s.procs.iter().map(|p| (p.pid, p.parked, p.moved_to.as_deref(), p.background.as_deref(), p.stale)).collect::<Vec<_>>(),
-            [(pid, true, Some("a70fa3de"), None, false)]
+            [(pid, true, Some("beefcafe"), None, false)]
         );
         assert!(!s.unread && !s.archived);
         assert_eq!(session(&app, JOB_ID).status, Status::Background, "the background session it moved to has its own row");
@@ -1853,9 +1853,9 @@ mod tests {
         let (w, pid) = parked_world("parked-plan", true);
         let mut app = w.app();
         app.selected = row_of(&app, PARKED_ID);
-        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("a70fa3de".into())), "no take-over, no resume");
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("beefcafe".into())), "no take-over, no resume");
         // A platoon host already showing that background session is joined.
-        let host = crate::host::HostInfo { args: vec!["attach".into(), "a70fa3de".into()], ..hosted(4_000_000) };
+        let host = crate::host::HostInfo { args: vec!["attach".into(), "beefcafe".into()], ..hosted(4_000_000) };
         app.refresh_with(vec![host], false);
         app.selected = row_of(&app, PARKED_ID);
         assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(4_000_000)));
@@ -1863,7 +1863,7 @@ mod tests {
         app.refresh_with(vec![hosted(pid)], false);
         app.selected = row_of(&app, PARKED_ID);
         assert_eq!(session(&app, PARKED_ID).status, Status::Moved);
-        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("a70fa3de".into())));
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("beefcafe".into())));
         assert!(alive(pid));
     }
 

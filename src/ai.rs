@@ -1,5 +1,5 @@
-//! The plumbing that lets platoon spend the user's own Claude tokens, safely. No feature uses it yet: names,
-//! summaries and find-by-description (step C) are rows in `FEATURES` plus a caller of `Runner::run`.
+//! The plumbing that lets platoon spend the user's own tokens (Claude's or Codex's), safely. Each feature that uses it
+//! is a row in `FEATURES` (or `SWITCHLESS`, for what the user asks for then and there) plus a caller of `Runner::run`.
 //!
 //! The rules, all enforced here and not by whoever calls:
 //! - A call happens only if the master switch AND the feature's own switch are on (`gate`), today's tokens are
@@ -29,9 +29,6 @@
 //! A task's check (`verdict.rs`) is part of the task the user started, not a smart feature: it is outside the gate
 //! (`PART_OF_A_TASK`: no switch, no daily limit, no pause, and it neither waits for a back-off nor starts one), runs in
 //! the task's folder with read-only tools, and its tokens go in the ledger like every call's.
-
-// Step C is the first caller of most of this.
-#![allow(dead_code)]
 
 use crate::agents::{Agent, Catalog, Providers, Tools};
 use crate::ledger::{Backoff, FailKind, Ledger, Usage};
@@ -535,12 +532,6 @@ impl Switchboard {
         }
     }
 
-    pub fn cancel_all(&self) {
-        for (_, c) in self.flags.lock().unwrap().drain() {
-            c.cancel();
-        }
-    }
-
     /// Cancel every call whose feature is no longer allowed to run under these settings.
     pub fn apply(&self, settings: &Settings) {
         let mut flags = self.flags.lock().unwrap();
@@ -741,7 +732,8 @@ impl Runner {
         Runner { providers, cache: cache.to_path_buf(), offset: 0 }
     }
 
-    /// Claude Code only, run as `program` (a stand-in, in tests).
+    /// Claude Code only, run as `program` (a stand-in).
+    #[cfg(test)]
     pub fn with_program(cache: &Path, program: &str) -> Runner {
         Runner::new(cache, Providers { claude: Some(program.to_string()), ..Providers::default() })
     }
@@ -1061,7 +1053,7 @@ pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
-/// `platoon tokens [test]`. Returns the exit code: 0 fine, 1 the call failed, 2 usage, 3 refused by a gate.
+/// `platoon tokens [status | test]`. Returns the exit code: 0 fine, 1 the call failed, 2 usage, 3 refused by a gate.
 pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Providers, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let (store, now) = (crate::settings::SettingsStore::open(config), usage::now());
     let settings = store.get();
@@ -2373,9 +2365,6 @@ pub(crate) mod tests {
         s.tokens_enabled = false;
         sb.apply(&s);
         assert!(b.is_cancelled() && t.is_cancelled(), "master off cancels everything");
-        let c = sb.token("find");
-        sb.cancel_all();
-        assert!(c.is_cancelled());
         let d = sb.token("names");
         sb.cancel("names");
         assert!(d.is_cancelled());

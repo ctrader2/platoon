@@ -664,7 +664,7 @@ pub struct App {
     /// gave it none).
     codex: Option<codex::Reader>,
     indexer: Indexer,
-    /// What the user typed in every conversation, for the full-text search. Step C's names and summaries come from it.
+    /// What the user typed in every conversation, for the full-text search; the smart names and summaries are made from it too.
     prompts: PromptIndex,
     /// The prompt length `prompts` was last asked to keep. It follows the setting once the setting has stopped changing.
     prompt_cap: usize,
@@ -684,7 +684,7 @@ pub struct App {
     /// The first entry of the settings screen in view, when the entries don't all fit. Kept between frames so the list
     /// scrolls only as far as the selection needs, like the other lists.
     pub setting_top: Cell<usize>,
-    /// The cancel flags of calls to Claude in flight (step C's features): a switch turned off in settings cancels them.
+    /// The cancel flags of the smart features' calls in flight (Claude's or Codex's): a switch turned off in settings cancels them.
     switchboard: Arc<ai::Switchboard>,
     /// Tokens the token features have used today on each AI program installed (on Claude Code alone when there is
     /// none), as the ledger says (shown in the settings).

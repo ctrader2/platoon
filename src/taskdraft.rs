@@ -53,11 +53,6 @@ pub fn system_with(guidance: &str) -> String {
     crate::instructions::compose(guidance, FIXED)
 }
 
-/// The fixed part, as the instructions table shows it.
-pub fn fixed() -> String {
-    FIXED.to_string()
-}
-
 /// One of the squads, as the drafting is told about it and as a suggestion is matched against.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kind {

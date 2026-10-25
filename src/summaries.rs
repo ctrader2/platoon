@@ -1,4 +1,4 @@
-//! The names and summaries platoon generated for conversations (step C's "smart names"). They cost tokens to
+//! The names and summaries platoon generated for conversations (the "Smart names and summaries" feature). They cost tokens to
 //! make, so unlike the cache they live in the config folder, `<config dir>/summaries.json`, next to `names.json`:
 //! `{"version": 1, "entries": {"<session id>": {"name": "...", "summary": "...", "covers": 7, "model": "haiku", "at": 1789000000}}}`.
 //!

@@ -308,7 +308,6 @@ impl Term {
 
     /// Waits for `platoon setup` to end, and checks it asked nothing about a code editor (an older platoon's setup
     /// asked last). Its exit code.
-    #[allow(dead_code)]
     pub fn exit_without_editor_question(&mut self) -> u32 {
         let code = self.wait_exit();
         let shown = self.flat();

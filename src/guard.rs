@@ -331,7 +331,7 @@ mod tests {
         let me = std::process::id();
         w.register(me, "sess", "/tmp", 5, "idle");
         let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        w.register_parked(child.id(), "sess", "/tmp", 1, "a70fa3de");
+        w.register_parked(child.id(), "sess", "/tmp", 1, "beefcafe");
         let all = live_entries(&w.root);
         assert_eq!(all.len(), 2, "both are alive");
         assert!(all.iter().any(|e| e.pid == child.id() && e.parked) && all.iter().any(|e| e.pid == me && !e.parked));

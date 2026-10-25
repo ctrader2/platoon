@@ -403,7 +403,7 @@ fn the_dialog_paths_still_ask_first_and_then_take_the_same_no_wait_road() {
 #[test]
 fn a_background_row_still_refuses_and_starts_no_stop() {
     let mut w = World::new("stop-bg");
-    let id = "dffac639-c805-47ba-b57c-3767f4f768d8";
+    let id = "feedf00d-9999-4aaa-8bbb-cccccccccccc";
     w.transcript(id, "/srv/alpha", "continue the release", 30);
     let pid = w.live_bg(id, "/srv/alpha", 1);
     let mut app = w.app();

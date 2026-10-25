@@ -815,7 +815,7 @@ mod tests {
         // and its entry (kind "bg", idle) belongs to another pid. Neither may make the host stop anything.
         let mut rig = Rig::new("bg-attach", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
         let mut daemon_child = Command::new("sleep").arg("60").spawn().unwrap(); // stands in for the service's process
-        let v = json!({"pid": daemon_child.id(), "sessionId": "dffac639-x", "kind": "bg", "status": "idle", "jobId": "dffac639"});
+        let v = json!({"pid": daemon_child.id(), "sessionId": "feedf00d-x", "kind": "bg", "status": "idle", "jobId": "feedf00d"});
         fs::write(rig.dir.join("claude/sessions").join(format!("{}.json", daemon_child.id())), v.to_string()).unwrap();
         let t0 = Instant::now();
         let mut since = t0;
@@ -838,7 +838,7 @@ mod tests {
         let file = rig.dir.join("claude/sessions").join(format!("{}.json", rig.child.id()));
         let t0 = Instant::now();
         for status in ["busy", "idle"] {
-            let v = json!({"pid": rig.child.id(), "sessionId": "s", "kind": "interactive", "status": status, "parkedJobId": "a70fa3de"});
+            let v = json!({"pid": rig.child.id(), "sessionId": "s", "kind": "interactive", "status": status, "parkedJobId": "beefcafe"});
             fs::write(&file, v.to_string()).unwrap();
             assert_eq!(registry_status(&rig.dir.join("claude"), rig.child.id()).as_deref(), Some("parked"));
             let mut since = t0;
@@ -860,10 +860,10 @@ mod tests {
             sock: PathBuf::new(),
             task: None,
         };
-        assert!(info(&["attach", "dffac639"]).attaches_to("dffac639"));
-        assert!(!info(&["attach", "dffac639"]).attaches_to("dffac63"));
-        assert!(!info(&["--resume", "dffac639"]).attaches_to("dffac639"));
-        assert!(!info(&[]).attaches_to("dffac639"));
+        assert!(info(&["attach", "feedf00d"]).attaches_to("feedf00d"));
+        assert!(!info(&["attach", "feedf00d"]).attaches_to("feedf00"));
+        assert!(!info(&["--resume", "feedf00d"]).attaches_to("feedf00d"));
+        assert!(!info(&[]).attaches_to("feedf00d"));
     }
 
     #[test]

@@ -1276,7 +1276,7 @@ mod tests {
     }
 
     fn entry(kind: &str, pid: u32, extra: Value) -> Value {
-        let mut v = serde_json::json!({"pid":pid,"sessionId":"dffac639-c805-47ba-b57c-3767f4f768d8","cwd":"/work","kind":kind,"startedAt":7,"status":"busy"});
+        let mut v = serde_json::json!({"pid":pid,"sessionId":"feedf00d-9999-4aaa-8bbb-cccccccccccc","cwd":"/work","kind":kind,"startedAt":7,"status":"busy"});
         for (k, x) in extra.as_object().unwrap() {
             v.as_object_mut().unwrap().insert(k.clone(), x.clone());
         }
@@ -1286,12 +1286,12 @@ mod tests {
     #[test]
     fn a_background_entry_is_a_live_process_told_apart_from_an_interactive_one() {
         let me = std::process::id();
-        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"dffac639"}))).unwrap();
+        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"feedf00d"}))).unwrap();
         assert_eq!(
             (bg.pid, bg.id.as_str(), bg.cwd.as_str(), bg.started_at, bg.busy),
-            (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work", 7, true)
+            (me, "feedf00d-9999-4aaa-8bbb-cccccccccccc", "/work", 7, true)
         );
-        assert_eq!(bg.background.as_deref(), Some("dffac639"));
+        assert_eq!(bg.background.as_deref(), Some("feedf00d"));
         assert!(bg.is_background());
 
         let inter = live_from(&entry("interactive", me, serde_json::json!({}))).unwrap();
@@ -1304,11 +1304,11 @@ mod tests {
         let job = live_from(&entry("bg", me, serde_json::json!({"jobId":"abc12345"}))).unwrap();
         assert_eq!(job.background.as_deref(), Some("abc12345"), "what Claude itself says wins");
         let plain = live_from(&entry("bg", me, serde_json::json!({}))).unwrap();
-        assert_eq!(plain.background.as_deref(), Some("dffac639"));
+        assert_eq!(plain.background.as_deref(), Some("feedf00d"));
         let empty = live_from(&entry("bg", me, serde_json::json!({"jobId":""}))).unwrap();
-        assert_eq!(empty.background.as_deref(), Some("dffac639"));
+        assert_eq!(empty.background.as_deref(), Some("feedf00d"));
         assert_eq!(short_id("xyz"), "xyz");
-        assert_eq!(attach_args("dffac639"), ["attach", "dffac639"]);
+        assert_eq!(attach_args("feedf00d"), ["attach", "feedf00d"]);
     }
 
     #[test]
@@ -1316,11 +1316,11 @@ mod tests {
         let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert_eq!(start_args(Start::New(None)), v(&[]));
         assert_eq!(start_args(Start::New(Some("Carry on from here"))), v(&["Carry on from here"]));
-        assert_eq!(start_args(Start::Resume("dffac639-c805")), v(&["--resume", "dffac639-c805"]));
+        assert_eq!(start_args(Start::Resume("feedf00d-9999")), v(&["--resume", "feedf00d-9999"]));
         assert_eq!(start_args(Start::Attach("abc12345")), v(&["attach", "abc12345"]));
         assert!(attaches(&start_args(Start::Attach("abc12345"))));
         assert!(!attaches(&start_args(Start::Resume("x"))) && !attaches(&[]));
-        assert_eq!(session_of_args(&start_args(Start::Resume("dffac639-c805"))).as_deref(), Some("dffac639-c805"));
+        assert_eq!(session_of_args(&start_args(Start::Resume("feedf00d-9999"))).as_deref(), Some("feedf00d-9999"));
         assert_eq!(session_of_args(&start_args(Start::New(Some("--resume")))), None);
     }
 
@@ -1484,7 +1484,7 @@ mod tests {
         assert!(live_from(&entry("bg", dead_pid(), serde_json::json!({}))).is_none(), "its process has gone");
         assert!(live_from(&entry("interactive", dead_pid(), serde_json::json!({}))).is_none());
         // Claude keeps pre-started processes waiting for work; they hold no conversation.
-        assert!(live_from(&entry("bg", me, serde_json::json!({"spare":true,"jobId":"e418370e"}))).is_none());
+        assert!(live_from(&entry("bg", me, serde_json::json!({"spare":true,"jobId":"5ca1ab1e"}))).is_none());
         assert!(live_from(&entry("bg", me, serde_json::json!({"spare":false}))).is_some());
         assert!(live_from(&entry("daemon", me, serde_json::json!({}))).is_none());
         assert!(live_from(&serde_json::json!({"pid":me,"kind":"bg"})).is_none(), "no session id");
@@ -1494,10 +1494,10 @@ mod tests {
     fn an_interactive_entry_that_handed_its_conversation_to_a_background_job_is_parked_and_never_busy() {
         let me = std::process::id();
         // The shape seen in Claude Code 2.1.283: the status stays "busy" from before the hand-over, for good.
-        let parked = live_from(&entry("interactive", me, serde_json::json!({"parkedJobId":"a70fa3de","statusUpdatedAt":1}))).unwrap();
-        assert_eq!(parked.parked.as_deref(), Some("a70fa3de"));
+        let parked = live_from(&entry("interactive", me, serde_json::json!({"parkedJobId":"beefcafe","statusUpdatedAt":1}))).unwrap();
+        assert_eq!(parked.parked.as_deref(), Some("beefcafe"));
         assert!(parked.is_parked() && !parked.busy && !parked.is_background());
-        assert_eq!((parked.pid, parked.id.as_str(), parked.cwd.as_str()), (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work"));
+        assert_eq!((parked.pid, parked.id.as_str(), parked.cwd.as_str()), (me, "feedf00d-9999-4aaa-8bbb-cccccccccccc", "/work"));
 
         // Without the key, or with an empty or odd one, nothing changes.
         for extra in [
@@ -1511,10 +1511,10 @@ mod tests {
             assert!(l.parked.is_none() && !l.is_parked() && l.busy, "{extra}");
         }
         // Only an interactive entry can be parked; a background session is the one it was handed to.
-        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"a70fa3de","parkedJobId":"zzz"}))).unwrap();
+        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"beefcafe","parkedJobId":"zzz"}))).unwrap();
         assert!(bg.parked.is_none() && bg.busy && bg.is_background());
         // A parked entry whose process has gone is gone like any other.
-        assert!(live_from(&entry("interactive", dead_pid(), serde_json::json!({"parkedJobId":"a70fa3de"}))).is_none());
+        assert!(live_from(&entry("interactive", dead_pid(), serde_json::json!({"parkedJobId":"beefcafe"}))).is_none());
     }
 
     #[test]
@@ -1523,7 +1523,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sessions")).unwrap();
         let put = |pid: u32, v: Value| fs::write(dir.join("sessions").join(format!("{pid}.json")), v.to_string()).unwrap();
-        put(11, entry("interactive", 11, serde_json::json!({"parkedJobId":"a70fa3de"})));
+        put(11, entry("interactive", 11, serde_json::json!({"parkedJobId":"beefcafe"})));
         put(12, entry("interactive", 12, serde_json::json!({"parkedJobId":""})));
         put(13, entry("interactive", 13, serde_json::json!({"status":"idle"})));
         assert_eq!(registry_status(&dir, 11).as_deref(), Some("parked"));
@@ -1558,7 +1558,7 @@ mod tests {
         let live = Reader::with_root(dir.clone()).live();
         assert_eq!(
             live.iter().map(|l| (l.id.as_str(), l.is_background())).collect::<Vec<_>>(),
-            [("other", false), ("dffac639-c805-47ba-b57c-3767f4f768d8", true)]
+            [("other", false), ("feedf00d-9999-4aaa-8bbb-cccccccccccc", true)]
         );
         let _ = fs::remove_dir_all(&dir);
     }

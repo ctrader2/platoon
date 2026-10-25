@@ -35,9 +35,9 @@ pub struct Action {
     pub explain: &'static str,
     /// The built-in guidance.
     pub builtin: &'static str,
-    /// The part platoon keeps, as it is sent with the standard settings. Only the tests read it here (they check it
-    /// never overlaps the guidance); the callers build their own, with the settings as they are.
-    #[allow(dead_code)]
+    /// The part platoon keeps, as it is sent with the standard settings, for the tests (they check it never overlaps
+    /// the guidance); the callers build their own, with the settings as they are.
+    #[cfg(test)]
     pub fixed: fn() -> String,
 }
 
@@ -55,6 +55,7 @@ pub static ACTIONS: [Action; 6] = [
         what: "naming",
         explain: "What platoon asks Claude for when it names and summarizes your sessions.",
         builtin: crate::smart::NAMES_GUIDANCE,
+        #[cfg(test)]
         fixed: || crate::smart::NAMES_FIXED.to_string(),
     },
     Action {
@@ -63,6 +64,7 @@ pub static ACTIONS: [Action; 6] = [
         what: "Describe it",
         explain: "What platoon asks Claude for when you search by describing a session.",
         builtin: crate::smart::FIND_GUIDANCE,
+        #[cfg(test)]
         fixed: || crate::smart::find_fixed(crate::settings::DEFAULT_FIND_RESULTS as usize),
     },
     Action {
@@ -71,6 +73,7 @@ pub static ACTIONS: [Action; 6] = [
         what: "project notes",
         explain: "How platoon asks Claude to write a project's notes when it brings them up to date.",
         builtin: crate::notesupdate::GUIDANCE,
+        #[cfg(test)]
         fixed: || crate::notesupdate::FIXED.to_string(),
     },
     Action {
@@ -79,6 +82,7 @@ pub static ACTIONS: [Action; 6] = [
         what: "project descriptions",
         explain: "How platoon asks Claude to write the one line under a project's name that says what it is.",
         builtin: crate::describe::GUIDANCE,
+        #[cfg(test)]
         fixed: crate::describe::fixed,
     },
     Action {
@@ -87,6 +91,7 @@ pub static ACTIONS: [Action; 6] = [
         what: "the hand-off",
         explain: "What platoon asks Claude for when it writes a hand-off to a new session.",
         builtin: crate::handoff::GUIDANCE,
+        #[cfg(test)]
         fixed: || crate::handoff::FIXED.to_string(),
     },
     Action {
@@ -95,7 +100,8 @@ pub static ACTIONS: [Action; 6] = [
         what: "tasks from a conversation",
         explain: "What platoon asks Claude for when it drafts tasks from one of your sessions.",
         builtin: crate::taskdraft::GUIDANCE,
-        fixed: crate::taskdraft::fixed,
+        #[cfg(test)]
+        fixed: || crate::taskdraft::FIXED.to_string(),
     },
 ];
 
