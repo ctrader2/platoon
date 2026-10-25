@@ -1125,8 +1125,8 @@ fn projects_items() -> Vec<Item> {
         },
         model_item(
             ModelFor::Notes,
-            "The model that keeps project notes up to date: Sonnet unless you pick another. Claude's models run on Claude \
-             Code, OpenAI's on Codex.",
+            "The model that keeps project notes up to date: unless you pick another, Sonnet where Claude Code is installed, \
+             else Codex's first. Claude's models run on Claude Code, OpenAI's on Codex.",
         ),
         instructions_item(crate::instructions::NOTES),
         instructions_item(crate::instructions::DESCRIPTION),

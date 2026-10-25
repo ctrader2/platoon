@@ -254,8 +254,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   task step <n> started|done|skipped [\"<one line>\"]   inside a task's session: mark a step of its
                   squad (skipped needs a reason)
   themes          list the color themes: the built-in ones and your own
-  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
-  uninstall [--all] [--stop-sessions]   take platoon out of Claude Code and delete its cache;
+  tokens [status | test]   show whether the smart features are on and how many tokens they used
+                  today; `test` makes one tiny call on their model (Claude's or Codex's)
+  uninstall [--all] [--stop-sessions]   take platoon's settings and hooks out of Claude Code and
+                  Codex (and Codex's trust in them) and delete its cache;
                   asks before deleting your projects, notes, tasks and settings (--all: without
                   asking) and before stopping the sessions it runs (--stop-sessions: without asking)
   --version, -V   print platoon's version

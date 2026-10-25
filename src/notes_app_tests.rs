@@ -513,16 +513,26 @@ fn notes_past_the_cap_are_warned_about_in_the_warning_colour() {
 
 #[test]
 fn the_help_says_where_the_notes_cap_and_the_offer_to_make_tasks_apply() {
-    let (_w, mut app, _id) = on_the_notes("notes-cap-help");
+    let (w, mut app, _id) = on_the_notes("notes-cap-help");
     let mut term = Terminal::new(TestBackend::new(150, 70)).unwrap();
+    let offer = "just before it starts the work: \"Turn this into platoon tasks for a squad?\"";
     key(&mut app, KeyCode::Char('?'));
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Notes go to the project's sessions up to 8,000 characters."), "{shown}");
-    assert!(shown.contains("asks you once \"Ready to create tasks?\""), "the project's sessions are listed here too: {shown}");
+    assert!(shown.contains(offer), "the project's sessions are listed here too: {shown}");
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('1'));
     key(&mut app, KeyCode::Char('?'));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("\"Ready to create tasks?\"") && !shown.contains("8,000"), "{shown}");
+    assert!(shown.contains(offer) && shown.contains("\"Offer tasks before starting work\"") && !shown.contains("8,000"), "{shown}");
+    // With the setting off no session asks, and the help doesn't say one does.
+    key(&mut app, KeyCode::Char('?'));
+    let mut s = crate::settings::load(&w.config).0;
+    s.offer_tasks = false;
+    crate::settings::save(&w.config, &s).unwrap();
+    app.refresh_with(Vec::new(), false);
+    key(&mut app, KeyCode::Char('?'));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Good to know") && !shown.contains("platoon tasks for a squad"), "{shown}");
 }

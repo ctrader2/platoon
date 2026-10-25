@@ -143,7 +143,7 @@ When both are newer, it is one line that names both. `platoon setup` prints the 
 
 Once a day at most, platoon also asks GitHub whether a newer platoon is out (see
 [What platoon changes](what-platoon-changes.md#one-network-request-no-telemetry) for exactly what that sends). When one
-is, it says so once, with the command that updates the way you installed it: `brew upgrade platoon`, `cargo install
+is, it says so once, with the command that updates the way you installed it: `brew upgrade platoon`, `cargo install --locked
 platoon-tui`, the install script again, or else a link to the releases page. Whatever applies goes in one line. Each
 new version is said once; the line goes at your next key or click. "Check for a newer platoon" on the General tab of the
 [settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off every

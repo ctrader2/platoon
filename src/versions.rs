@@ -166,7 +166,7 @@ pub fn install_here() -> Install {
 pub fn platoon_line(latest: &str, install: &Install) -> String {
     match install {
         Install::Homebrew => format!("platoon {latest} is out. To update: brew upgrade platoon"),
-        Install::Cargo => format!("platoon {latest} is out. To update: cargo install platoon-tui"),
+        Install::Cargo => format!("platoon {latest} is out. To update: cargo install --locked platoon-tui"),
         Install::Script => format!("platoon {latest} is out. To update, run the install script again: curl -LsSf {INSTALLER_URL} | sh"),
         Install::Other => format!("platoon {latest} is out: {RELEASES_PAGE}"),
     }
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn each_install_gets_its_own_update_command() {
         assert_eq!(platoon_line("1.1.0", &Install::Homebrew), "platoon 1.1.0 is out. To update: brew upgrade platoon");
-        assert_eq!(platoon_line("1.1.0", &Install::Cargo), "platoon 1.1.0 is out. To update: cargo install platoon-tui");
+        assert_eq!(platoon_line("1.1.0", &Install::Cargo), "platoon 1.1.0 is out. To update: cargo install --locked platoon-tui");
         assert_eq!(
             platoon_line("1.1.0", &Install::Script),
             "platoon 1.1.0 is out. To update, run the install script again: curl -LsSf \
@@ -579,7 +579,7 @@ mod tests {
         let (text, after) = decide(&s, found(Some("2.2.0"), None, "1.0.0"), &Install::Cargo).unwrap();
         assert_eq!(
             text,
-            "Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). platoon 1.1.0 is out. To update: cargo install platoon-tui"
+            "Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). platoon 1.1.0 is out. To update: cargo install --locked platoon-tui"
         );
         assert_eq!((after.announced_claude.as_deref(), after.announced_platoon.as_deref()), (Some("2.2.0"), Some("1.1.0")));
     }
@@ -755,7 +755,7 @@ mod tests {
         let c = checks(&d, "9.0.0 (Claude Code)", r#"{"tag_name":"v9.0.0"}"#);
         let out = run(&c).expect("a notice");
         assert!(out.text.starts_with("Claude Code 9.0.0 is newer than this platoon was checked with"), "{}", out.text);
-        assert!(out.text.ends_with("platoon 9.0.0 is out. To update: cargo install platoon-tui"), "{}", out.text);
+        assert!(out.text.ends_with("platoon 9.0.0 is out. To update: cargo install --locked platoon-tui"), "{}", out.text);
         assert_eq!(calls(&d, "claude"), ["--version"]);
         let curl = calls(&d, "curl");
         assert_eq!(curl.len(), 1);

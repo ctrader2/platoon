@@ -61,11 +61,13 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
-    // Where sessions are listed: what a session platoon starts is told to offer.
-    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
-        out.push(Entry::Note(
-            "A session platoon starts or resumes asks you once \"Ready to create tasks?\" when the conversation settles on work to hand off; on a yes it makes them on the Tasks tab, not started.".into(),
-        ));
+    // Where sessions are listed, while the setting is on: the offer to make tasks (`offerhook.rs`).
+    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() && app.settings().get().offer_tasks {
+        out.push(Entry::Note(format!(
+            "A session platoon starts or resumes asks you once, just before it starts the work: \"{}\" Make tasks drafts them with you and puts them on the Tasks tab, not started; Do it here carries on. Switch it off in the settings: \"{}\".",
+            crate::offerhook::QUESTION,
+            crate::settings::OFFER_TASKS
+        )));
     }
     if app.open_project().is_some() {
         out.push(Entry::Note(
@@ -75,7 +77,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     // Where tasks are: how a task runs, and what the Verdict line means.
     if app.board_showing() {
         out.push(Entry::Note(
-            "A task runs as one Claude Code session that follows its squad's steps, in a copy of its folder (a git worktree on the branch task/N). Pushing or publishing waits at Claude Code's own permission prompt. Merging is yours: a Done task says not merged while its branch has commits the default branch hasn't.".into(),
+            "A task runs as one session, in Claude Code or Codex as its squad's model decides, that follows its squad's steps in a copy of its folder (a git worktree on the branch task/N). Pushing or publishing waits for your yes: Claude Code asks at its own permission prompt; in Codex platoon holds the command back until you answer in the session. Merging is yours: a Done task says not merged while its branch has commits the default branch hasn't.".into(),
         ));
         out.push(Entry::Note(
             "Active and Archived: a Done or Cancelled task moves to Archived a day after it finished, but a Done task whose work isn't merged stays on Active until it is. a moves a finished task to the other list sooner, and it stays where you put it. A task's session is opened from its task; it isn't listed on the Sessions tab.".into(),
@@ -84,7 +86,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "Tests: platoon runs none itself. The session is told to find how its repo runs its tests, run them and name the command and the result when it finishes.".into(),
         ));
         out.push(Entry::Note(
-            "Verdict: when a task's session stops, a fresh Claude on the squad's verdict model reads the task, the session's last message and the change, without changing anything, and says whether it is done (a change to code with no test run named is not). Not done goes back to the session once, then to you; only done makes the task Done.".into(),
+            "Verdict: when a task's session stops, the squad's verdict model (Claude's or Codex's), starting fresh, reads the task, the session's last message and the change, without changing anything, and says whether it is done (a change to code with no test run named is not). Not done goes back to the session once, then to you; only done makes the task Done.".into(),
         ));
     }
     if app.squads_showing() {
@@ -95,14 +97,16 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "Open a squad (enter) to change its model, its verdict model or whether it plans first: ↑↓ picks the line, enter changes it. A built-in becomes your copy first; the description and the steps are changed with e.".into(),
         ));
     }
-    out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
+    out.push(Entry::Note(
+        "Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code or Codex like any other key.".into(),
+    ));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
     if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
         out.push(Entry::Note(
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));
         out.push(Entry::Note(
-            "62% on a session's row: how full its context is, of its model's window. Above 80% it is in the warning colour: time to start fresh or let Claude Code compact it.".into(),
+            "62% on a session's row: how full its context is, of its model's window. Above 80% it is in the warning colour: time to start fresh or let the session compact it.".into(),
         ));
     }
     if app.open_project().is_some() {
