@@ -1537,25 +1537,25 @@ mod tests {
     }
 
     #[test]
-    fn the_two_way_choice_steps_between_its_two_values_and_only_the_numbers_can_be_off() {
-        let mcp = &general()[3];
-        assert_eq!(mcp.name, "Check for a newer platoon");
-        assert_eq!(mcp.choices, [0, 1]);
+    fn the_two_way_choice_steps_between_its_two_values_and_off_is_its_first() {
+        let choice = &general()[3];
+        assert_eq!(choice.name, "Check for a newer platoon");
+        assert_eq!(choice.choices, [0, 1]);
         let mut s = Settings::default();
-        assert_eq!((mcp.get)(&s), 1);
-        assert_eq!((mcp.label)(1), "Once a day");
-        assert_eq!((mcp.label)(0), "Off");
-        assert_eq!(mcp.step(1, Step::Prev), 0);
-        assert_eq!(mcp.step(0, Step::Prev), 0);
-        assert_eq!(mcp.step(0, Step::Next), 1);
-        assert_eq!(mcp.step(1, Step::Next), 1, "the ends hold");
-        assert_eq!(mcp.step(1, Step::Cycle), 0, "cycling wraps");
-        assert_eq!(mcp.step(0, Step::Cycle), 1);
-        (mcp.set)(&mut s, 0);
+        assert_eq!((choice.get)(&s), 1);
+        assert_eq!((choice.label)(1), "Once a day");
+        assert_eq!((choice.label)(0), "Off");
+        assert_eq!(choice.step(1, Step::Prev), 0);
+        assert_eq!(choice.step(0, Step::Prev), 0);
+        assert_eq!(choice.step(0, Step::Next), 1);
+        assert_eq!(choice.step(1, Step::Next), 1, "the ends hold");
+        assert_eq!(choice.step(1, Step::Cycle), 0, "cycling wraps");
+        assert_eq!(choice.step(0, Step::Cycle), 1);
+        (choice.set)(&mut s, 0);
         assert!(!s.update_check);
-        (mcp.set)(&mut s, 1);
+        (choice.set)(&mut s, 1);
         assert!(s.update_check);
-        assert_eq!(mcp.off, Some(0));
+        assert_eq!(choice.off, Some(0));
         assert!(general()[1..3].iter().all(|i| i.off == Some(0)));
         assert_eq!(find_item("Idle stop and MCP servers"), None, "the MCP choice is not on the screen any more");
     }
