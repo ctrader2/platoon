@@ -6,7 +6,7 @@ here.
 
 ## [Unreleased]
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-10-25
 
 The first public release. platoon is a terminal app for Claude Code and Codex, on Linux and macOS: have either one, or
 both.
