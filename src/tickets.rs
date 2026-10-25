@@ -389,6 +389,24 @@ pub struct Ticket {
     pub checks_refused: u32,
     /// The check of its work is running, since then (seconds since the epoch). Cleared when it ends or the user types.
     pub checking: Option<u64>,
+    /// Which list of the Tasks tab a finished task is on, when the user said with `a`. Only a Done or Cancelled task
+    /// keeps what the user said: one that is opened and worked on again is `Auto` once it is written.
+    pub archiving: Archiving,
+}
+
+/// Which list of the Tasks tab a finished (Done or Cancelled) task is on: as platoon decides (`board::place`: Active
+/// for a day after it finished, and while a Done task's work is not merged; then Archived), or as the user said with
+/// `a`, which sticks however long ago it finished.
+///
+/// In the file: `"archived": true` or `false` on a finished task, only when the user said; no key is `Auto`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Archiving {
+    #[default]
+    Auto,
+    /// `a` archived it.
+    Archived,
+    /// `a` brought it back to Active from Archived.
+    KeptActive,
 }
 
 impl Ticket {
@@ -483,11 +501,11 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         "cancelled" => State::Cancelled,
         _ => State::NotStarted,
     };
+    let state_closed = state.closed();
     Some(Ticket {
         number,
         title: clean(&s("title"), TITLE_MAX),
         file: s("file"),
-        state,
         folder: o.get("folder").and_then(Value::as_str).filter(|f| !f.is_empty()).map(String::from),
         squad: s("squad"),
         session: o.get("session").and_then(Value::as_str).filter(|f| !f.is_empty()).map(String::from),
@@ -513,6 +531,13 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         verdict: o.get("verdict").and_then(Verdict::from_json),
         checks_refused: o.get("checks_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
         checking: o.get("checking").and_then(Value::as_u64),
+        // What the user said about a finished task only: an open one is on the board whatever the file says.
+        archiving: match o.get("archived").and_then(Value::as_bool) {
+            Some(true) if state_closed => Archiving::Archived,
+            Some(false) if state_closed => Archiving::KeptActive,
+            _ => Archiving::Auto,
+        },
+        state,
     })
 }
 
@@ -554,6 +579,14 @@ fn ticket_into(t: &Ticket, o: &mut Map<String, Value>) {
     set("verdict", t.verdict.as_ref().map(Verdict::to_json));
     set("checks_refused", (t.checks_refused > 0).then(|| json!(t.checks_refused)));
     set("checking", t.checking.map(|at| json!(at)));
+    set(
+        "archived",
+        match (t.state.closed(), t.archiving) {
+            (true, Archiving::Archived) => Some(json!(true)),
+            (true, Archiving::KeptActive) => Some(json!(false)),
+            _ => None,
+        },
+    );
     let old = o.get("worktree").and_then(Value::as_object).cloned();
     let w = t.worktree.as_ref().map(|w| {
         let mut x = old.unwrap_or_default();
@@ -931,6 +964,25 @@ impl Tickets {
             w.codex_trust = key;
             true
         })
+    }
+
+    /// `a`: put finished task `number` on the Tasks tab's Archived list, or back on Active, whatever its age (its
+    /// `updated` stays: the lists are in the order the tasks finished). True when it changed; Err for a task that isn't
+    /// Done or Cancelled.
+    pub fn set_archiving(&mut self, number: u32, to: Archiving) -> io::Result<bool> {
+        let mut unfinished = false;
+        let changed = self.update_at(number, true, |t| {
+            unfinished = !t.state.closed();
+            if unfinished || t.archiving == to {
+                return false;
+            }
+            t.archiving = to;
+            true
+        })?;
+        if unfinished {
+            return Err(io::Error::other(format!("#{number} isn't finished: only a Done or Cancelled task is archived")));
+        }
+        Ok(changed)
     }
 
     /// The session couldn't be started after all: back to Not started, without it.
@@ -1363,6 +1415,35 @@ mod tests {
             true
         })
         .unwrap();
+    }
+
+    #[test]
+    fn what_the_user_said_about_a_finished_tasks_list_is_kept_and_forgotten_once_it_is_worked_on_again() {
+        let d = dir("archiving");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Ship it");
+        let refused = t.set_archiving(n, Archiving::Archived).unwrap_err().to_string();
+        assert_eq!(refused, "#1 isn't finished: only a Done or Cancelled task is archived");
+        set(&mut t, n, State::Done);
+        let updated = t.get(n).unwrap().updated;
+        assert!(t.set_archiving(n, Archiving::Archived).unwrap());
+        assert!(!t.set_archiving(n, Archiving::Archived).unwrap(), "nothing to change");
+        assert_eq!((saved(&d)["tasks"][0]["archived"].clone(), t.get(n).unwrap().updated), (json!(true), updated), "its time stays");
+        assert!(t.set_archiving(n, Archiving::KeptActive).unwrap());
+        assert_eq!(saved(&d)["tasks"][0]["archived"], json!(false));
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().archiving, Archiving::KeptActive);
+        // Worked on again: what was said goes, so it moves by itself once it is finished again.
+        set(&mut t, n, State::Working);
+        assert!(saved(&d)["tasks"][0].get("archived").is_none());
+        assert_eq!(t.get(n).unwrap().archiving, Archiving::Auto);
+        // A key on a task that isn't finished means nothing.
+        let mut v = saved(&d);
+        v.get_mut("tasks").and_then(|l| l.get_mut(0)).and_then(Value::as_object_mut).unwrap().insert("archived".into(), json!(true));
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().archiving, Archiving::Auto);
+        t.cancel(n).unwrap();
+        assert_eq!(t.get(n).unwrap().archiving, Archiving::Auto, "the stray key is gone with the next write");
+        assert!(saved(&d)["tasks"][0].get("archived").is_none());
     }
 
     #[test]

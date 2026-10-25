@@ -3,8 +3,9 @@
 //! the list of squads with the suggested one picked, and `enter` starts the task: a worktree on `task/1`, `squad.md`
 //! and every squad beside it in the task's folder, and its session in a platoon host with the squad's model, plan mode,
 //! the hooks and the `ask` rules, `squad.md` added to its system prompt and the task's text as its first message. The
-//! session is an ordinary row on the Sessions tab, marked `#1`; its hooks (`platoon hook task-...`, run here as Claude
-//! Code would) move the task between the sections; `c` cancels after asking and stops the session.
+//! session is reached through its task, not on the Sessions tab; its hooks (`platoon hook task-...`, run here as Claude
+//! Code would) move the task between the sections; `c` cancels after asking and stops the session. A task finished long
+//! ago is on the Tasks tab's Archived list, and `a` brings it back to Active.
 //!
 //! The "claude" here is one small script wearing two hats: asked with `-p` it answers like `claude -p` (from
 //! `$FAKE_DIR/reply`); started without it, it writes its arguments down, registers itself the way Claude does, prints
@@ -262,11 +263,13 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
         assert!(task_dir.join("squads").join(format!("{id}.md")).is_file(), "{id}");
     }
 
-    // Back to the list: the session is an ordinary row of the Sessions tab, marked with its task.
+    // Back to the list: the session is reached through its task, not listed on the Sessions tab.
     t.send(&[0]);
     t.wait_for("Working · 1");
     t.send(b"1");
-    t.wait_for("#1 task-1");
+    t.wait_for_all(&["The order email is HTML only", "Active  1"]);
+    let shown = t.stable();
+    assert!(!shown.contains("task-1") && !shown.contains("#1 "), "{shown}");
     t.send(b"3");
     t.wait_for("Working · 1");
 
@@ -474,4 +477,38 @@ fn with_claude_code_switched_off_a_started_claude_tasks_hooks_still_move_it_and_
     let argv = fs::read_to_string(lab.fake.join("calls/1.argv")).unwrap();
     assert!(argv.contains("--model\nfable\n"), "checked on Feature's verdict model: {argv}");
     assert_eq!(lab.task(1)["state"], "done");
+}
+
+#[test]
+fn a_task_finished_long_ago_is_on_archived_and_a_brings_it_back_to_active() {
+    let lab = Lab::new("tasks-archived");
+    let v = json!({"next": 3, "tasks": [
+        {"number": 1, "title": "Old work", "file": "01-old-work.md", "state": "done", "folder": lab.shop, "squad": "feature",
+         "session": "s-old", "started": 1, "created": 1, "updated": 1},
+        {"number": 2, "title": "Write the docs", "file": "02-write-the-docs.md", "state": "not_started", "created": 1, "updated": 1},
+    ]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
+    // The old task's conversation: never on the Sessions tab.
+    let line = json!({"type":"user","cwd":lab.shop,"gitBranch":"task/1","timestamp":"2026-09-20T10:00:00.000Z","message":{"role":"user","content":"Task #1: Old work"}}).to_string();
+    fs::write(lab.claude.join("projects/-shop/s-old.jsonl"), line + "\n").unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
+    t.wait_for_all(&["The order email is HTML only", "Active  1", "Archived  0"]);
+    assert!(!t.stable().contains("Task #1: Old work"));
+    t.send(b"3");
+    t.wait_for_all(&["Not started · 1", "#2 Write the docs", "Active  1", "Archived  1"]);
+    assert!(!t.stable().contains("Old work"), "finished long ago: not on Active");
+    // → shows Archived: the old task, with no section heading.
+    t.send(b"\x1b[C");
+    t.wait_for_all(&["#1 Old work", "a restore", "←→ active/archived"]);
+    let shown = t.stable();
+    assert!(!shown.contains("Write the docs") && !shown.contains("Done · 1"), "{shown}");
+    // a: back to Active, and it stays there (the file says so).
+    t.send(b"a");
+    t.wait_for_flat("Restored #1 \"Old work\"");
+    t.wait_for("Nothing archived.");
+    assert_eq!(lab.task(1)["archived"], json!(false));
+    t.send(b"\x1b[D");
+    t.wait_for_all(&["Done · 1", "#1 Old work", "Not started · 1", "Active  2", "Archived  0"]);
+    t.send(&[3]);
+    t.wait_exit();
 }

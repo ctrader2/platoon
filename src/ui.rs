@@ -139,11 +139,14 @@ fn draw_all(f: &mut Frame, app: &App) {
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
 
-    // The Active/Archived switch of the Sessions and Projects lists sits at the right of the rule when it fits there
-    // (clear of the current tab's mark); otherwise it has the row under the rule to itself.
-    let lists = app.open_project.is_none() && !app.board_showing() && !app.squads_showing();
+    // The Active/Archived switch of the Sessions, Projects and Tasks lists sits at the right of the rule when it fits
+    // there (clear of the current tab's mark); otherwise it has the row under the rule to itself.
+    let lists = app.open_project.is_none() && !app.task_screen_showing() && !app.squads_showing();
+    let task_counts = if app.board_showing() { app.board_counts().to_vec() } else { Vec::new() };
     let (labels, counts, current): (Vec<&str>, &[usize], usize) = if app.projects_list_showing() {
         (PTABS.iter().map(|(l, _)| *l).collect(), &app.pcounts, app.ptab)
+    } else if app.board_showing() {
+        (crate::board::Shelf::ALL.iter().map(|s| s.label()).collect(), &task_counts, app.bd.shelf.index())
     } else {
         (TABS.iter().map(|t| t.label).collect(), &app.counts, app.tab)
     };
@@ -191,7 +194,13 @@ fn draw_all(f: &mut Frame, app: &App) {
     } else if app.open_project.is_some() {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
     } else if app.board_showing() {
-        tasks_view::draw_board(f, app, screen);
+        let screen = if shelf_on_rule.is_none() {
+            draw_shelf(f, app, shelf, &labels, counts, current, true);
+            Rect::new(screen.x, shelf.bottom(), screen.width, screen.bottom().saturating_sub(shelf.bottom()))
+        } else {
+            screen
+        };
+        tasks_view::draw_board(f, app, screen, &task_counts);
     } else if app.squads_showing() {
         squads_view::draw_squads_tab(f, app, screen);
     } else if app.projects_list_showing() {
@@ -1314,9 +1323,7 @@ fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
         let s = &app.sessions[i];
         // A name platoon made up carries ` ✦ ` after it, inside the same column.
         // In cells: a wide character takes two.
-        // A task's session carries its task's number in front of its name ("#5 ").
-        let mark = app.sq.task_of(&s.id).map_or(0, |n| format!("#{n} ").len());
-        let n = mark + s.name.width() + if s.name_source == NameSource::Generated { 3 } else { 0 };
+        let n = s.name.width() + if s.name_source == NameSource::Generated { 3 } else { 0 };
         name = name.max(n);
         // Added folders count too; DIR_MAX still caps the column, and `fit_dirs` counts what doesn't fit.
         dir = dir.max(s.dir.width() + s.extra_dirs.iter().map(|d| 2 + d.width()).sum::<usize>());
@@ -1487,12 +1494,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
     let mut l1 = vec![lead.clone(), Span::styled(format!("{marker} "), base.fg(marker_color))];
-    // A task's session is marked with its task's number, in front of its name.
-    let mark = task_mark(app, &s.id, c.name);
-    let name_w = c.name - mark.chars().count();
-    if !mark.is_empty() {
-        l1.push(Span::styled(mark, base.fg(t.accent)));
-    }
+    let name_w = c.name;
     // A name platoon made up carries a quiet mark at the end of its column, so it can be told from one you chose.
     if s.name_source == NameSource::Generated && name_w >= 8 {
         l1.push(Span::styled(fit(&s.name, name_w - 3), name_style));
@@ -1553,15 +1555,6 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
     f.render_widget(Paragraph::new(Line::from(l1)).style(base), rows[0]);
     f.render_widget(Paragraph::new(Line::from(l2)).style(base), rows[1]);
-}
-
-/// The mark in front of a task's session's name: "#5 " (empty for any other session, or a name column too narrow for
-/// the mark and a few letters of the name).
-fn task_mark(app: &App, id: &str, name_w: usize) -> String {
-    match app.sq.task_of(id) {
-        Some(n) if name_w >= format!("#{n} ").len() + 4 => format!("#{n} "),
-        _ => String::new(),
-    }
 }
 
 /// What a session's row says while tasks are drafted from it.

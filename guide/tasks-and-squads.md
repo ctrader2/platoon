@@ -4,12 +4,14 @@ A **task** is one piece of work, usually in a [project](projects.md). When you s
 Claude Code or Codex session for it (the squad's model decides which: see [Tasks on Codex](#tasks-on-codex)), in a copy
 of its folder (a git worktree on the branch `task/<N>`), following a **squad**: a
 short Markdown file of steps that says how this kind of work is done (plan, build, check, report). The session is a
-session like any other: it shows on the Sessions tab, marked with the task's number, and you can open it and talk to it.
+session like any other: you open it from its task (on the Tasks tab, or on its project's screen) and talk to it. It is
+not listed on the Sessions tab, and that tab's counts and search leave it out.
 
 ## The Tasks tab
 
-The third tab, `3` **Tasks**, lists every task across your projects (and the ones in no project) in four sections, each
-with how many it has:
+The third tab, `3` **Tasks**, lists every task across your projects (and the ones in no project). Like Sessions and
+Projects it has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs; `←` `→`
+(or a click) switch them. Active has four sections, each with how many it has:
 
 - **Needs you**: its session stopped for you. Its plan is ready for your yes, it asks a question, it waits at a
   permission prompt, or the [check of its work](#the-check-of-the-work) still found problems (or could not run).
@@ -17,7 +19,13 @@ with how many it has:
 - **Not started**: nobody has started it yet.
 - **Done**: Done or cancelled in the last 24 hours. Done means the check passed, not that the work is merged: while
   its branch `task/<N>` has commits your repository's default branch hasn't, the task reads **Done · not merged** (see
-  [After the work](#after-the-work)).
+  [After the work](#after-the-work)), and it stays here, however long ago it finished, until the work is merged.
+
+**Archived** lists every other finished task, Done and cancelled, the latest first, so a finished task never goes
+missing. A task moves there by itself 24 hours after it finished (a Done one not merged waits until it is merged), and
+`a` moves one there sooner, merged or not. `a` on an archived task brings it back to Active, where it stays. `enter`
+opens an archived task's session as on Active, and `/` filters Archived too. A task that is worked on again (you type
+in its session) is back among Active's sections, and once it is finished again it moves by itself as before.
 
 Each task takes two lines: its project's badge, its number and title, and at the right what it needs or how long since
 it last changed; under it, its squad and its own words (the question it asks), **Suggested: Docs · s starts it** for one
@@ -36,8 +44,10 @@ boxes (ticked ✓ or crossed ✗ by the check, once it has run).
 | `enter` | open the task's session (continued if it isn't running); on a task not started yet, its text |
 | `e` | edit its text in your editor |
 | `c` | cancel it, after asking. Its running session is stopped; the conversation is kept |
+| `a` | a Done or cancelled task: to Archived (on Archived: back to Active, where it stays) |
+| `←` `→` | switch between Active and Archived |
 | `v` | open its worktree (or its folder) in your [editor](sessions.md#opening-the-editor-v) |
-| `/` | filter by words in the title |
+| `/` | filter by words in the title, its project's name or its squad's name |
 
 ## Writing a task
 
@@ -168,7 +178,7 @@ is Done); what differs is how Codex does each thing.
   runs, but its state doesn't follow the session.
 - **It starts in Codex's `workspace-write` sandbox**, asking you when it wants more (`-a on-request`), with the task in
   its environment (`PLATOON_TASK`) and without Codex's update question. Codex takes no name and no session id from
-  platoon: platoon learns the session's id from Codex as the session starts, and marks its row `#N` itself.
+  platoon: platoon learns the session's id from Codex as the session starts, and finds the task's session by it.
 - **Its folder is trusted in Codex for you.** When platoon makes the task's worktree, it has Codex itself trust that
   folder (the way Codex's own "Do you trust this folder?" does, written by Codex in its `config.toml`), and takes that
   trust away when it removes the worktree after the work. An entry of your own for that folder is left alone. If Codex

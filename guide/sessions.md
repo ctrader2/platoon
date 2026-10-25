@@ -7,8 +7,8 @@ Where a Codex conversation behaves differently, [Codex conversations](#codex-con
 
 ## The list
 
-The header has four tabs, **Sessions**, **Projects**, **Tasks** and **Squads** (`1` to `4`, or click them). Under Sessions
-and Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
+The header has four tabs, **Sessions**, **Projects**, **Tasks** and **Squads** (`1` to `4`, or click them). Under Sessions,
+Projects and Tasks, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
 narrow terminal, on the row under it): the left and right arrow keys switch them (or click them). After the tabs, the
 header says how many tasks need you (**● 2 need you**, see [the Tasks tab](tasks-and-squads.md#the-tasks-tab)) and how
 many sessions have a reply you haven't seen (**● 1 unread**), each when there are any and the line has room for it. At
@@ -27,7 +27,9 @@ session keeps its size until there is room to show it again.
 ### What a row shows
 
 One row per conversation, built from Claude Code's and Codex's saved history, so everything you've ever run is there
-whether or not it's running. Each row shows the name, directory, branch, model, a status, how full the context is, when it was last
+whether or not it's running. A [task's](tasks-and-squads.md) session is the exception: it is reached through its task,
+on the Tasks tab or its project's screen, and is on neither list here, nor in their counts, the search or the unread
+count, nor archived by auto-archive. Each row shows the name, directory, branch, model, a status, how full the context is, when it was last
 active, and a one-line description. Newest activity first.
 Each conversation takes two lines, its name line and its prompt line; the selected one is highlighted across both, with a
 `▎` in front of each. Conversations that only ever held slash commands are hidden.
@@ -175,8 +177,8 @@ The [smart features](tokens.md) (generated names and summaries, "Describe it"), 
 (`t`) work on Codex conversations as on Claude Code's: they read what you typed and a line of Codex's last reply, never
 a tool's output. The name Codex gives a conversation stays its description line, as Claude Code's own title does, and
 platoon's generated name is its name. A Codex conversation is handed on to a new **Codex** session. A
-[task](tasks-and-squads.md#tasks-on-codex) runs in Codex when its squad's model is one of Codex's; its session's row is
-marked with the task's number like any task's.
+[task](tasks-and-squads.md#tasks-on-codex) runs in Codex when its squad's model is one of Codex's; its session is
+reached through its task, like any task's.
 
 ### New sessions in Claude Code or Codex
 
@@ -256,7 +258,9 @@ Details worth knowing:
   session alive, and so does anything platoon is not sure about, or can't read the configuration to check. Some MCP
   servers don't exit when Claude does: after a stop, platoon asks the ones it saw before to exit too, and never any other
   process.
-- Auto-archive never touches a conversation that has a process running, or the one you are looking at. Opening or
+- Auto-archive never touches a conversation that has a process running, the one you are looking at, or a task's session
+  (a finished task moves to the Tasks tab's Archived list by itself instead: see
+  [the Tasks tab](tasks-and-squads.md#the-tasks-tab)). Opening or
   restoring a conversation counts as activity, so restoring an old one sticks: it is not archived again until it has sat
   unused for the full time.
 - Restoring is the same as always: the Archived tab, `a` (or `enter` to restore and open).

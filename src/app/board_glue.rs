@@ -1,13 +1,14 @@
-//! The Tasks tab inside the app (`3`): every task across all projects and the ones in no project, in the board's
-//! sections (`board.rs`), with the picked task's details beside the list on a wide terminal. Its keys: `n` makes a
-//! task (the project first, then its title; a task in no project picks its folder), `s` starts the picked one, `enter`
-//! opens it (its session, or its text when it never started), `e` edits its text, `c` cancels it, `/` narrows the list.
+//! The Tasks tab inside the app (`3`): every task across all projects and the ones in no project, on its Active list in
+//! the board's sections or on its Archived list (`board.rs`), with the picked task's details beside the list on a wide
+//! terminal. Its keys: `n` makes a task (the project first, then its title; a task in no project picks its folder), `s`
+//! starts the picked one, `enter` opens it (its session, or its text when it never started), `e` edits its text, `c`
+//! cancels it, `a` moves a finished one to the other list, `←→` switch the lists, `/` narrows the list.
 //!
 //! The keys that act on one task go through the task store of its project (`tk.store`), which follows the picked row.
 
 use super::*;
-use crate::board::{self, Facts, Group, In, Row, Section};
-use crate::tickets::{self, Ticket, Tickets};
+use crate::board::{self, Facts, Group, In, Merge, Row, Section, Shelf};
+use crate::tickets::{self, Archiving, Ticket, Tickets};
 
 /// A task on the board: its project's id (`tickets::NO_PROJECT_ID` for none) and its number.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -35,6 +36,8 @@ impl ListItem {
 
 /// Everything about the board the app keeps.
 pub struct BoardState {
+    /// The list showing: Active or Archived.
+    pub shelf: Shelf,
     /// The picked task (so it stays on the same task when the list changes).
     pub selected: Option<BRow>,
     /// The project picker of `n`: the project ids it offers (`NO_PROJECT_ID` last) and the picked one.
@@ -46,7 +49,7 @@ pub struct BoardState {
 
 impl BoardState {
     pub fn new() -> Self {
-        Self { selected: None, pick: Vec::new(), pick_selected: 0, top: Cell::new(0) }
+        Self { shelf: Shelf::Active, selected: None, pick: Vec::new(), pick_selected: 0, top: Cell::new(0) }
     }
 }
 
@@ -73,8 +76,8 @@ impl Facts for AppFacts<'_> {
     fn project_name(&self, id: &str) -> String {
         self.app.task_project_name(id)
     }
-    fn not_merged(&self, project: &str, number: u32) -> bool {
-        self.app.not_merged(project, number).is_some()
+    fn merge(&self, project: &str, t: &Ticket) -> Merge {
+        self.app.merge_of(project, t)
     }
     fn switched_off(&self, project: &str, t: &Ticket) -> Option<Agent> {
         self.app.task_switched_off(project, t)
@@ -155,31 +158,78 @@ impl App {
         }
     }
 
-    /// The board's sections and their rows.
-    pub fn board_groups(&self) -> Vec<Group> {
-        let tasks = self.all_tasks();
-        let facts = AppFacts { app: self, squads: crate::squads::all(&self.config), now: usage::now() };
-        let ins: Vec<In> = tasks
+    /// The tasks as the board is given them.
+    fn board_ins<'a>(&'a self, tasks: &'a [(String, Vec<Ticket>)]) -> Vec<In<'a>> {
+        tasks
             .iter()
             .flat_map(|(p, list)| {
                 let archived = self.projects.get(p).is_some_and(|x| x.archived);
                 list.iter().map(move |t| In { project: p, archived, task: t, busy: self.starting_words(p, t.number) })
             })
-            .collect();
-        board::board(&ins, &facts, self.board_filter())
+            .collect()
     }
 
-    /// The board as it is drawn: each section's heading, its rows, a blank line between sections.
+    fn board_facts(&self) -> AppFacts<'_> {
+        AppFacts { app: self, squads: crate::squads::all(&self.config), now: usage::now() }
+    }
+
+    /// The sections and rows of the list showing (Active or Archived).
+    pub fn board_groups(&self) -> Vec<Group> {
+        let tasks = self.all_tasks();
+        board::board(&self.board_ins(&tasks), &self.board_facts(), self.bd.shelf, self.board_filter())
+    }
+
+    /// How many tasks Active and Archived have (not narrowed by the filter), for the switch between them.
+    pub fn board_counts(&self) -> [usize; 2] {
+        let tasks = self.all_tasks();
+        // Where a task is needs no squad's name.
+        let facts = AppFacts { app: self, squads: Vec::new(), now: usage::now() };
+        board::counts(&self.board_ins(&tasks), &facts)
+    }
+
+    /// The list task `t` of `project` is on (None: on neither, a task of an archived project that never started).
+    pub(super) fn board_shelf_of(&self, project: &str, t: &Ticket) -> Option<Shelf> {
+        let archived = self.projects.get(project).is_some_and(|x| x.archived);
+        let busy = self.starting_words(project, t.number).is_some();
+        board::place(t, archived, busy, self.merge_of(project, t), usage::now()).map(|(s, _)| s)
+    }
+
+    /// Pick task `number` of `project` on the board, showing the list it is on.
+    pub(super) fn pick_board_task(&mut self, project: &str, number: u32) {
+        self.bd.selected = Some(BRow(project.to_string(), number));
+        let all = self.all_tasks();
+        let t = all.iter().find(|(p, _)| p == project).and_then(|(_, l)| l.iter().find(|t| t.number == number));
+        if let Some(shelf) = t.and_then(|t| self.board_shelf_of(project, t)) {
+            self.bd.shelf = shelf;
+        }
+    }
+
+    /// The list showing as it is drawn: on Active each section's heading, its rows, a blank line between sections; on
+    /// Archived its rows (the switch above says what they are).
     pub fn board_items(&self) -> Vec<ListItem> {
         let mut out = Vec::new();
         for (k, g) in self.board_groups().into_iter().enumerate() {
-            if k > 0 {
-                out.push(ListItem::Gap);
+            if self.bd.shelf == Shelf::Active {
+                if k > 0 {
+                    out.push(ListItem::Gap);
+                }
+                out.push(ListItem::Heading(g.section, g.rows.len()));
             }
-            out.push(ListItem::Heading(g.section, g.rows.len()));
             out.extend(g.rows.into_iter().map(ListItem::Task));
         }
         out
+    }
+
+    /// Show Active or Archived (`Shelf::ALL[i]`), from its first row.
+    pub(super) fn switch_board_shelf(&mut self, i: usize) {
+        let Some(&shelf) = Shelf::ALL.get(i) else { return };
+        if shelf == self.bd.shelf {
+            return;
+        }
+        self.bd.shelf = shelf;
+        self.bd.selected = None;
+        self.bd.top.set(0);
+        self.sync_board_store();
     }
 
     /// The board's rows that can be picked, in order.
@@ -243,6 +293,8 @@ impl App {
             KeyCode::Char('n') => self.ask_task_project(),
             KeyCode::Char('/') => self.open_name_box(NamePurpose::TaskFilter),
             KeyCode::Esc => self.filter.clear(),
+            KeyCode::Left => self.switch_board_shelf(0),
+            KeyCode::Right => self.switch_board_shelf(1),
             KeyCode::Down | KeyCode::Char('j') => self.move_board(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_board(-1),
             KeyCode::PageDown => self.move_board(super::page_of(&self.pages.tickets)),
@@ -250,14 +302,40 @@ impl App {
             KeyCode::Char('g') | KeyCode::Home => self.select_board_row(0),
             KeyCode::Char('G') | KeyCode::End => self.select_board_row(self.board_rows().len().saturating_sub(1)),
             _ => match self.board_task() {
+                Some((p, n)) if key.code == KeyCode::Char('a') => self.archive_task(&p, n),
                 Some((p, n)) => {
                     self.set_task_store(&p);
                     self.ticket_key(n, key);
                 }
-                None if matches!(key.code, KeyCode::Char('s' | 'e' | 'c')) => self.notify("No task picked. Press n to write one."),
+                None if matches!(key.code, KeyCode::Char('s' | 'e' | 'c' | 'a')) => self.notify(match self.bd.shelf {
+                    Shelf::Active => "No task picked. Press n to write one.",
+                    Shelf::Archived => "No task picked.",
+                }),
                 None => {}
             },
         }
+    }
+
+    /// `a`: a finished task to the other list (Active to Archived, Archived back to Active, where it then stays), the
+    /// row after it picked in its place. A task not finished says so and stays.
+    fn archive_task(&mut self, project: &str, number: u32) {
+        self.set_task_store(project);
+        let Some(t) = self.ticket(number).cloned() else { return };
+        if !t.state.closed() {
+            return self.notify(format!("#{number} isn't finished: a archives a Done or Cancelled task."));
+        }
+        let (to, said) = match self.bd.shelf {
+            Shelf::Active => (Archiving::Archived, "Archived"),
+            Shelf::Archived => (Archiving::KeptActive, "Restored"),
+        };
+        let at = self.board_selected();
+        let Some(store) = self.tk.store.as_mut() else { return };
+        if let Err(e) = store.set_archiving(number, to) {
+            return self.report_task_error(e);
+        }
+        self.reread_tickets();
+        self.select_board_row(at.min(self.board_rows().len().saturating_sub(1)));
+        self.notify(format!("{said} #{number} \"{}\"", t.title));
     }
 
     /// A click on a row of the board: picks it; a click on the picked one is enter.
@@ -339,7 +417,7 @@ impl App {
         match store.add(tickets::NewTicket { title: title.to_string(), folder, ..Default::default() }) {
             Ok(n) => {
                 self.reread_tickets();
-                self.bd.selected = Some(BRow(project.to_string(), n));
+                self.pick_board_task(project, n);
                 let whose = if project == tickets::NO_PROJECT_ID {
                     " (in no project)".to_string()
                 } else {

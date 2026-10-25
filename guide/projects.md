@@ -50,7 +50,8 @@ ones first, then an `Archived (N)` group, dimmed), each with how full its contex
 **Tasks** lists the project's tasks, all but the cancelled ones, open ones first and Done last: `#N`, the title and its
 state in the words and colours of the [Tasks tab](tasks-and-squads.md#the-tasks-tab) (Needs you, Working, Not started,
 Done). A section with nothing in it says so in one line. A task's session is counted and listed as its task, here and
-in the project's numbers.
+in the project's numbers (it isn't on the Sessions tab either). This list has every task but the cancelled ones,
+whichever list of the Tasks tab it is on.
 
 - `tab` and `shift+tab` switch between the two panes. `shift+←` goes to the sessions and `shift+→` to the notes; `ctrl`
   with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a

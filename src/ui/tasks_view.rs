@@ -1,11 +1,12 @@
-//! The Tasks tab (`3`): the board's sections and their two-line rows, the picked task's details beside the list from
+//! The Tasks tab (`3`): the list showing (Active in the board's sections, Archived in one) and their two-line rows, each
+//! list's words when it is empty, the picked task's details beside the list from
 //! `SPLIT_MIN_WIDTH` columns (its state and why, its squad, its folder and branch, its plan when one is ready, its "Done
 //! when" boxes, its tests and what it has spent), a task's own screen (the same details and its text), the list of
 //! squads a task starts with (`s`) and the project picker of a new task (`n`).
 
 use super::{Hint, ROW_H, badge_span, badge_width, centered, draw_footer, fit_end, hint_fg, modal_block, popup_ground, wrap};
 use crate::app::{Action, App, Hit, ListItem};
-use crate::board::{self, Piece, Section, Tone};
+use crate::board::{self, Piece, Section, Shelf, Tone};
 use crate::theme::Theme;
 use crate::tickets::{self, Need, State, Ticket};
 use ratatui::{
@@ -237,12 +238,21 @@ pub(super) fn draw_task_list(f: &mut Frame, app: &App, area: Rect, items: &[List
     }
 }
 
-/// The Tasks tab: the board, and beside it (from `SPLIT_MIN_WIDTH` columns) the picked task's details.
-pub(super) fn draw_board(f: &mut Frame, app: &App, area: Rect) {
+/// The Tasks tab: the list showing (Active or Archived, `counts` tasks each), and beside it (from `SPLIT_MIN_WIDTH`
+/// columns) the picked task's details.
+pub(super) fn draw_board(f: &mut Frame, app: &App, area: Rect, counts: &[usize]) {
     let t = app.effective_theme();
     let items = app.board_items();
     if items.is_empty() {
-        let msg = if app.board_filter().is_empty() { board::EMPTY } else { "No tasks match the filter. Esc clears it." };
+        let shelf = app.bd.shelf;
+        let count = |s: Shelf| counts.get(s.index()).copied().unwrap_or(0);
+        let msg = if count(shelf) > 0 {
+            "No tasks match the filter. Esc clears it."
+        } else if shelf == Shelf::Active && count(Shelf::Archived) > 0 {
+            board::ALL_ARCHIVED
+        } else {
+            shelf.empty()
+        };
         let lines: Vec<Line> =
             wrap(msg, area.width.saturating_sub(4) as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(hint_fg(t)))).collect();
         let h = lines.len() as u16;
@@ -580,6 +590,7 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
             ("enter", "open the task's session; a task that never started shows its text", None),
             ("e", "edit its text", None),
             ("c", "cancel", None),
+            ("a", "archive a Done or Cancelled task; on Archived, restore it to Active, where it stays", None),
         ]);
     } else if let Some((p, n)) = app.board_task() {
         let t = app.all_tasks().into_iter().find(|(q, _)| *q == p).and_then(|(_, l)| l.into_iter().find(|t| t.number == n));
@@ -592,8 +603,12 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
             _ => out.push(("enter", "open", Some(Action::Jump))),
         }
         out.push(("e", "edit", None));
-        if t.is_some_and(|t| t.state != State::Cancelled) {
+        if t.as_ref().is_some_and(|t| t.state != State::Cancelled) {
             out.push(("c", "cancel", None));
+        }
+        // Only a finished task moves between the lists.
+        if t.is_some_and(|t| t.state.closed()) {
+            out.push(("a", if app.bd.shelf == Shelf::Archived { "restore" } else { "archive" }, None));
         }
     }
     if !all {
@@ -601,6 +616,7 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
     }
     out.extend([
         ("/", "filter", None),
+        ("←→", "active/archived", None),
         ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("?", "help", Some(Action::Help)),

@@ -78,6 +78,9 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "A task runs as one Claude Code session that follows its squad's steps, in a copy of its folder (a git worktree on the branch task/N). Pushing or publishing waits at Claude Code's own permission prompt. Merging is yours: a Done task says not merged while its branch has commits the default branch hasn't.".into(),
         ));
         out.push(Entry::Note(
+            "Active and Archived: a Done or Cancelled task moves to Archived a day after it finished, but a Done task whose work isn't merged stays on Active until it is. a moves a finished task to the other list sooner, and it stays where you put it. A task's session is opened from its task; it isn't listed on the Sessions tab.".into(),
+        ));
+        out.push(Entry::Note(
             "Tests: platoon runs none itself. The session is told to find how its repo runs its tests, run them and name the command and the result when it finishes.".into(),
         ));
         out.push(Entry::Note(

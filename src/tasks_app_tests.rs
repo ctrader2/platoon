@@ -1,7 +1,8 @@
 //! The Tasks tab at the level of the app: its sections in order with each state in its color, the list of squads `s`
 //! opens (the suggested one picked, a broken one refused), `enter` there making the worktree and starting the session
 //! with its squad's model and plan mode (nothing is really started in a unit test: what would have been is noted),
-//! `c` asking before it cancels, and a task's session marked with its number on the Sessions tab.
+//! `c` asking before it cancels, Active and Archived (`a` both ways, a Done task not merged staying), and a task's
+//! session on neither of the Sessions tab's lists.
 
 use crate::agents::Start;
 use crate::app::{App, Confirm, Mode};
@@ -260,16 +261,256 @@ fn c_asks_before_it_cancels() {
 }
 
 #[test]
-fn a_tasks_session_is_marked_with_its_number_on_the_sessions_tab() {
-    let (w, mut app, project, folder) = lab("tasks-mark", &[("Write the guide", "docs", State::NotStarted)]);
-    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
-    w.transcript("task-sess", &folder, "Task #1: Write the guide", 1);
+fn a_tasks_session_is_on_neither_sessions_list_nor_counted_nor_found_by_the_search() {
+    let (w, mut app, project, folder) = lab("tasks-off-sessions", &[("Write the guide", "docs", State::NotStarted)]);
+    // Its conversation, archived on the Sessions tab before it was the task's: on Archived it isn't either.
+    w.transcript("task-sess", &folder, "Task #1: Write the guide about zebras", 1);
+    w.transcript("old-task-sess", &folder, "Task #1, the first go: zebras again", 2);
     app.reload_for_test();
     key(&mut app, KeyCode::Char('1'));
+    assert_eq!(app.counts, [3, 0]);
+    while app.selected_session().map(|s| s.id.as_str()) != Some("old-task-sess") {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.counts, [2, 1]);
+    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
+    Tickets::open(&w.config, &project)
+        .update(1, |t| {
+            t.state = State::Done;
+            true
+        })
+        .unwrap();
+    // A second task whose session is the archived one.
+    let mut store = Tickets::open(&w.config, &project);
+    let n = store.add(NewTicket { title: "Again".into(), folder: Some(folder.clone()), ..Default::default() }).unwrap();
+    store.start(n, "docs", "old-task-sess", None).unwrap();
+    app.reload_for_test();
+    let ids = |app: &App| app.visible().iter().map(|&i| app.sessions[i].id.clone()).collect::<Vec<_>>();
+    assert_eq!((ids(&app), app.counts.clone()), (vec!["user-1".to_string()], vec![1, 0]), "Active, and the counts");
+    key(&mut app, KeyCode::Right);
+    assert!(ids(&app).is_empty(), "nor on Archived: {:?}", ids(&app));
+    key(&mut app, KeyCode::Left);
     let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("#1 shop"), "{shown}");
-    assert_eq!(shown.matches("#1 ").count(), 1, "only the task's session: {shown}");
+    assert!(!shown.contains("zebras") && !shown.contains("#1 "), "{shown}");
+    // The search: the quick filter, the words typed in a conversation.
+    key(&mut app, KeyCode::Char('/'));
+    for c in "zebras".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    assert!(app.visible().is_empty(), "the quick filter: {:?}", ids(&app));
+    app.set_search_kind(1);
+    assert!(app.search.results.is_empty(), "full text: {:?}", app.search.results.iter().map(|r| &r.id).collect::<Vec<_>>());
+    key(&mut app, KeyCode::Esc);
+    // Reached through its task, on the Tasks tab.
+    key(&mut app, KeyCode::Char('3'));
+    assert!(app.board_rows().iter().any(|r| r.1 == 1));
+}
+
+#[test]
+fn a_session_a_tasks_host_runs_is_a_tasks_before_its_id_is_known() {
+    let (_w, mut app, _, _) = lab("tasks-host-session", &[("Write the guide", "docs", State::NotStarted)]);
+    let i = app.sessions.iter().position(|s| s.id == "user-1").unwrap();
+    assert!(!app.is_task_session(&app.sessions[i]));
+    app.sessions[i].procs.push(crate::model::Proc {
+        pid: 4_000_000,
+        started_at: 1,
+        hosted: true,
+        background: None,
+        stale: false,
+        parked: false,
+        moved_to: None,
+    });
+    let host = |task: Option<&str>| crate::host::HostInfo {
+        agent: crate::agents::Agent::Codex,
+        claude_pid: 4_000_000,
+        host_pid: 4_000_001,
+        dir: "/tmp".into(),
+        args: Vec::new(),
+        sock: "/nonexistent/platoon-unit-test.sock".into(),
+        task: task.map(String::from),
+    };
+    app.hosts.push(host(None));
+    assert!(!app.is_task_session(&app.sessions[i]), "an ordinary host");
+    app.hosts = vec![host(Some("1:p"))];
+    assert!(app.is_task_session(&app.sessions[i]), "the host of task #1");
+}
+
+/// Write task `n`'s state and when it last changed straight into its file (the store sets that time itself).
+fn finished(w: &World, project: &str, n: u32, state: &str, secs_ago: u64) {
+    let path = crate::tickets::path_in(&w.config, project);
+    let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let t = v
+        .get_mut("tasks")
+        .and_then(|l| l.as_array_mut())
+        .and_then(|l| l.iter_mut().find(|t| t.get("number").and_then(|x| x.as_u64()) == Some(u64::from(n))))
+        .and_then(|t| t.as_object_mut())
+        .unwrap();
+    t.insert("state".into(), state.into());
+    t.insert("updated".into(), (crate::usage::now() - secs_ago).into());
+    fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+}
+
+const DAY: u64 = 86_400;
+
+fn numbers(app: &App) -> Vec<u32> {
+    app.board_rows().iter().map(|r| r.1).collect()
+}
+
+fn pick(app: &mut App, n: u32) {
+    key(app, KeyCode::Home);
+    for _ in 0..10 {
+        if app.board_task().map(|(_, k)| k) == Some(n) {
+            return;
+        }
+        key(app, KeyCode::Down);
+    }
+    panic!("#{n} is not on the list: {:?}", numbers(app));
+}
+
+#[test]
+fn a_moves_a_finished_task_to_archived_and_back_where_it_stays_and_archived_lists_them_the_latest_first() {
+    let (w, mut app, project, folder) = lab(
+        "tasks-archive",
+        &[
+            ("Fresh done", "feature", State::NotStarted),
+            ("Busy one", "feature", State::Working),
+            ("Old done", "feature", State::NotStarted),
+            ("Old cancel", "docs", State::NotStarted),
+            ("Older cancel", "docs", State::NotStarted),
+        ],
+    );
+    Tickets::open(&w.config, &project).start(1, "feature", "fresh-sess", None).unwrap();
+    w.transcript("fresh-sess", &folder, "Task #1: Fresh done", 1);
+    finished(&w, &project, 1, "done", 60);
+    finished(&w, &project, 3, "done", 3 * DAY);
+    finished(&w, &project, 4, "cancelled", 2 * DAY);
+    finished(&w, &project, 5, "cancelled", 5 * DAY);
+    app.reload_for_test();
+    assert_eq!((numbers(&app), app.board_counts()), (vec![2, 1], [2, 3]), "a day after it finished, a task is on Archived");
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Active  2") && shown.contains("Archived  3"), "the switch, with its counts:\n{shown}");
+    // On a narrow terminal the switch has the row under the tabs to itself, and the list starts under it.
+    let mut narrow = Terminal::new(TestBackend::new(60, 16)).unwrap();
+    let small = draw(&mut narrow, &app);
+    let lines: Vec<&str> = small.lines().collect();
+    assert!(lines[2].contains("Active  2   Archived  3") && lines[3].contains("Working · 1"), "{small}");
+    assert_eq!(fg_of(&narrow, "Working · 1"), app.effective_theme().busy);
+
+    // a on a task that isn't finished: it says why, and it stays.
+    pick(&mut app, 2);
+    assert!(!draw(&mut term, &app).contains("a archive"), "not offered on a task at work");
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.active_notice(), Some("#2 isn't finished: a archives a Done or Cancelled task."));
+    assert_eq!(numbers(&app), [2, 1]);
+    // a on a finished one: on Archived at once, though it finished a minute ago; the row after it is picked.
+    pick(&mut app, 1);
+    assert!(draw(&mut term, &app).contains("a archive"));
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.active_notice(), Some("Archived #1 \"Fresh done\""));
+    assert_eq!((numbers(&app), app.board_counts()), (vec![2], [1, 4]));
+    assert_eq!(Tickets::open(&w.config, &project).get(1).unwrap().archiving, crate::tickets::Archiving::Archived);
+
+    // Archived: every finished task, the latest first, with no section heading; a restores.
+    key(&mut app, KeyCode::Right);
+    assert_eq!(numbers(&app), [1, 4, 3, 5]);
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("#5 Older cancel") && !shown.contains("Done · 4") && shown.contains("a restore"), "{shown}");
+    // enter on an archived task opens its session, as on Active (continued: nothing really starts in a unit test).
+    pick(&mut app, 1);
+    key(&mut app, KeyCode::Enter);
+    app.refresh_until_for_test(10, "its session continued", |a| a.sq.launched.contains(&1));
+    // / narrows Archived too.
+    key(&mut app, KeyCode::Char('/'));
+    for c in "cancel".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(numbers(&app), [4, 5]);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(numbers(&app), [1, 4, 3, 5]);
+    // Brought back three days after it finished: it stays on Active.
+    pick(&mut app, 3);
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.active_notice(), Some("Restored #3 \"Old done\""));
+    assert_eq!(numbers(&app), [1, 4, 5]);
+    app.reload_for_test();
+    key(&mut app, KeyCode::Left);
+    assert_eq!(numbers(&app), [2, 3]);
+    // A click on a chip of the switch shows that list.
+    let shown = draw(&mut term, &app);
+    let (row, col) = shown
+        .lines()
+        .enumerate()
+        .find_map(|(y, l)| l.find("Archived  ").map(|b| (y as u16, l[..b].chars().count() as u16)))
+        .unwrap_or_else(|| panic!("{shown}"));
+    app.on_mouse(ratatui::crossterm::event::MouseEvent {
+        kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        column: col + 1,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(numbers(&app), [1, 4, 5]);
+}
+
+#[test]
+fn each_list_says_what_it_is_when_it_is_empty() {
+    let (w, mut app, project, _) = lab("tasks-archive-empty", &[("Write the guide", "docs", State::NotStarted)]);
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    key(&mut app, KeyCode::Right);
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains(crate::board::Shelf::Archived.empty()), "{shown}");
+    key(&mut app, KeyCode::Left);
+    finished(&w, &project, 1, "cancelled", 2 * DAY);
+    app.reload_for_test();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains(crate::board::ALL_ARCHIVED), "{shown}");
+}
+
+#[test]
+fn an_old_done_task_stays_on_active_while_its_work_is_not_merged_and_a_can_archive_it_anyway() {
+    let (w, mut app, project, folder) =
+        lab("tasks-old-not-merged", &[("Order mails", "feature", State::NotStarted), ("Text mails", "feature", State::NotStarted)]);
+    let shop = Path::new(&folder);
+    for n in [1, 2] {
+        git(shop, &["switch", "-q", "-c", &format!("task/{n}"), "main"]);
+        fs::write(shop.join(format!("f{n}")), "x").unwrap();
+        git(shop, &["add", "."]);
+        git(shop, &["commit", "-q", "-m", &format!("work {n}")]);
+        let wt = w.base.join(format!("repos/shop-worktrees/task-{n}")).to_string_lossy().into_owned();
+        Tickets::open(&w.config, &project)
+            .update(n, |t| {
+                t.worktree =
+                    Some(crate::tickets::Worktree { path: wt, branch: format!("task/{n}"), removed: Some(1), ..Default::default() });
+                true
+            })
+            .unwrap();
+        // #2 finished a little after #1.
+        finished(&w, &project, n, "done", 3 * DAY - u64::from(n) * 10);
+    }
+    git(shop, &["switch", "-q", "main"]);
+    app.reload_for_test();
+    // Not read yet (platoon just started): where a merged one would be, never on Active for a moment.
+    assert_eq!(app.board_counts(), [0, 2]);
+    refreshed_until(&mut app, "the branches to be read", |a| a.not_merged(&project, 1).is_some() && a.not_merged(&project, 2).is_some());
+    assert_eq!((numbers(&app), app.board_counts()), (vec![2, 1], [2, 0]), "not merged: on Active, three days on");
+    let mut term = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    assert!(draw(&mut term, &app).contains("Feature · Done · not merged · on task/1"));
+    // a archives one all the same; on Archived it still says it isn't merged.
+    pick(&mut app, 2);
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(numbers(&app), [1]);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(numbers(&app), [2]);
+    assert!(draw(&mut term, &app).contains("Feature · Done · not merged · on task/2"));
+    // Merged: the other moves to Archived by itself.
+    key(&mut app, KeyCode::Left);
+    git(shop, &["merge", "-q", "--no-ff", "-m", "merge task 1", "task/1"]);
+    app.read_merged_soon_for_test();
+    refreshed_until(&mut app, "the merge to be seen", |a| a.not_merged(&project, 1).is_none());
+    assert_eq!(app.board_counts(), [0, 2]);
 }
 
 #[test]

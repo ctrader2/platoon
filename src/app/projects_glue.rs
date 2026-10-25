@@ -134,14 +134,18 @@ impl App {
         let back = (project.clone(), self.selected);
         self.close_project_screen();
         self.top = TOP_TASKS;
-        self.bd.selected = Some(BRow(project, number));
+        self.pick_board_task(&project, number);
         self.update_view();
         self.open_task(number);
         self.tk.back_to = Some(back);
     }
 
-    /// A search only looks at the sessions of the project whose screen is showing.
+    /// Is `s` among what the search looks at here: the open project's sessions, or every one; never a task's (it is
+    /// reached through its task).
     pub(super) fn in_scope(&self, s: &Session) -> bool {
+        if self.is_task_session(s) {
+            return false;
+        }
         match &self.open_project {
             Some(p) => self.projects.project_id_of(&s.id) == Some(p.as_str()),
             None => true,
@@ -152,7 +156,7 @@ impl App {
         let mut out: HashMap<String, PStat> = self.projects.all().iter().map(|p| (p.id.clone(), PStat::default())).collect();
         for s in &self.sessions {
             // A task's session is counted as its task, as the project's screen lists it.
-            if self.stopping.contains_key(&s.id) || self.sq.task_of(&s.id).is_some() {
+            if self.stopping.contains_key(&s.id) || self.is_task_session(s) {
                 continue;
             }
             let Some(st) = self.projects.project_id_of(&s.id).and_then(|p| out.get_mut(p)) else { continue };

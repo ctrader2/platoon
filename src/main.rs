@@ -949,7 +949,7 @@ mod tests {
         // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '3');
         assert!(app.top == 2 && app.board_showing() && app.selected_session().is_none());
-        assert!(flat(&draw(&mut term, &app)).contains(crate::board::EMPTY));
+        assert!(flat(&draw(&mut term, &app)).contains(crate::board::Shelf::Active.empty()));
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));

@@ -1,11 +1,10 @@
 //! What tasks' sessions have spent, for the Tasks tab: each session's transcript (and its subagents' beside it) read by
 //! `claude::read_session_log` on a thread of its own, every couple of seconds, and only again when a file changed (by size
 //! and time); a Codex task's session from its rollout (`Agent::spent`, Codex's running total). Only the sessions of the
-//! tasks on the board are read. What is shown from it is worked out in `spent.rs`.
+//! tasks on the list showing (Active or Archived) are read. What is shown from it is worked out in `spent.rs`.
 
 use super::*;
 use crate::agents::{SessionLog, Spent};
-use crate::tickets::Ticket;
 use std::sync::mpsc::TryRecvError;
 use std::time::SystemTime;
 
@@ -112,15 +111,13 @@ impl App {
         self.sw.rx = Some(rx);
     }
 
-    /// The sessions whose transcripts are read: those of every task on the board (in play or finished today).
+    /// The sessions whose transcripts are read: those of every task on the list showing (Active or Archived).
     fn sessions_to_read(&self) -> Vec<String> {
-        let now = usage::now();
-        let on_board = |t: &Ticket| !t.state.closed() || now.saturating_sub(t.updated) < crate::board::FINISHED_FOR;
         self.all_tasks()
             .iter()
-            .flat_map(|(_, list)| list.iter())
-            .filter(|t| on_board(t))
-            .filter_map(|t| t.session_id().map(String::from))
+            .flat_map(|(p, list)| list.iter().map(move |t| (p, t)))
+            .filter(|(p, t)| self.board_shelf_of(p, t) == Some(self.bd.shelf))
+            .filter_map(|(_, t)| t.session_id().map(String::from))
             .collect()
     }
 

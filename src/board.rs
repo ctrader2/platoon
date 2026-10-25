@@ -1,11 +1,48 @@
-//! The Tasks tab: every task across all projects and the ones in no project, grouped by what it needs from the user:
-//! **Needs you**, **Working**, **Not started** and **Done** (finished today). Every row answers the same questions in
+//! The Tasks tab: every task across all projects and the ones in no project, on two lists switched like the Sessions
+//! and Projects lists' Active and Archived. **Active** is grouped by what each task needs from the user: **Needs you**,
+//! **Working**, **Not started** and **Done** (finished in the last day, a Done task whose work isn't merged, and one the
+//! user brought back with `a`). **Archived** is every other finished task, the latest first (`place`). Every row answers the same questions in
 //! the same places: line one says what it is (the project's badge, `#N`, the title, drawn by the UI) and at the right
 //! the section's word for it (what it needs, how long it has worked, when it finished); line two says which squad has
 //! it and what it needs from the user, in the session's own words where it has some. Pure: the app hands it the tasks
 //! and what it knows about their sessions.
 
-use crate::tickets::{Need, State, Ticket};
+use crate::tickets::{Archiving, Need, State, Ticket};
+
+/// The Tasks tab's two lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Shelf {
+    #[default]
+    Active,
+    Archived,
+}
+
+/// What Active says when it has nothing on it but Archived has.
+pub const ALL_ARCHIVED: &str = "Every task is finished and archived (→ shows them). Press n to write one.";
+
+impl Shelf {
+    /// Both, in the order they are shown (the switch's chips, ←→).
+    pub const ALL: [Shelf; 2] = [Shelf::Active, Shelf::Archived];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Shelf::Active => "Active",
+            Shelf::Archived => "Archived",
+        }
+    }
+
+    /// What the list says when nothing is on it.
+    pub fn empty(self) -> &'static str {
+        match self {
+            Shelf::Active => "No tasks yet. Press n to write one.",
+            Shelf::Archived => "Nothing archived. A finished task moves here a day after it finishes; a on it moves it sooner.",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+}
 
 /// A group of the board, in the order they are shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -13,7 +50,8 @@ pub enum Section {
     NeedsYou,
     Working,
     NotStarted,
-    /// Done or Cancelled in the last day.
+    /// Done or Cancelled, and still on Active (on Archived every task is in this one section, shown without its
+    /// heading).
     Done,
 }
 
@@ -31,8 +69,19 @@ impl Section {
 /// The board's sections, in order.
 pub const SECTIONS: [Section; 4] = [Section::NeedsYou, Section::Working, Section::NotStarted, Section::Done];
 
-/// How long Done and Cancelled tasks stay on the board, in seconds.
+/// How long Done and Cancelled tasks stay on Active before they move to Archived by themselves, in seconds.
 pub const FINISHED_FOR: u64 = 24 * 3600;
+
+/// What git last said about a Done task's branch (`gitfacts::not_merged`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Merge {
+    /// Nothing on it to merge: its commits are in the default branch, or it has no branch.
+    Merged,
+    /// Its branch has commits the default branch hasn't: landing it is still the user's.
+    NotMerged,
+    /// Not read yet (platoon has just started, or the task has just finished).
+    Unknown,
+}
 
 /// How a piece of a row is colored (the UI picks the theme's color).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,9 +150,9 @@ pub trait Facts {
     fn last_wrote(&self, session: &str) -> Option<u64>;
     /// A project's name by its id, for the filter ("No project" for none).
     fn project_name(&self, id: &str) -> String;
-    /// A Done task's branch has commits its repository's default branch hasn't (as git last said).
-    fn not_merged(&self, _project: &str, _number: u32) -> bool {
-        false
+    /// What git last said about a Done task's branch.
+    fn merge(&self, _project: &str, _t: &Ticket) -> Merge {
+        Merge::Merged
     }
     /// The program a started task's session runs in, when that program is switched off in platoon's settings.
     fn switched_off(&self, _project: &str, _t: &Ticket) -> Option<crate::agents::Agent> {
@@ -151,18 +200,31 @@ pub fn ago(now: u64, then: u64) -> String {
     }
 }
 
-/// The board's section for a task, or None when it isn't on the board (finished before today, or a task of an
-/// archived project that never started).
-pub fn section_of(t: &Ticket, archived: bool, busy: bool, now: u64) -> Option<Section> {
-    if busy {
-        return Some(Section::Working);
-    }
-    match &t.state {
-        State::NeedsYou(_) => Some(Section::NeedsYou),
-        State::Working => Some(Section::Working),
-        State::NotStarted if archived => None,
-        State::NotStarted => Some(Section::NotStarted),
-        State::Done | State::Cancelled => (now.saturating_sub(t.updated) < FINISHED_FOR).then_some(Section::Done),
+/// Where a task is on the Tasks tab: its list and its section there (on Archived, `Section::Done`), or None when it is
+/// on neither (a task of an archived project that never started). `archived`: its project is; `busy`: the app is
+/// starting it; `merge`: what git said about a Done task's branch.
+pub fn place(t: &Ticket, archived: bool, busy: bool, merge: Merge, now: u64) -> Option<(Shelf, Section)> {
+    let section = match &t.state {
+        _ if busy => Section::Working,
+        State::NeedsYou(_) => Section::NeedsYou,
+        State::Working => Section::Working,
+        State::NotStarted if archived => return None,
+        State::NotStarted => Section::NotStarted,
+        State::Done | State::Cancelled => return Some((finished_shelf(t, merge, now), Section::Done)),
+    };
+    Some((Shelf::Active, section))
+}
+
+/// The list a finished task is on: as the user said with `a`, else Active for `FINISHED_FOR` after it finished and while
+/// its work isn't merged, then Archived. A branch not read yet counts as merged, so a task that went long ago never shows
+/// on Active for a moment while platoon starts; one that turns out not merged comes back to Active.
+fn finished_shelf(t: &Ticket, merge: Merge, now: u64) -> Shelf {
+    match t.archiving {
+        Archiving::Archived => Shelf::Archived,
+        Archiving::KeptActive => Shelf::Active,
+        Archiving::Auto if now.saturating_sub(t.updated) < FINISHED_FOR => Shelf::Active,
+        Archiving::Auto if t.state == State::Done && merge == Merge::NotMerged => Shelf::Active,
+        Archiving::Auto => Shelf::Archived,
     }
 }
 
@@ -263,7 +325,7 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
         (State::Done, _) => {
             right = ago(now, t.updated);
             right_tone = Tone::Ok;
-            if f.not_merged(i.project, t.number) {
+            if f.merge(i.project, t) == Merge::NotMerged {
                 // Its work is on its branch, and the default branch doesn't have it yet: the user merges it.
                 if !squad.is_empty() {
                     second.push(piece(format!("{squad} · "), Tone::Subtext));
@@ -310,13 +372,22 @@ pub fn matches(r: &Row, q: &str, f: &dyn Facts) -> bool {
         || r.squad.to_lowercase().contains(&q)
 }
 
-/// The board: the tasks in their sections, in order, each sorted by its latest change first, except Needs you, where
-/// the one waiting longest comes first. Only the rows that match `filter`; empty sections are left out.
-pub fn board(tasks: &[In], f: &dyn Facts, filter: &str) -> Vec<Group> {
+/// Where task `i` is, as `place` says with what the board knows.
+fn place_of(i: &In, f: &dyn Facts, now: u64) -> Option<(Shelf, Section)> {
+    place(i.task, i.archived, i.busy.is_some(), f.merge(i.project, i.task), now)
+}
+
+/// One of the board's lists: the tasks on `shelf` in their sections, in order, each sorted by its latest change first,
+/// except Needs you, where the one waiting longest comes first (Archived has the one section). Only the rows that match
+/// `filter`; empty sections are left out.
+pub fn board(tasks: &[In], f: &dyn Facts, shelf: Shelf, filter: &str) -> Vec<Group> {
     let now = f.now();
     let mut groups: Vec<Group> = SECTIONS.iter().map(|s| Group { section: *s, rows: Vec::new() }).collect();
     for i in tasks {
-        let Some(section) = section_of(i.task, i.archived, i.busy.is_some(), now) else { continue };
+        let Some((on, section)) = place_of(i, f, now) else { continue };
+        if on != shelf {
+            continue;
+        }
         let r = row(i, section, f);
         if !matches(&r, filter, f) {
             continue;
@@ -336,6 +407,16 @@ pub fn board(tasks: &[In], f: &dyn Facts, filter: &str) -> Vec<Group> {
     groups
 }
 
+/// How many tasks each list has (not narrowed by the filter), in the order of `Shelf::ALL`.
+pub fn counts(tasks: &[In], f: &dyn Facts) -> [usize; 2] {
+    let now = f.now();
+    let mut out = [0; 2];
+    for (shelf, _) in tasks.iter().filter_map(|i| place_of(i, f, now)) {
+        out[shelf.index()] += 1;
+    }
+    out
+}
+
 /// How many tasks need the user, across everything.
 pub fn need_count<'a>(tasks: impl IntoIterator<Item = &'a Ticket>) -> usize {
     tasks.into_iter().filter(|t| t.state.needs_you()).count()
@@ -349,9 +430,6 @@ pub fn header_words(n: usize) -> Option<String> {
         n => Some(format!("● {n} need you")),
     }
 }
-
-/// What the board says when nothing is on it.
-pub const EMPTY: &str = "No tasks yet. Press n to write one.";
 
 #[cfg(test)]
 mod tests {
@@ -419,7 +497,7 @@ mod tests {
             started(task(10, "Checked", State::NeedsYou(Need::Check("1 problem: a.rs:3: x".into())), NOW - 30), "s-10"),
         ];
         let ins: Vec<In> = tasks.iter().map(|t| In { project: "p", archived: false, task: t, busy: None }).collect();
-        let g = board(&ins, &Known, "");
+        let g = board(&ins, &Known, Shelf::Active, "");
         let s = |a: &str| a.to_string();
         assert_eq!(
             shape(&g),
@@ -437,8 +515,13 @@ mod tests {
                 ("Not started", vec![(5, s(""), s("No folder yet · Suggested: Feature · s starts it")), (4, s(""), s("s starts it"))]),
                 ("Done", vec![(8, s("1 min ago"), s("Cancelled")), (6, s("2 h ago"), s("Feature · 84K tokens"))]),
             ],
-            "Needs you: the longest waiting first; elsewhere the latest first; finished before today left out"
+            "Needs you: the longest waiting first; elsewhere the latest first; finished over a day ago on Archived"
         );
+        assert_eq!(
+            shape(&board(&ins, &Known, Shelf::Archived, "")),
+            vec![("Done", vec![(7, "2 days ago".to_string(), "Feature".to_string())])]
+        );
+        assert_eq!(counts(&ins, &Known), [9, 1]);
         assert_eq!(need_count(tasks.iter()), 4);
         assert_eq!(header_words(1).as_deref(), Some("● 1 needs you"));
         assert_eq!(header_words(0), None);
@@ -447,9 +530,65 @@ mod tests {
     #[test]
     fn a_starting_task_works_and_an_archived_projects_unstarted_tasks_are_left_out() {
         let t = task(1, "Go", State::NotStarted, NOW);
-        let g = board(&[In { project: "p", archived: false, task: &t, busy: Some("Making its worktree…") }], &Known, "");
+        let g = board(&[In { project: "p", archived: false, task: &t, busy: Some("Making its worktree…") }], &Known, Shelf::Active, "");
         assert_eq!(shape(&g), vec![("Working", vec![(1, "starting".to_string(), "Making its worktree…".to_string())])]);
-        assert!(board(&[In { project: "p", archived: true, task: &t, busy: None }], &Known, "").is_empty());
+        assert!(board(&[In { project: "p", archived: true, task: &t, busy: None }], &Known, Shelf::Active, "").is_empty());
+    }
+
+    #[test]
+    fn a_finished_task_moves_to_archived_a_day_after_it_finished_unless_its_work_is_not_merged_or_the_user_said() {
+        use Merge::*;
+        let at = |state: State, ago: u64, archiving: Archiving| Ticket { archiving, ..task(1, "T", state, NOW - ago) };
+        let shelf = |t: &Ticket, merge: Merge| place(t, false, false, merge, NOW).map(|(s, _)| s);
+        let (active, archived) = (Some(Shelf::Active), Some(Shelf::Archived));
+        // A day after it finished, to the second, whether Done or Cancelled.
+        for state in [State::Done, State::Cancelled] {
+            assert_eq!(shelf(&at(state.clone(), FINISHED_FOR - 1, Archiving::Auto), Merged), active, "{state:?}");
+            assert_eq!(shelf(&at(state.clone(), FINISHED_FOR, Archiving::Auto), Merged), archived, "{state:?}");
+        }
+        // A Done task whose work is not merged stays, however old; not read yet, it is where a merged one would be.
+        let old_done = at(State::Done, 30 * 86_400, Archiving::Auto);
+        assert_eq!(shelf(&old_done, NotMerged), active);
+        assert_eq!(shelf(&old_done, Unknown), archived);
+        assert_eq!(shelf(&at(State::Cancelled, 30 * 86_400, Archiving::Auto), NotMerged), archived, "a cancelled one is not landed");
+        // By hand, both ways: it sticks, whatever its age and whether its work is merged.
+        assert_eq!(shelf(&at(State::Done, 60, Archiving::Archived), NotMerged), archived);
+        assert_eq!(shelf(&at(State::Cancelled, 60, Archiving::Archived), Merged), archived);
+        assert_eq!(shelf(&at(State::Done, 365 * 86_400, Archiving::KeptActive), Merged), active);
+        assert_eq!(shelf(&at(State::Cancelled, 365 * 86_400, Archiving::KeptActive), Merged), active);
+        // On Archived every task is in the one section; a task at work is always on Active.
+        assert_eq!(place(&old_done, false, false, Merged, NOW), Some((Shelf::Archived, Section::Done)));
+        assert_eq!(
+            place(&at(State::Working, 365 * 86_400, Archiving::Archived), false, false, Merged, NOW),
+            Some((Shelf::Active, Section::Working))
+        );
+        assert_eq!(place(&old_done, false, true, Merged, NOW), Some((Shelf::Active, Section::Working)), "being started");
+        // An archived project: its finished tasks are still listed, the ones that never started are not.
+        assert_eq!(place(&old_done, true, false, Merged, NOW), Some((Shelf::Archived, Section::Done)));
+        assert_eq!(place(&at(State::NotStarted, 0, Archiving::Auto), true, false, Merged, NOW), None);
+    }
+
+    #[test]
+    fn archived_lists_every_finished_task_the_latest_first_and_the_filter_narrows_it() {
+        let tasks = [
+            started(task(1, "Login page", State::Done, NOW - 5 * 86_400), "s-1"),
+            task(2, "Dropped idea", State::Cancelled, NOW - 2 * 86_400),
+            Ticket { archiving: Archiving::Archived, ..started(task(3, "Just done", State::Done, NOW - 60), "s-3") },
+            started(task(4, "Fresh", State::Done, NOW - 60), "s-4"),
+            Ticket { archiving: Archiving::KeptActive, ..task(5, "Kept", State::Done, NOW - 9 * 86_400) },
+        ];
+        let ins: Vec<In> = tasks.iter().map(|t| In { project: "p", archived: false, task: t, busy: None }).collect();
+        let numbers =
+            |shelf: Shelf, q: &str| board(&ins, &Known, shelf, q).iter().flat_map(|g| g.rows.iter().map(|r| r.number)).collect::<Vec<_>>();
+        assert_eq!(numbers(Shelf::Archived, ""), [3, 2, 1]);
+        assert_eq!(numbers(Shelf::Active, ""), [4, 5]);
+        assert_eq!(numbers(Shelf::Archived, "login"), [1]);
+        assert_eq!(numbers(Shelf::Archived, "fresh"), Vec::<u32>::new(), "the filter narrows the list showing only");
+        assert_eq!(counts(&ins, &Known), [2, 3]);
+        assert_eq!(
+            shape(&board(&ins, &Known, Shelf::Archived, "dropped")),
+            vec![("Done", vec![(2, "2 days ago".to_string(), "Cancelled".to_string())])]
+        );
     }
 
     /// `Known`, with task 6 of project `p` not merged.
@@ -471,8 +610,8 @@ mod tests {
         fn project_name(&self, id: &str) -> String {
             Known.project_name(id)
         }
-        fn not_merged(&self, project: &str, number: u32) -> bool {
-            (project, number) == ("p", 6)
+        fn merge(&self, project: &str, t: &Ticket) -> Merge {
+            if (project, t.number) == ("p", 6) { Merge::NotMerged } else { Merge::Merged }
         }
     }
 
@@ -527,7 +666,8 @@ mod tests {
         let b = task(2, "Docs", State::NotStarted, NOW);
         let ins =
             vec![In { project: "web", archived: false, task: &a, busy: None }, In { project: "", archived: false, task: &b, busy: None }];
-        let numbers = |q: &str| board(&ins, &Known, q).iter().flat_map(|g| g.rows.iter().map(|r| r.number)).collect::<Vec<_>>();
+        let numbers =
+            |q: &str| board(&ins, &Known, Shelf::Active, q).iter().flat_map(|g| g.rows.iter().map(|r| r.number)).collect::<Vec<_>>();
         assert_eq!(numbers("LOGIN"), [1]);
         assert_eq!(numbers("no project"), [2]);
         assert_eq!(numbers("feature"), [1]);

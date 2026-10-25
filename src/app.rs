@@ -1280,15 +1280,18 @@ impl App {
         let shows = TABS[self.tab.min(TABS.len() - 1)].shows;
         // A conversation being stopped is on neither tab: it is on its way to Archived and can't be acted on meanwhile.
         let listed = |s: &Session| self.stopping.is_empty() || !self.stopping.contains_key(&s.id);
+        // A task's session is on neither tab, nor counted, nor on its project's screen among the sessions: it is reached
+        // through its task.
+        let task: Vec<bool> = self.sessions.iter().map(|s| self.is_task_session(s)).collect();
+        let on_tab = |i: usize, s: &Session| listed(s) && !task[i];
         self.pstats = self.project_stats();
         self.archived_rows = 0;
         if let Some(open) = self.open_project.clone() {
             // A project's screen: its sessions, the active ones first and then the archived ones. A task's session is
             // listed as its task, under them (`project_tasks`).
-            let mine =
-                |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s) && self.sq.task_of(&s.id).is_none();
+            let mine = |i: usize, s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && on_tab(i, s);
             let (active, archived): (Vec<usize>, Vec<usize>) =
-                self.sessions.iter().enumerate().filter(|(_, s)| mine(s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
+                self.sessions.iter().enumerate().filter(|(i, s)| mine(*i, s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
             self.tab_view = active.into_iter().chain(archived).collect();
             let view: Vec<usize> =
                 self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
@@ -1298,12 +1301,13 @@ impl App {
             self.tab_view.clear();
             self.view.clear();
         } else {
-            self.tab_view = self.sessions.iter().enumerate().filter(|(_, s)| listed(s) && shows(s)).map(|(i, _)| i).collect();
+            self.tab_view = self.sessions.iter().enumerate().filter(|(i, s)| on_tab(*i, s) && shows(s)).map(|(i, _)| i).collect();
             let view: Vec<usize> =
                 self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
             self.view = view;
         }
-        self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| listed(s) && (t.shows)(s)).count()).collect();
+        self.counts =
+            TABS.iter().map(|t| self.sessions.iter().enumerate().filter(|(i, s)| on_tab(*i, s) && (t.shows)(s)).count()).collect();
         self.update_project_rows(&q);
         self.clamp_selected();
     }
@@ -1332,8 +1336,9 @@ impl App {
             || !self.stopping.is_empty()
     }
 
+    /// The sessions with a reply not yet looked at, as the header counts them (a task's session is its task's news).
     pub fn unread_count(&self) -> usize {
-        self.sessions.iter().filter(|s| s.unread).count()
+        self.sessions.iter().filter(|s| s.unread && !self.is_task_session(s)).count()
     }
 
     /// Transcripts still being read by the background index, or Some(0) while the very first pass is
@@ -1643,8 +1648,9 @@ impl App {
         }
         let viewing = self.attached_pid().and(self.viewing.as_deref());
         let mut ids = archive::auto_archive_ids(&self.sessions, &self.archive, now_secs, age, viewing);
-        // One being stopped for the archive key is archived by that (once its process is gone), not counted here.
-        ids.retain(|id| !self.stopping.contains_key(id));
+        // One being stopped for the archive key is archived by that (once its process is gone), not counted here. A
+        // task's session is on neither tab: it goes with its task.
+        ids.retain(|id| !self.stopping.contains_key(id) && self.sq.task_of(id).is_none());
         if ids.is_empty() {
             return;
         }
@@ -3311,6 +3317,7 @@ impl App {
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) if self.projects_list_showing() => self.switch_ptab(i),
+                    Some(Hit::Tab(i)) if self.board_showing() => self.switch_board_shelf(i),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
                     Some(Hit::Top(i)) if matches!(self.mode, Mode::List) => self.switch_top(i),
                     Some(Hit::Top(_)) => {}

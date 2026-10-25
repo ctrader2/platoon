@@ -1,9 +1,14 @@
-//! Whether a Done task's work is merged, for the Tasks tab: for each Done task on the board that worked on a branch,
-//! how many commits `task/<N>` has that its repository's default branch hasn't (`gitfacts::not_merged`), read with git
-//! on a thread of its own every few seconds while the tab shows. A Done task with such commits reads "Done · not
-//! merged" (`board::row`), and its details say how many and where.
+//! Whether a Done task's work is merged, for the Tasks tab: for each Done task that worked on a branch, how many
+//! commits `task/<N>` has that its repository's default branch hasn't (`gitfacts::not_merged`), read with git on a
+//! thread of its own. A Done task with such commits reads "Done · not merged" (`board::row`), its details say how many
+//! and where, and it stays on Active however long ago it finished (`board::place`).
+//!
+//! Every such task is read once soon after platoon starts, whatever tab shows, so the lists are right by the time the
+//! Tasks tab is looked at; after that, every few seconds while the tab shows, the ones whose answer can still change
+//! without a session working on them: those finished in the last day and those not merged (the user merges them).
 
 use super::*;
+use crate::board::Merge;
 use crate::gitfacts::{self, Unmerged};
 use crate::tickets::{State, Ticket};
 use std::sync::mpsc::TryRecvError;
@@ -17,11 +22,15 @@ const BUDGET: Duration = Duration::from_secs(5);
 /// A task: its project's id and its number.
 type Key = (String, u32);
 
+/// What one reading found: each task asked about, with its branch's commits the default branch hasn't.
+type Found = Vec<(Key, Option<Unmerged>)>;
+
 #[derive(Default)]
 pub struct MergeState {
-    /// The Done tasks whose branch has commits the default branch hasn't.
-    known: HashMap<Key, Unmerged>,
-    rx: Option<Receiver<HashMap<Key, Unmerged>>>,
+    /// What git last said about each Done task's branch it was asked about: the commits the default branch hasn't
+    /// (None: none, it is merged; also when git couldn't say, or there is no repository to ask).
+    read: HashMap<Key, Option<Unmerged>>,
+    rx: Option<Receiver<Found>>,
     last: Option<Instant>,
 }
 
@@ -31,43 +40,54 @@ fn repo_of(t: &Ticket) -> Option<PathBuf> {
 }
 
 impl App {
-    /// Take in the last reading, and start another every few seconds while the board shows Done tasks that worked on a
-    /// branch. Called on every refresh; git never runs on the UI thread.
+    /// Take in the last reading, and start another: at once for a Done task not read yet, and every few seconds while
+    /// the Tasks tab shows for the ones whose answer may change. Called on every refresh; git never runs on the UI
+    /// thread.
     pub(super) fn poll_merged(&mut self) {
         if let Some(rx) = &self.merged.rx {
             match rx.try_recv() {
-                Ok(known) => {
-                    self.merged.known = known;
+                Ok(found) => {
+                    self.merged.read.extend(found);
                     self.merged.rx = None;
                 }
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => self.merged.rx = None,
             }
         }
-        if self.merged.last.is_some_and(|t| t.elapsed() < EVERY) || !self.board_showing() {
-            return;
-        }
         let now = usage::now();
-        let asks: Vec<(Key, PathBuf, String)> = self
-            .all_tasks()
+        let done: Vec<(Key, &Ticket)> = self
+            .every_ticket()
             .iter()
-            .flat_map(|(p, list)| list.iter().map(move |t| (p, t)))
-            .filter(|(_, t)| t.state == State::Done && t.worktree.is_some() && now.saturating_sub(t.updated) < crate::board::FINISHED_FOR)
-            .filter_map(|(p, t)| Some(((p.clone(), t.number), repo_of(t)?, t.branch())))
+            .filter(|(_, t)| t.state == State::Done && t.worktree.is_some())
+            .map(|(p, t)| ((p.clone(), t.number), t))
             .collect();
+        let read = &self.merged.read;
+        let due = self.board_showing() && self.merged.last.is_none_or(|t| t.elapsed() >= EVERY);
+        let may_change =
+            |k: &Key, t: &Ticket| now.saturating_sub(t.updated) < crate::board::FINISHED_FOR || read.get(k).is_some_and(Option::is_some);
+        let asks: Vec<(Key, Option<PathBuf>, String)> = done
+            .iter()
+            .filter(|(k, t)| !read.contains_key(k) || (due && may_change(k, t)))
+            .map(|(k, t)| (k.clone(), repo_of(t), t.branch()))
+            .collect();
+        // A task that is no longer Done (worked on again, or gone) is read afresh when it is Done again.
+        let keep: HashSet<Key> = done.into_iter().map(|(k, _)| k).collect();
+        self.merged.read.retain(|k, _| keep.contains(k));
         if asks.is_empty() {
-            self.merged.known.clear();
             return;
         }
         self.merged.last = Some(Instant::now());
         let git = self.git_program.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let known = asks
+            let found = asks
                 .into_iter()
-                .filter_map(|(key, dir, branch)| Some((key, gitfacts::not_merged(&git, &dir, &branch, Instant::now() + BUDGET)?)))
+                .map(|(key, dir, branch)| {
+                    let unmerged = dir.and_then(|dir| gitfacts::not_merged(&git, &dir, &branch, Instant::now() + BUDGET));
+                    (key, unmerged)
+                })
                 .collect();
-            let _ = tx.send(known);
+            let _ = tx.send(found);
         });
         self.merged.rx = Some(rx);
     }
@@ -75,7 +95,18 @@ impl App {
     /// The commits task `number` of `project` has that its repository's default branch hasn't, as last read: only for a
     /// Done task that has some.
     pub fn not_merged(&self, project: &str, number: u32) -> Option<&Unmerged> {
-        self.merged.known.get(&(project.to_string(), number))
+        self.merged.read.get(&(project.to_string(), number)).and_then(Option::as_ref)
+    }
+
+    /// What git last said about task `t` of `project`'s branch: Merged for a task with no branch, Unknown until its
+    /// branch has been read once.
+    pub fn merge_of(&self, project: &str, t: &Ticket) -> Merge {
+        match self.merged.read.get(&(project.to_string(), t.number)) {
+            _ if t.worktree.is_none() => Merge::Merged,
+            None => Merge::Unknown,
+            Some(None) => Merge::Merged,
+            Some(Some(_)) => Merge::NotMerged,
+        }
     }
 }
 

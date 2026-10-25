@@ -425,7 +425,7 @@ impl App {
         if self.open_project.is_some() || self.top != TOP_TASKS || self.tk.open.is_some() {
             self.switch_top(TOP_TASKS);
         }
-        self.bd.selected = Some(BRow(d.project.clone(), first));
+        self.pick_board_task(&d.project, first);
         self.set_task_store(&d.project);
         if made.len() < d.tasks.len() {
             // The line about what couldn't be made stays.

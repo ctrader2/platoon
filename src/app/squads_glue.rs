@@ -135,6 +135,12 @@ impl App {
         true
     }
 
+    /// Is `s` a task's session: the one a task names, or one a task's host runs (a Codex task's, before Codex has said
+    /// its id)? It is reached through its task (the Tasks tab, its project's screen), never listed with the sessions.
+    pub fn is_task_session(&self, s: &Session) -> bool {
+        self.sq.task_of(&s.id).is_some() || s.procs.iter().any(|p| self.hosts.iter().any(|h| h.claude_pid == p.pid && h.task.is_some()))
+    }
+
     /// Every task of every project, as the files said when they were last read.
     pub(super) fn every_ticket(&self) -> &[(String, Ticket)] {
         &self.sq.all_tickets
