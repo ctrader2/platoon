@@ -103,6 +103,26 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
 }
 
+/// Claude Code installed but never run yet has no folder of its own: setup makes it, writes its settings there, still
+/// does Codex's steps, and platoon then starts.
+#[test]
+fn setup_makes_claude_codes_folder_when_it_is_not_there_yet() {
+    let (base, cache) = dirs("no-claude-folder");
+    let claude = base.join("not-yet");
+    let codex = cache.parent().unwrap().join("codex");
+    fs::create_dir_all(&codex).unwrap();
+    let mut env = with_claude();
+    env.push(("CODEX_HOME", Some(codex.display().to_string())));
+    let out = platoon_on(&claude, &cache, &env, &["setup"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let shown = text(&out.stdout);
+    assert!(shown.contains("Saved") && shown.contains("All set"), "{shown}");
+    assert!(claude.join("settings.json").is_file(), "Claude Code's settings are written in the folder setup made");
+    assert!(codex.join("hooks.json").is_file(), "Codex's steps ran too");
+    let screen = run_in_terminal_on(&claude, &cache, &env, "No sessions yet");
+    assert!(screen.contains("No sessions yet") && !screen.contains("one-time setup"), "{screen}");
+}
+
 /// setup installs no skill and takes no arguments: anything after it is refused with the usage, and nothing is
 /// written.
 #[test]

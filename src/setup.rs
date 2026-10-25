@@ -525,6 +525,8 @@ pub fn run(root: &Path) -> Result<Report, String> {
     let mut backed_up = false;
     let mut notes = Vec::new();
     if changed {
+        // Claude Code installed but never run has no folder yet.
+        fs::create_dir_all(root).map_err(|e| format!("couldn't make {}: {e}", root.display()))?;
         if path.exists() {
             fs::copy(&path, root.join("settings.json.platoon-bak")).map_err(|e| format!("couldn't back up settings: {e}"))?;
             backed_up = true;
@@ -986,6 +988,17 @@ mod tests {
         assert_eq!(check(&root), (0..STEPS.len()).map(|_| State::Done).collect::<Vec<_>>());
         assert!(notes_hook_installed(&root) && stop_hook_installed(&root));
         assert!(ready(&check(&root)) && statusline_installed(&root) && guard_installed(&root));
+    }
+
+    /// Claude Code installed but never run has no folder yet: setup makes it rather than failing.
+    #[test]
+    fn setup_makes_the_folder_when_claude_code_has_none_yet() {
+        let root = tmp("no-folder").join("not").join("yet");
+        let r = run(&root).unwrap();
+        assert_eq!(r.outcomes, (0..STEPS.len()).map(|_| Outcome::Added).collect::<Vec<_>>());
+        assert_eq!(r.saved.as_deref(), Some(root.join("settings.json").as_path()));
+        assert!(!r.backed_up, "there was nothing to back up");
+        assert!(ready(&check(&root)));
     }
 
     #[test]
