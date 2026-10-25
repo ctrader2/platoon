@@ -247,6 +247,10 @@ fn enter_right_after_starting_attaches_to_a_session_platoon_already_hosts() {
     for (k, v) in common::NO_REAL_CODEX {
         cmd.env(k, v); // never the real Codex: its folder or its program
     }
+    // Run from inside a task's session, the host would say it runs that task, and its row would be the task's.
+    for k in ["PLATOON_PROJECT", "PLATOON_OFFER_TASKS", "PLATOON_TASK"] {
+        cmd.env_remove(k);
+    }
     cmd.args(["host", "--program", "sh", "--dir"])
         .arg(&work)
         .args(["--rows", "24", "--cols", "80", "--", "-c", "echo reopened-$((40+2)); exec sleep 60"])
