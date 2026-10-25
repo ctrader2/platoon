@@ -1,10 +1,11 @@
 # platoon
 
-**Every Claude Code and Codex session you have, in one terminal app.**
+**Mission control for Claude Code and Codex.**
 
-See them all at a glance and pick any one up where you left it. Group them into projects whose notes every session
-reads. Hand a piece of work to a squad: it runs in its own copy of your repo, and comes back checked against what you
-asked for.
+One list of every Claude Code and Codex session across all your folders. Search them, archive them, and see at a glance
+which ones need you. Group work into projects whose shared notes grow as you work and reach every session in the
+project. Hand tasks to squads: repeatable workflows designed for one kind of work, like a feature, a bug fix or a
+review, each done only when a reviewing agent agrees the work does what you asked.
 
 ![platoon: Claude Code and Codex sessions in one list with both plans' usage, a project's notes, the Tasks tab with a task running in Codex and one waiting for an answer, starting a task with a squad, the Squads tab, and the list of themes](demo/platoon.gif)
 
