@@ -121,11 +121,13 @@ where Claude Code is installed, and Codex's first model on a computer with only 
 
 ### Sessions
 
-What naming and summarizing your conversations reads, and how often. Under the entries:
+Under **Making tasks**, whether a session asks before it starts working; under **Names and summaries**, what naming and
+summarizing your conversations reads, and how often. Under the entries:
 `Archived: N conversations, about X tokens to index (an estimate)`.
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
+| Offer tasks before starting work | Just before a session platoon started begins the work (an edit, an agent, a worktree), it asks you once whether to turn the work into tasks for a squad, or do it right there; never in a task's own session (see [The session offers to make them](tasks-and-squads.md#the-session-offers-to-make-them)). Off: no session asks, and `t` still makes tasks from a conversation. A session already running stops asking at once; switched back on, a session asks once it is started or resumed again. platoon makes no call of its own for it: the session itself asks. | Ask once (default), Off |
 | Sessions per call | How many sessions one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
 | Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
 | Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |

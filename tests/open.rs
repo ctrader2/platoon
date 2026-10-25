@@ -112,6 +112,11 @@ impl World {
         ]
     }
 
+    /// A plain shell standing in for claude (`shell_claude`).
+    fn shell(&self) -> String {
+        shell_claude(&self.claude).to_string_lossy().into_owned()
+    }
+
     fn register(&self, pid: u32, id: &str, started: u64) {
         fs::write(
             self.claude.join("sessions").join(format!("{pid}.json")),
@@ -134,7 +139,7 @@ impl World {
 #[test]
 fn platoon_open_starts_a_session_detaches_and_rejoins_it_by_id_with_the_screen_restored() {
     let w = World::new("open");
-    let mut t = Term::spawn(&["open"], &w.env("sh"), &w.work, 24, 80);
+    let mut t = Term::spawn(&["open"], &w.env(&w.shell()), &w.work, 24, 80);
     t.send(b"echo first-$((6*7))\r");
     t.wait_for("first-42");
     t.send(&[0]); // Ctrl+Space
@@ -146,7 +151,7 @@ fn platoon_open_starts_a_session_detaches_and_rejoins_it_by_id_with_the_screen_r
 
     // Rejoin by a prefix of its id.
     w.register(pid, "abc-123-def", 1);
-    let mut t2 = Term::spawn(&["open", "abc-1"], &w.env("sh"), &w.work, 24, 80);
+    let mut t2 = Term::spawn(&["open", "abc-1"], &w.env(&w.shell()), &w.work, 24, 80);
     t2.wait_for("first-42"); // restored from the host's snapshot, not typed again
     t2.send(b"echo second-$((2+2))\r");
     t2.wait_for("second-4");
@@ -213,7 +218,7 @@ fn platoon_open_asks_before_ending_a_copy_running_in_a_plain_terminal() {
 #[test]
 fn platoon_open_explains_itself_when_it_cannot_find_the_session() {
     let w = World::new("missing");
-    let mut t = Term::spawn(&["open", "zzzz"], &w.env("sh"), &w.work, 24, 80);
+    let mut t = Term::spawn(&["open", "zzzz"], &w.env(&w.shell()), &w.work, 24, 80);
     assert_eq!(t.wait_exit(), 1);
     assert!(t.text().contains("no session matches"), "{}", t.text());
 }
@@ -224,7 +229,7 @@ fn platoon_open_detaches_on_the_back_key_from_keys_json_and_passes_ctrl_space_th
     let config = w.cache.join("config");
     fs::create_dir_all(&config).unwrap();
     fs::write(config.join("keys.json"), r#"{ "back": "ctrl+q" }"#).unwrap();
-    let mut t = Term::spawn(&["open"], &w.env("sh"), &w.work, 24, 80);
+    let mut t = Term::spawn(&["open"], &w.env(&w.shell()), &w.work, 24, 80);
     t.send(b"echo first-$((6*7))\r");
     t.wait_for("first-42");
     // Ctrl+Space (NUL) goes to the session now; the shell is still there to answer.

@@ -59,6 +59,17 @@ pub fn iso(ms: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{frac:03}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// A stand-in `claude` in `dir` that is a plain interactive `sh`, whatever it is started with. (`sh` itself can't stand
+/// in for a session platoon starts: that is given the offer's hook, `--settings <json>`, which `sh` takes for an option
+/// it doesn't know.)
+pub fn shell_claude(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join("shell-claude.sh");
+    std::fs::write(&p, "#!/bin/sh\nexec sh\n").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
 pub fn tmp(name: &str) -> PathBuf {
     let d = removed_at_exit(std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d);
@@ -157,6 +168,10 @@ impl Term {
         cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
         for (k, v) in NO_REAL_CODEX {
             cmd.env(k, v); // ...nor the real Codex's folder or program
+        }
+        // Run from inside a session platoon started, the tests would inherit what it was started with.
+        for k in ["PLATOON_PROJECT", "PLATOON_OFFER_TASKS", "PLATOON_TASK"] {
+            cmd.env_remove(k);
         }
         for (k, v) in env {
             cmd.env(k, v);

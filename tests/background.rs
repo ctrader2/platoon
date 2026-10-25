@@ -80,8 +80,13 @@ impl World {
         ]
     }
 
+    /// How the stand-in was started each time; the offer's hook (`--settings` with `hook offer-tasks`) reads `+offer`.
     fn launches(&self) -> Vec<String> {
-        fs::read_to_string(&self.argv_log).unwrap_or_default().lines().map(String::from).collect()
+        let line = |l: &str| match l.split_once(" --settings ") {
+            Some((start, settings)) if settings.contains(" hook offer-tasks") => format!("{start} +offer"),
+            _ => l.to_string(),
+        };
+        fs::read_to_string(&self.argv_log).unwrap_or_default().lines().map(line).collect()
     }
 
     fn hosts(&self) -> usize {
@@ -202,7 +207,7 @@ fn a_background_entry_whose_process_has_gone_is_an_ordinary_idle_conversation_ag
     assert!(!t.stable().contains("Background"), "{}", t.text());
     t.send(b"\r");
     t.wait_for(&format!("fake-claude args:--resume {BG_ID}"));
-    assert_eq!(w.launches(), [format!("--resume {BG_ID}")]);
+    assert_eq!(w.launches(), [format!("--resume {BG_ID} +offer")], "resumed like any other, so it offers to make tasks");
     t.send(&[0]);
     t.wait_for("enter open");
     t.send(b"q");

@@ -391,18 +391,14 @@ fn codexs_hooks_hand_a_projects_notes_to_its_sessions_and_mark_the_notes_due_aft
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
     let context = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
     assert!(context.contains("\"Web\"") && context.contains("The shop's notes."), "{context}");
-    assert!(!context.contains("Ready to create tasks"), "only a session platoon started is told to offer tasks");
+    assert!(!context.contains("task add"), "{context}");
 
-    // One platoon started (`PLATOON_OFFER_TASKS=1`, which reaches Codex's hooks from the process platoon started):
-    // the offer, worded for Codex, by this platoon's full path.
+    // One platoon started (`PLATOON_OFFER_TASKS=1`, which reaches Codex's hooks from the process platoon started) is
+    // told nothing about making tasks at the start: that is a hook before its first edit (`tests/offer.rs`). The notes
+    // were given already, so nothing at all.
     let offer = [("PLATOON_OFFER_TASKS", "1".to_string())];
     let (code, out, _) = run_with(&w, &offer, &["hook", "session-start", "--agent", "codex"], &sample("SessionStart"));
-    assert_eq!(code, 0);
-    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
-    let context = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
-    assert!(context.contains("ask the user once, plainly, at the end of your reply: \"Ready to create tasks?\""), "{context}");
-    assert!(context.contains(&format!("{BIN} task add --project pweb --folder /work/repo --squad <squad>")), "{context}");
-    assert!(!context.contains("AskUserQuestion") && !context.contains("The shop's notes."), "the notes were given already: {context}");
+    assert_eq!((code, out.as_str()), (0, ""));
 
     // A prompt: nothing until the notes change, then the new version; never refused (Codex keeps one window itself).
     let (code, out, _) = run(&w, &["hook", "guard", "--agent", "codex"], &sample("UserPromptSubmit"));

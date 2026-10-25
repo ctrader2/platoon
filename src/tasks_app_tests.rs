@@ -526,6 +526,33 @@ fn sessions_platoon_starts_offer_to_make_tasks_but_a_tasks_own_session_does_not(
     assert!(!app.offers_tasks(Start::Attach("abcd1234")), "claude attach");
 }
 
+#[test]
+fn the_offer_is_a_setting_on_the_sessions_tab_and_off_no_session_offers() {
+    let w = World::new("tasks-offer-setting");
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('s'));
+    let (tab, at) = crate::settings::find_item(crate::settings::OFFER_TASKS).unwrap();
+    while app.settings_tab != tab {
+        key(&mut app, KeyCode::Tab);
+    }
+    key(&mut app, KeyCode::Home);
+    assert_eq!(app.setting, at);
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    for want in ["Making tasks", "Offer tasks before starting work", "Ask once", "Names and summaries", "Sessions per call"] {
+        assert!(shown.contains(want), "{want:?} missing:\n{shown}");
+    }
+    assert!(shown.contains("it asks you once") && shown.contains("Never in a task's own session"), "the explanation:\n{shown}");
+    let line = shown.lines().position(|l| l.contains("Offer tasks before starting work")).unwrap();
+    assert!(shown.lines().nth(line - 1).unwrap().contains("Making tasks"), "the heading is above it:\n{shown}");
+    assert!(app.offers_tasks(Start::New(None)));
+    key(&mut app, KeyCode::Left);
+    assert!(!crate::settings::load(&w.config).0.offer_tasks, "saved at once");
+    let shown = draw(&mut term, &app);
+    assert!(shown.lines().any(|l| l.contains("Offer tasks before starting work") && l.contains("Off")), "{shown}");
+    assert!(!app.offers_tasks(Start::New(None)) && !app.offers_tasks(Start::Resume("user-1")), "off: no session offers");
+}
+
 /// Write the check's answer (and whether it runs now) on task `n`.
 fn checked(w: &World, project: &str, n: u32, v: Option<crate::tickets::Verdict>, checking: bool) {
     Tickets::open(&w.config, project)

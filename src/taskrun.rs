@@ -20,7 +20,8 @@
 //!   (Codex): Needs you, with the question.
 //! - `task-before`, `PreToolUse` on shell commands, file edits and the question tool (Codex): a command that pushes or
 //!   publishes (`askmatch.rs`, Claude Code's `ask` rules) is refused until the user says yes in the session, and file
-//!   edits are refused while a plan waits for the user.
+//!   edits are refused while a plan waits for the user. In a session that is no task's but platoon started, it is the
+//!   offer to make tasks instead (`offerhook.rs`).
 //! - `task-notify`, `Notification` (Claude Code) or `PermissionRequest` (Codex): a permission prompt makes a Working
 //!   task Needs you.
 //! - `task-tool`, `PostToolUse` on every tool: the answer came (the plan approved, the question answered, the
@@ -348,7 +349,9 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
             let reason = stop(&end, at, &project, &mut store, &t)?;
             return Some(agent.hook_answer(&HookReply::SendBack(reason)).stdout);
         }
-        HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
+        HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. }
+        | HookEvent::SessionStart { .. }
+        | HookEvent::StartsWork { .. } => {}
     }
     None
 }
@@ -599,11 +602,12 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
 
 /// `platoon hook <name>` (of `agent`): always 0, with what the hook says on stdout. It never fails the session. A
 /// Codex task hook in a session that is no task's (most of them: these hooks are every Codex session's) ends at once,
-/// without reading anything.
+/// without reading anything, except `task-before` in a session platoon started: its edit may be the start of the work,
+/// which platoon offers to make tasks of (`offerhook.rs`).
 pub fn run_hook(name: &str, agent: Agent) -> i32 {
     let task = std::env::var(crate::agents::TASK_ENV).ok().filter(|t| !t.is_empty());
     if agent == Agent::Codex && task.is_none() {
-        return 0;
+        return if name == "task-before" { crate::offerhook::run(agent) } else { 0 };
     }
     let said = std::panic::catch_unwind(|| {
         let mut input = String::new();

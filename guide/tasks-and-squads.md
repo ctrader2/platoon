@@ -73,19 +73,34 @@ them all as **Not started**, `esc` makes nothing. Nothing starts until you press
 
 ### The session offers to make them
 
-A session platoon starts or resumes (not a task's own session) is told, through platoon's SessionStart hook, to watch
-for the moment the conversation settles on concrete work that could be handed off. Then it asks you once, with Claude
-Code's question tool: **Ready to create tasks?** On a yes it makes each task itself with `platoon task add` (by
-platoon's full path, so it works without `platoon` on your PATH), in the session's project and folder, with a **Done
-when** list and the squad that suits it; then it says how many it made and that they are on the Tasks tab. It starts
-none of them. It doesn't ask again in that conversation unless you bring it up. It needs the **Project notes** line of
-[`platoon setup`](install-and-setup.md#set-it-up-platoon-setup) (that is the SessionStart hook); sessions you start with
-plain `claude` outside platoon are not asked.
+A session platoon starts or resumes (not a task's own session) asks you once whether to hand the work on, **just
+before it starts working**: the first time it is about to launch an agent, edit a file in its folder, or make a
+worktree. Reading, searching and shell commands don't count, and neither does an edit outside the session's folder
+(Claude's memory and plans, or a notes folder linked into the repository that really lives elsewhere). platoon holds
+that one step back and has the session ask, with Claude Code's question tool: **Turn this into platoon tasks for a
+squad?**
 
-A Codex session platoon starts or resumes is told the same, through platoon's Codex hook (which Codex runs with your
-first message), except that it asks in its reply, in plain words, and you answer with your next message. Codex keeps
-its work inside the session's folder, and `platoon task add` writes in platoon's own folder, so Codex asks you to allow
-that command: allow it, and the tasks are made. Sessions you start with plain `codex` outside platoon are not asked.
+- **Make tasks**: it drafts the tasks, one for each piece of the work that can be done on its own, each with a **Done
+  when** list and the squad that suits it, shows them to you as a list and asks **Make these tasks?** before making
+  any. Then it makes each one with `platoon task add` (by platoon's full path, so it works without `platoon` on your
+  PATH), in the session's project and folder, says how many it made and that they are on the Tasks tab. It starts none
+  of them, and doesn't do their work itself.
+- **Do it here**: it says in a line that it won't ask again in this conversation, and that `t` on the session's row
+  makes tasks from it later ([Making tasks from a conversation](#making-tasks-from-a-conversation)), then carries on
+  with the step it was about to take.
+
+It asks once per conversation, whatever you answer: everything after that goes through. **Offer tasks before starting
+work** in Settings, Sessions switches it off (or back on): off, no session asks, and `t` still works. A session that
+was already running when you switched it on asks once it is started or resumed again. Sessions you start with plain
+`claude` outside platoon are never asked. Claude Code's sessions get the question from a hook platoon gives the
+sessions it starts (see [What platoon changes](what-platoon-changes.md#sessions-platoon-starts)); there is nothing to
+set up.
+
+A Codex session platoon starts or resumes asks the same, before its first edit, through platoon's Codex hook (the one
+[`platoon setup`](install-and-setup.md#codex) adds for tasks), except that it asks at the end of its reply, in plain
+words, and you answer with your next message. Codex keeps its work inside the session's folder, and `platoon task add`
+writes in platoon's own folder, so Codex asks you to allow that command: allow it, and the tasks are made. Sessions you
+start with plain `codex` outside platoon are not asked.
 
 ## Starting a task
 

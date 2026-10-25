@@ -2794,9 +2794,13 @@ impl App {
         }
     }
 
-    /// Is the session started as `start` says told to offer making tasks? A new one or a resumed one, but not a
-    /// task's own session and not a background session attached to (started elsewhere).
+    /// Does the session started as `start` say offer making tasks (`offerhook.rs`)? A new one or a resumed one, but
+    /// not a task's own session and not a background session attached to (started elsewhere), and not while the
+    /// setting is off (Sessions, "Offer tasks before starting work").
     pub(crate) fn offers_tasks(&self, start: Start) -> bool {
+        if !self.settings.get().offer_tasks {
+            return false;
+        }
         match start {
             Start::New(_) => true,
             Start::Resume(id) => self.sq.task_of(id).is_none(),
@@ -2806,27 +2810,29 @@ impl App {
 
     /// `launch`, for a session of `project`: claude gets `PLATOON_PROJECT` (so the notes hook knows), and with
     /// `place` (a new session) the process is remembered until its session id shows up and is put in the project.
-    /// A session (new or resumed, not a task's own, not `claude attach`) is told to offer making tasks
-    /// (`sessionhook::OFFER_ENV`).
+    /// A session that offers making tasks (`offers_tasks`) carries `offerhook::OFFER_ENV`, and Claude Code's is given
+    /// the offer's hook (`Agent::offering_args`).
     fn launch_in(&mut self, agent: Agent, dir: String, start: Start, project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
         let mut env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-        // (The hook words the offer for the agent: `sessionhook::offer_text`.)
-        if self.offers_tasks(start) {
-            env.push((crate::sessionhook::OFFER_ENV, "1"));
-        }
+        let args = if self.offers_tasks(start) {
+            env.push((crate::offerhook::OFFER_ENV, "1"));
+            agent.offering_args(start, &crate::offerhook::this_platoon())
+        } else {
+            agent.args(start)
+        };
         let at_ms = usage::now().saturating_sub(2) * 1000;
         // A unit test's program would be the real one: nothing is started, what would have been is noted.
         #[cfg(test)]
         {
             let _ = (rows, cols, at_ms, place);
             let env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            self.launched.push(Launched { agent, dir, args: agent.args(start), env });
+            self.launched.push(Launched { agent, dir, args, env });
             self.mode = Mode::List;
             true
         }
         #[cfg(not(test))]
-        match host::launch(&self.host_dirs(), agent, &self.program_of(agent), &dir, &agent.args(start), &env, rows, cols) {
+        match host::launch(&self.host_dirs(), agent, &self.program_of(agent), &dir, &args, &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 if let (Some(p), true) = (project, place)

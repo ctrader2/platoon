@@ -219,7 +219,7 @@ pub fn launch(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
     cmd.env_remove("PLATOON_PROJECT");
-    cmd.env_remove(crate::sessionhook::OFFER_ENV);
+    cmd.env_remove(crate::offerhook::OFFER_ENV);
     cmd.env_remove(crate::agents::TASK_ENV);
     // A unit test's folders are never the real ones (and a test must not look the real ones up).
     #[cfg(not(test))]

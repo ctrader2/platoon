@@ -31,7 +31,13 @@ sid="new-000$n"
 [ "$1" = "--resume" ] && sid="$2"
 printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
 echo "STARTED project:${PLATOON_PROJECT:-none} sid:$sid"
-echo "FIRST MESSAGE: $1"
+# The first message is the one argument that isn't an option's (the offer's hook comes as `--settings <json>`).
+first=
+while [ $# -gt 0 ]; do
+  case $1 in --settings | --resume) shift ;; *) first=$1 ;; esac
+  shift
+done
+echo "FIRST MESSAGE: $first"
 exec sh
 "#;
 
@@ -126,8 +132,16 @@ impl Lab {
     }
 
     /// The whole argument list the `k`th interactive claude was started with.
+    /// What the `k`th session was started with, after the offer's hook (`--settings <json>`) that a new one gets.
     fn started(&self, k: usize) -> String {
-        fs::read_to_string(self.fake.join("started").join(k.to_string())).unwrap_or_default()
+        let all = fs::read_to_string(self.fake.join("started").join(k.to_string())).unwrap_or_default();
+        match all.split_once('\n') {
+            Some(("--settings", rest)) => rest.split_once('\n').map_or(String::new(), |(settings, args)| {
+                assert!(settings.contains(" hook offer-tasks"), "{settings}");
+                args.to_string()
+            }),
+            _ => all,
+        }
     }
 
     fn projects(&self) -> Value {

@@ -53,6 +53,7 @@ mod notes;
 mod notes_app_tests;
 mod notesrun;
 mod notesupdate;
+mod offerhook;
 mod open;
 #[cfg(test)]
 mod perf;
@@ -151,6 +152,8 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook(hook_agent())),
+        // Given with `--settings` to the Claude Code sessions platoon starts (Codex's offer runs in `hook task-before`).
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("offer-tasks") => std::process::exit(offerhook::run(hook_agent())),
         // Claude Code's are given only to a task's session, with `--settings` (never installed in the user's own
         // settings); Codex's are in its hooks file for every session and act only in a task's (`PLATOON_TASK`).
         Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
@@ -244,7 +247,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook task-plan, hook task-question,
                   hook task-notify, hook task-tool, hook task-prompt, hook task-stop, hook task-start,
-                  hook task-before, notes-update   internal: run by Claude Code (and by Codex, with
+                  hook task-before, hook offer-tasks, notes-update   internal: run by Claude Code (and by Codex, with
                   --agent codex: hook guard, hook session-start, hook stop and the task hooks),
                   or by platoon itself";
 

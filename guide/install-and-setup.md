@@ -70,7 +70,7 @@ they reach Claude Code's, and a [task](tasks-and-squads.md#tasks-on-codex) can r
 | Project notes | Hands a project's notes to its Codex sessions when they start (Codex starts them with your first message) |
 | Changed notes | Passes notes that changed since to a running Codex session, with your next message |
 | Notes updates | Lets platoon keep a project's notes up to date after its Codex sessions stop |
-| Tasks | Six hooks that let a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you. In any Codex session that isn't a task's they end at once and do nothing |
+| Tasks | Six hooks that let a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you. In any Codex session that isn't a task's they end at once and do nothing, except that in a session platoon started the one before an edit has it [offer to make tasks](tasks-and-squads.md#the-session-offers-to-make-them) first, once |
 
 Each is a fixed command, the same for every session (`<platoon> hook session-start --agent codex`, `hook guard --agent
 codex`, `hook stop --agent codex`, and `hook task-start`, `task-before`, `task-notify`, `task-tool`, `task-prompt`,

@@ -12,14 +12,15 @@ writes, what it starts, and how to take it out again.
 | --- | --- | --- |
 | Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line |
 | Session guard | a `UserPromptSubmit` hook: `<platoon> hook guard` | refuses a message in a second copy of a conversation that is already running, and passes a project's changed notes to a running session |
-| Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted (at most 8,000 characters); a session platoon starts or resumes (it carries `PLATOON_OFFER_TASKS=1`) is also told to offer making tasks with `platoon task add` |
+| Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted (at most 8,000 characters) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop` | notes that a project's session finished answering, so its notes can be brought up to date later |
 
 Before it writes the file, setup copies it to `settings.json.platoon-bak` beside it. Everything else in the file is left
 as it was, including your own hooks. A status line of your own is never replaced: setup leaves it and says so.
 
 The hooks are quick and quiet. Each one finishes in a moment, and the guard is the only one that ever stops anything (a
-message typed into a second copy of a conversation).
+message typed into a second copy of a conversation). The sessions platoon starts get one more hook of their own, not
+in this file: see [Sessions platoon starts](#sessions-platoon-starts).
 
 ## In Codex's hooks
 
@@ -32,7 +33,7 @@ same for every session:
 | Project notes | a `SessionStart` hook: `<platoon> hook session-start --agent codex` | hands a project's notes to its Codex session when it starts (at most 8,000 characters) |
 | Changed notes | a `UserPromptSubmit` hook: `<platoon> hook guard --agent codex` | passes a project's changed notes to a running Codex session; it never refuses a message (Codex keeps one window per conversation itself) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop --agent codex` | notes that a project's Codex session finished answering, so its notes can be brought up to date later |
-| Tasks | `SessionStart`, `PreToolUse` (on `Bash`, `apply_patch` and `request_user_input` only), `PermissionRequest`, `PostToolUse`, `UserPromptSubmit` and `Stop` (given 12 minutes) hooks: `<platoon> hook task-start --agent codex`, `hook task-before`, `hook task-notify`, `hook task-tool`, `hook task-prompt`, `hook task-stop`, each with `--agent codex` | run a [task in Codex](tasks-and-squads.md#tasks-on-codex): write down its session, hold back a push until you say yes, hold back edits while a plan waits for you, commit what it changed at each stop (Codex can't, in its sandbox), and move the task along. In a Codex session that isn't a task's (no `PLATOON_TASK` in its environment) each ends at once without reading anything |
+| Tasks | `SessionStart`, `PreToolUse` (on `Bash`, `apply_patch` and `request_user_input` only), `PermissionRequest`, `PostToolUse`, `UserPromptSubmit` and `Stop` (given 12 minutes) hooks: `<platoon> hook task-start --agent codex`, `hook task-before`, `hook task-notify`, `hook task-tool`, `hook task-prompt`, `hook task-stop`, each with `--agent codex` | run a [task in Codex](tasks-and-squads.md#tasks-on-codex): write down its session, hold back a push until you say yes, hold back edits while a plan waits for you, commit what it changed at each stop (Codex can't, in its sandbox), and move the task along. In a Codex session that isn't a task's (no `PLATOON_TASK` in its environment) each ends at once without reading anything, except `hook task-before` in a session platoon started (`PLATOON_OFFER_TASKS=1`): there it holds back the first edit once, so the session [offers to make tasks](tasks-and-squads.md#the-session-offers-to-make-them) |
 
 Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it (when there was one); everything else
 in the file stays as it was.
@@ -53,6 +54,18 @@ entry of your own for that folder is left as it is. Uninstall takes out any that
 
 platoon adds no skill to Claude Code. Earlier platoons installed one, `/to-tickets` (`~/.claude/skills/to-tickets/`);
 platoon no longer touches it: delete that folder if you have it and don't want it.
+
+## Sessions platoon starts
+
+A session platoon starts or resumes in one of its hosts (not a task's own) carries `PLATOON_OFFER_TASKS=1` in its
+environment, and `PLATOON_PROJECT=<id>` when it is one of a project's. A Claude Code one is also started with one hook
+for that session only (`--settings`), never written to your own settings: a `PreToolUse` hook on `Agent`, `Task`,
+`Edit`, `Write`, `MultiEdit`, `NotebookEdit` and `EnterWorktree`, `<platoon> hook offer-tasks`. Your own settings and
+hooks still apply to the session too. The hook holds back the session's first start of work once, so that it asks
+whether to [make tasks](tasks-and-squads.md#the-session-offers-to-make-them), and leaves a mark for that session in
+platoon's cache (`offer-asked/`); after that it lets every step through at once. In a Codex session the same is done by
+`hook task-before` (above). With **Offer tasks before starting work** off (Settings, Sessions), a session is started
+without the variable or the hook, and one already running stops asking.
 
 ## Your plan: nothing until you say yes
 
@@ -123,6 +136,8 @@ small marks its parts leave for each other.
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
+- `offer-asked/`: one empty file per session that has been asked whether to make tasks (one older than 90 days goes the
+  next time a session is asked)
 - `deleted-projects/`: one backup of each project you deleted
 - `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon,
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))

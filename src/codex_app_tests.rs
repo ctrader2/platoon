@@ -473,12 +473,13 @@ fn with_both_installed_n_asks_which_agent_with_the_last_choice_picked_and_rememb
     app.on_mouse(click);
     assert_eq!(app.launched.iter().map(|l| l.agent).collect::<Vec<_>>(), [Agent::Codex, Agent::Codex]);
 
-    // Claude Code chosen: remembered in its turn, and started as before (no first message, the offer).
+    // Claude Code chosen: remembered in its turn, and started as before (no first message, the offer's hook).
     new_session_in(&mut app, &work);
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
     let l = app.launched.last().unwrap();
-    assert_eq!((l.agent, l.args.is_empty()), (Agent::Claude, true));
+    assert_eq!((l.agent, l.args.len(), l.args[0].as_str()), (Agent::Claude, 2, "--settings"));
+    assert!(l.args[1].contains(" hook offer-tasks"), "{:?}", l.args);
     assert_eq!(settings::load(&w.config).0.new_session_agent.as_deref(), Some("claude"));
 }
 
@@ -506,7 +507,7 @@ fn with_one_agent_installed_n_starts_it_without_asking() {
     let mut app = w.app();
     new_session_in(&mut app, &work);
     assert!(matches!(app.mode, Mode::List), "no question");
-    assert_eq!(app.launched.iter().map(|l| (l.agent, l.args.len())).collect::<Vec<_>>(), [(Agent::Claude, 0)]);
+    assert_eq!(app.launched.iter().map(|l| (l.agent, l.args[0].as_str())).collect::<Vec<_>>(), [(Agent::Claude, "--settings")]);
     // Codex only.
     let w = world("codex-new-codex-only");
     fs::create_dir_all(&work).unwrap();

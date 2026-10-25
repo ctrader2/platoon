@@ -21,6 +21,16 @@ here.
 
 ### Changed
 
+- **A session asks about tasks just before it starts working.** The "Ready to create tasks?" note a session got as it
+  started never once made it ask, so a hook asks instead: the first time a session platoon started or resumed (not a
+  task's own) is about to launch an agent, edit a file in its folder or make a worktree, platoon holds that step back
+  once and the session asks **Turn this into platoon tasks for a squad?** (Claude Code with its question tool; Codex at
+  the end of its reply). **Make tasks** drafts them, shows them and asks before making any; **Do it here** carries on and
+  says `t` makes tasks later. Shell commands, reading, and edits outside the session's folder (Claude's memory, a linked
+  notes folder) don't count. Once per conversation, whatever the answer. **Offer tasks before starting work** in
+  Settings, Sessions switches it off. Claude Code's sessions get the hook from platoon as they start (`--settings`, for
+  that session only); Codex's comes through the task hook `platoon setup` already adds, so nothing needs setting up
+  again. The session's start no longer carries the note.
 - **The header names each program's plan usage.** Its right end reads
   `Claude  5h ━━━━━━  12%  7d ━━━━━━  40%  │  Codex  30d ━━━━━━   2%`, so the figures before Codex's are plainly
   Claude's. With less room it shows bare percentages, then each plan's fullest window (the one that stops you first:

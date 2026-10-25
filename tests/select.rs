@@ -18,7 +18,7 @@ fn env(base: &std::path::Path) -> Vec<(&'static str, String)> {
         ("CLAUDE_CONFIG_DIR", base.join("claude").to_string_lossy().into()),
         ("PLATOON_CACHE_DIR", dir("cache")),
         ("PLATOON_CONFIG_DIR", dir("config")),
-        ("PLATOON_CLAUDE_BIN", "sh".into()),
+        ("PLATOON_CLAUDE_BIN", shell_claude(base).to_string_lossy().into()),
         ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
         ("NO_COLOR", String::new()), // the helper sets it, which makes platoon draw without any color
     ]

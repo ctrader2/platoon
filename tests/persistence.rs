@@ -166,7 +166,7 @@ fn quitting_the_ui_leaves_the_session_running() {
     // Nothing of the real ~/.claude or ~/.config/platoon is read or written.
     cmd.env("CLAUDE_CONFIG_DIR", cache.join("claude"));
     cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
-    cmd.env("PLATOON_CLAUDE_BIN", "sh");
+    cmd.env("PLATOON_CLAUDE_BIN", common::shell_claude(&cache));
     cmd.env("PLATOON_SKIP_SETUP_CHECK", "1"); // this test is about sessions, not setup
     cmd.env("TERM", "xterm-256color");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
