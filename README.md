@@ -1,28 +1,17 @@
 # platoon
 
-Every AI coding session you have, in one terminal app. See them all at a glance, pick up any one where you left it,
-group them into projects with shared notes, and start tasks that follow a squad's way of working.
+**Every Claude Code and Codex session you have, in one terminal app.**
+
+See them all at a glance and pick any one up where you left it. Group them into projects whose notes every session
+reads. Hand a piece of work to a squad: it runs in its own copy of your repo, and comes back checked against what you
+asked for.
 
 ![platoon: Claude Code and Codex sessions in one list with both plans' usage, a project's notes, the Tasks tab with a task running in Codex and one waiting for an answer, starting a task with a squad, the Squads tab, and the list of themes](demo/platoon.gif)
-
-[Full tour (MP4)](demo/platoon-tour.mp4)
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
 list, and everything below works with each, but for the status line. With both installed, either can be switched off in
 platoon's settings. → [Switching a program off](guide/settings-and-keys.md#switching-a-program-off)
-
-| | Claude Code | Codex |
-| --- | --- | --- |
-| Every conversation in one list: search, rename, archive | Yes | Yes |
-| Open, resume and start sessions that keep running after platoon closes, shared live | Yes | Yes |
-| Plan usage in the header, and how full each conversation's context is | Yes | Yes |
-| Projects, with notes that reach every session and keep themselves up to date | Yes | Yes |
-| Smart names and summaries, search by description (on the model you pick) | Yes | Yes |
-| Hand a conversation on to a fresh session (`h`), draft tasks from it (`t`) | Yes | Yes |
-| Tasks run by a squad (the squad's model decides which program runs it) | Yes | Yes |
-| Open the work in your own editor (`v`) | Yes | Yes |
-| platoon's status line (plan usage and context, inside the session) | Yes | No |
 
 ## What it does
 
@@ -49,17 +38,34 @@ platoon's settings. → [Switching a program off](guide/settings-and-keys.md#swi
 
 ## Install
 
-You need Linux or macOS, Claude Code (`claude`) or Codex (`codex`) installed and signed in, and a terminal of at least
-60 by 14. Any one of these:
+You need Linux or macOS, and Claude Code (`claude`) or Codex (`codex`) installed and signed in. Install platoon in
+any one of these ways.
+
+### Homebrew (macOS, Linux)
 
 ```
-brew install ctrader2/tap/platoon                    # Homebrew (macOS, Linux)
+brew install ctrader2/tap/platoon
+```
+
+### Install script
+
+```
 curl -LsSf https://github.com/ctrader2/platoon/releases/latest/download/platoon-tui-installer.sh | sh
-cargo install platoon-tui                            # Rust 1.88 or newer
-nix run github:ctrader2/platoon                      # Nix
 ```
 
-Then, once:
+### Cargo (Rust 1.88 or newer)
+
+```
+cargo install platoon-tui
+```
+
+### Nix
+
+```
+nix run github:ctrader2/platoon
+```
+
+Then, however you installed it, once:
 
 ```
 platoon setup
@@ -129,10 +135,9 @@ The [guide](guide/README.md) covers everything:
 MIT: see [LICENSE](LICENSE). The color themes belong to their authors and are credited in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-platoon is an independent project. It is not affiliated with or endorsed by Anthropic, OpenAI or Google. Claude and
+platoon is an independent project. It is not affiliated with or endorsed by Anthropic or OpenAI. Claude and
 Claude Code are trademarks of Anthropic.
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says how. Found a security problem?
-Please report it privately, as [SECURITY.md](SECURITY.md) describes.
+Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says how.
