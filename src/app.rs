@@ -701,6 +701,8 @@ pub struct App {
     program: String,
     /// The program that runs a conversation of Codex's, read once too.
     codex_program: String,
+    /// Claude Code's 1M window is switched off (`claude::large_window_off`, read once): its rows are measured against 200k.
+    claude_large_off: bool,
     /// The AI programs this computer has (read once), whatever the settings say: what the settings screen's Programs
     /// show, and where a running task of a program switched off is still found.
     installed: Providers,
@@ -796,7 +798,8 @@ impl App {
         let codex = codex::Reader::new();
         let cache = usage::cache_dir();
         let indexer = Indexer::spawn(reader.root(), Some(codex.root()), &cache);
-        let mut app = Self::build(reader, Some(codex), cache, archive::config_dir(), indexer, true);
+        let large_off = std::env::var("CLAUDE_CODE_DISABLE_1M_CONTEXT").ok();
+        let mut app = Self::build(reader, Some(codex), cache, archive::config_dir(), indexer, true, large_off.as_deref());
         app.installed = Providers::installed_here();
         app.sync_providers();
         app.rounded = detect_rounded();
@@ -814,17 +817,19 @@ impl App {
     #[cfg(test)]
     pub fn with_dirs(reader: Reader, cache: PathBuf, config: PathBuf) -> Self {
         let indexer = Indexer::inline(reader.root(), None, &cache);
-        Self::build(reader, None, cache, config, indexer, false)
+        Self::build(reader, None, cache, config, indexer, false, None)
     }
 
     /// `with_dirs`, reading Codex's conversations too, from its folder `codex`.
     #[cfg(test)]
     pub fn with_codex_dirs(reader: Reader, codex: codex::Reader, cache: PathBuf, config: PathBuf) -> Self {
         let indexer = Indexer::inline(reader.root(), Some(codex.root()), &cache);
-        Self::build(reader, Some(codex), cache, config, indexer, false)
+        Self::build(reader, Some(codex), cache, config, indexer, false, None)
     }
 
     /// `threaded`: the prompt index reads in the background (the real thing) rather than on the calling thread (tests).
+    /// `large_off`: `CLAUDE_CODE_DISABLE_1M_CONTEXT` in platoon's environment (`claude::large_window_off`), known before
+    /// the first rows are made.
     fn build(
         mut reader: Reader,
         codex: Option<codex::Reader>,
@@ -832,6 +837,7 @@ impl App {
         config: PathBuf,
         mut indexer: Indexer,
         threaded: bool,
+        large_off: Option<&str>,
     ) -> Self {
         // platoon's own `claude -p` helper runs in one folder of ours. It registers itself like any session, but it is
         // not a conversation: dropped here, at the two doors (running processes and saved transcripts), so nothing
@@ -847,6 +853,7 @@ impl App {
         let prompts = PromptIndex::spawn(&cache, prompt_cap);
         let _ = threaded;
         let (stops_tx, stops_rx) = channel();
+        let claude_large_off = claude::large_window_off(reader.root(), large_off);
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
@@ -972,6 +979,7 @@ impl App {
             apply_after: None,
             program: Agent::Claude.program(),
             codex_program: Agent::Codex.program(),
+            claude_large_off,
             installed: Providers::default(),
             providers: Providers::default(),
             guard_on: false,
@@ -1733,7 +1741,7 @@ impl App {
         let t = &e.t;
         let cwd = t.cwd.clone().unwrap_or_default();
         let agent = e.agent;
-        let est = (t.context_tokens * 100 / agent.context_window(t)).min(100) as u8;
+        let est = (t.context_tokens * 100 / agent.context_window(t, self.claude_large_off)).min(100) as u8;
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
         let model = t.model.as_deref().map(|m| agent.model_name(m));

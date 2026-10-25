@@ -1271,7 +1271,7 @@ pub(crate) mod tests {
         assert_eq!(busy(&rollout(PLANNING)), Some(false));
         assert_eq!(pretty_model("gpt-6-luna"), "GPT-6-Luna");
         assert_eq!(pretty_model("gpt-5.6-terra"), "GPT-5.6-Terra");
-        assert_eq!(super::super::Agent::Codex.context_window(&t), 258_400);
+        assert_eq!(super::super::Agent::Codex.context_window(&t, false), 258_400);
         assert_eq!(window_size(&Transcript::default()), DEFAULT_WINDOW);
     }
 

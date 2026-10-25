@@ -37,8 +37,10 @@ Each conversation takes two lines, its name line and its prompt line; the select
 **CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning colour
 above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has
 reported one, else platoon's: the last reply's input (what it read from the cache, what it wrote to it, and the rest)
-over the window, which is 1,000,000 tokens when the model's name says so (`[1m]`) or the conversation has already gone
-past 200,000, else 200,000. It is left blank for a conversation with no reply yet. A project's screen shows it too. A Codex conversation's window
+over the window. The window is 1,000,000 tokens for the models Claude Code gives 1M (Opus 4.7 and newer, Sonnet 5.5,
+Haiku 5.5, Fable), when the model's name says so (`[1m]`) or when the conversation has already gone past 200,000; else
+it is 200,000, as it is for every model when `CLAUDE_CODE_DISABLE_1M_CONTEXT` is set (in platoon's environment or in
+the `env` of Claude Code's `settings.json`). It is left blank for a conversation with no reply yet. A project's screen shows it too. A Codex conversation's window
 is the one Codex itself wrote down for it, so its figure is never a guess about the window.
 
 Status is `working`, `done` (the session finished and you haven't looked yet), `idle` (running, waiting for you: `●`),

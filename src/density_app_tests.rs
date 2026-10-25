@@ -159,12 +159,12 @@ fn the_context_column_is_blank_for_a_conversation_nothing_is_known_about() {
 fn the_context_column_says_how_full_each_conversation_is_and_warns_above_80_percent() {
     let w = World::new("d-context-pct");
     let at = crate::testkit::now_ms();
-    // The last reply's input, from the cache and not: 120k of a 200k window is 60%; 170k is 85%; 160k is 80% exactly.
+    // The last reply's input, from the cache and not: 120k of a 200k window (Haiku 4.5's) is 60%; 170k is 85%; 160k is 80% exactly.
     let talk = |id: &str, cwd: &str, mins: u64, input: u64, write: u64, read: u64| {
         let t = at - mins * 60_000;
         let lines = [
             serde_json::json!({"type":"user","cwd":cwd,"timestamp":crate::testkit::iso(t - 5000),"message":{"role":"user","content":format!("talk {id}")}}),
-            serde_json::json!({"type":"assistant","cwd":cwd,"timestamp":crate::testkit::iso(t),"message":{"model":"claude-opus-5-5",
+            serde_json::json!({"type":"assistant","cwd":cwd,"timestamp":crate::testkit::iso(t),"message":{"model":"claude-haiku-4-5",
                 "usage":{"input_tokens":input,"cache_creation_input_tokens":write,"cache_read_input_tokens":read,"output_tokens":50}}}),
         ];
         w.transcript_lines(id, &lines.map(|l| l.to_string()));

@@ -185,10 +185,11 @@ impl Agent {
         }
     }
 
-    /// How many tokens of context the conversation's model has room for.
-    pub fn context_window(self, t: &Transcript) -> u64 {
+    /// How many tokens of context the conversation's model has room for. `claude_large_off`: Claude Code's 1M window is
+    /// switched off (`claude::large_window_off`).
+    pub fn context_window(self, t: &Transcript, claude_large_off: bool) -> u64 {
         match self {
-            Agent::Claude => claude::window_size(t.context_tokens, &mut t.large_window.clone()),
+            Agent::Claude => claude::window_size(t, claude_large_off),
             Agent::Codex => codex::window_size(t),
         }
     }
@@ -1081,9 +1082,12 @@ pub(crate) mod tests {
         let a = Agent::Claude;
         assert_eq!(a.model_name("claude-opus-5-5"), "Opus 5.5");
         let t = Transcript { context_tokens: 120_000, ..Default::default() };
-        assert_eq!(a.context_window(&t), 200_000);
-        assert_eq!(a.context_window(&Transcript { large_window: true, ..t.clone() }), 1_000_000);
-        assert_eq!(a.context_window(&Transcript { context_tokens: 250_000, ..t }), 1_000_000);
+        assert_eq!(a.context_window(&t, false), 200_000);
+        assert_eq!(a.context_window(&Transcript { large_window: true, ..t.clone() }, false), 1_000_000);
+        assert_eq!(a.context_window(&Transcript { context_tokens: 250_000, ..t.clone() }, false), 1_000_000);
+        let on = |model: &str| Transcript { model: Some(model.into()), ..t.clone() };
+        assert_eq!(a.context_window(&on("claude-opus-5-5"), false), 1_000_000, "a model Claude Code gives 1M");
+        assert_eq!(a.context_window(&on("claude-opus-5-5"), true), 200_000, "unless 1M is switched off");
     }
 
     /// A computer with Claude Code (a stand-in that is never run) and no Codex.

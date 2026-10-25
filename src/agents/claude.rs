@@ -641,13 +641,49 @@ fn says_large_window(model: &str) -> bool {
     m.ends_with("[1m]") || m.contains("context-1m")
 }
 
-/// The transcript doesn't record the model's window size, so infer it: 200k until the model id names the 1M window
-/// or the session is seen past 200k tokens, then 1M for good (compaction shrinks usage but not the window).
-pub fn window_size(tokens: u64, large: &mut bool) -> u64 {
-    if tokens > DEFAULT_WINDOW {
-        *large = true;
+/// Does Claude Code give this model the 1M-token window without `[1m]` in its id: Opus 4.7 and newer, Sonnet and
+/// Haiku 5.5 and newer, every Fable and Mythos? Ids as any provider writes them: `claude-opus-5-5`,
+/// `us.anthropic.claude-opus-4-7-v1:0`, `claude-opus-4-7@20260416`.
+fn large_by_default(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    let Some((_, rest)) = m.split_once("claude-") else { return false };
+    let rest = rest.split(['@', '[', ':']).next().unwrap_or_default();
+    let mut family = None;
+    let mut version = Vec::new();
+    for t in rest.split('-') {
+        if t.len() <= 2 && !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+            version.push(t.parse::<u32>().unwrap_or(0));
+        } else if family.is_none() && t.chars().all(|c| c.is_ascii_alphabetic()) {
+            family = Some(t);
+        }
     }
-    if *large { LARGE_WINDOW } else { DEFAULT_WINDOW }
+    let v = (version.first().copied().unwrap_or(0), version.get(1).copied().unwrap_or(0));
+    match family {
+        Some("fable" | "mythos") => true,
+        Some("opus") => v >= (4, 7),
+        Some("sonnet" | "haiku") => v >= (5, 5),
+        _ => false,
+    }
+}
+
+/// The transcript doesn't record the model's window size, so infer it: 1M when Claude Code gives the model 1M
+/// (`large_by_default`, unless `large_off`: `large_window_off`), when the model id names the 1M window, or once the
+/// session is seen past 200k tokens (for good: compaction shrinks usage but not the window); else 200k.
+pub fn window_size(t: &Transcript, large_off: bool) -> u64 {
+    let large = t.large_window || t.context_tokens > DEFAULT_WINDOW || !large_off && t.model.as_deref().is_some_and(large_by_default);
+    if large { LARGE_WINDOW } else { DEFAULT_WINDOW }
+}
+
+/// Is Claude Code's 1M window switched off (`CLAUDE_CODE_DISABLE_1M_CONTEXT`), in `env` (its value in platoon's own
+/// environment, which the sessions platoon starts inherit) or in the `env` of Claude Code's settings in `root`?
+pub fn large_window_off(root: &Path, env: Option<&str>) -> bool {
+    let truthy = |v: &str| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+    let settings = fs::read_to_string(root.join("settings.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let in_settings = settings
+        .as_ref()
+        .and_then(|v| v.get("env")?.get("CLAUDE_CODE_DISABLE_1M_CONTEXT").cloned())
+        .is_some_and(|v| v.as_str().map_or(v.as_u64() == Some(1) || v.as_bool() == Some(true), truthy));
+    env.is_some_and(truthy) || in_settings
 }
 
 /// Working directory a conversation was run in: the first `cwd` recorded in its transcript.
@@ -1433,11 +1469,74 @@ mod tests {
 
     #[test]
     fn window_estimate_never_flips_back() {
-        let mut large = false;
-        assert_eq!(window_size(190_000, &mut large), 200_000);
-        assert_eq!(window_size(210_000, &mut large), 1_000_000);
-        // After compaction the usage drops, but the window is still the large one.
-        assert_eq!(window_size(60_000, &mut large), 1_000_000);
+        let at = |tokens: u64, large_window: bool| Transcript { context_tokens: tokens, large_window, ..Transcript::default() };
+        assert_eq!(window_size(&at(190_000, false), false), 200_000);
+        assert_eq!(window_size(&at(210_000, false), false), 1_000_000);
+        // After compaction the usage drops, but the window is still the large one (the read saw it past 200k).
+        assert_eq!(window_size(&at(60_000, true), false), 1_000_000);
+    }
+
+    #[test]
+    fn the_models_claude_code_gives_1m_are_measured_against_1m() {
+        let pct = |model: &str, off: bool| {
+            let t = Transcript { model: Some(model.into()), context_tokens: 150_000, ..Transcript::default() };
+            t.context_tokens * 100 / window_size(&t, off)
+        };
+        for model in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-mythos-5-1",
+            "anthropic.claude-opus-5-5",
+            "us.anthropic.claude-opus-4-7-v1:0",
+            "claude-opus-4-7@20260416",
+            "claude-haiku-5-5-20261001",
+            "Claude-Sonnet-5-5",
+        ] {
+            assert_eq!(pct(model, false), 15, "{model}");
+            assert_eq!(pct(model, true), 75, "{model}, with CLAUDE_CODE_DISABLE_1M_CONTEXT");
+        }
+        for model in [
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-5",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-opus-4-5-20251101",
+            "claude-3-5-sonnet-20241022",
+            "anthropic.claude-sonnet-4-6",
+            "some-other-model",
+            "<synthetic>",
+        ] {
+            assert_eq!(pct(model, false), 75, "{model}");
+        }
+    }
+
+    #[test]
+    fn claude_codes_1m_window_can_be_switched_off_in_its_settings_or_the_environment() {
+        let root = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-1m-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert!(!large_window_off(&root, None), "no settings file");
+        for (env, off) in [(Some("1"), true), (Some("true"), true), (Some("0"), false), (Some(""), false), (None, false)] {
+            assert_eq!(large_window_off(&root, env), off, "{env:?}");
+        }
+        let with = |settings: &str| {
+            fs::write(root.join("settings.json"), settings).unwrap();
+            large_window_off(&root, None)
+        };
+        assert!(with(r#"{"env":{"CLAUDE_CODE_DISABLE_1M_CONTEXT":"1"}}"#));
+        assert!(with(r#"{"env":{"CLAUDE_CODE_DISABLE_1M_CONTEXT":1}}"#));
+        assert!(!with(r#"{"env":{"CLAUDE_CODE_DISABLE_1M_CONTEXT":"0"}}"#));
+        assert!(!with(r#"{"env":{"OTHER":"1"}}"#));
+        assert!(!with(r#"{"env":"1"}"#));
+        assert!(!with("not json"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1465,14 +1564,13 @@ mod tests {
             ],
         );
         assert_eq!((t.context_tokens, t.large_window), (120_000, false));
-        let mut large = t.large_window;
-        assert_eq!(t.context_tokens * 100 / window_size(t.context_tokens, &mut large), 60);
+        assert_eq!(t.context_tokens * 100 / window_size(&t, false), 12, "Opus 5.5's window is 1M");
+        assert_eq!(t.context_tokens * 100 / window_size(&t, true), 60, "unless Claude Code's 1M is switched off");
         // A model id that names the 1M window: the same use is a small share of it.
         for model in ["claude-opus-5-5[1m]", "claude-sonnet-5-context-1m"] {
             let t = read_with("b.jsonl", &[reply(model, 2_000, 8_000, 110_000, false)]);
             assert!(t.large_window, "{model}");
-            let mut large = t.large_window;
-            assert_eq!(window_size(t.context_tokens, &mut large), 1_000_000, "{model}");
+            assert_eq!(window_size(&t, false), 1_000_000, "{model}");
         }
         // Past 200k the window must be the large one, whatever the id says.
         assert!(read_with("c.jsonl", &[reply("claude-opus-5-5", 0, 0, 250_000, false)]).large_window);

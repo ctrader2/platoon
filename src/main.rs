@@ -830,6 +830,14 @@ mod tests {
         assert_eq!((text.matches(" 15%").count(), text.matches(" 75%").count()), (3, 2), "{text}");
     }
 
+    #[test]
+    fn with_claude_codes_1m_window_switched_off_a_1m_model_is_measured_against_200k() {
+        let w = World::new("window-off");
+        at_150k(&w, "aaa", "claude-opus-5-5", 1);
+        std::fs::write(w.root.join("settings.json"), r#"{"env":{"CLAUDE_CODE_DISABLE_1M_CONTEXT":"1"}}"#).unwrap();
+        assert_eq!(w.app().sessions[0].context_pct, 75);
+    }
+
     // --- one row per conversation (the earlier pid-per-row bug) ------------------------------------
 
     #[test]
