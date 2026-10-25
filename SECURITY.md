@@ -38,7 +38,7 @@ describes all of it. Problems in those areas are what we most want to hear about
   it won't, or that runs something other than platoon;
 - another user on the same computer being able to reach your sessions: the session hosts' sockets and files in
   `~/.cache/platoon/hosts`, or anything else platoon writes;
-- text from a transcript, a ticket, a project's notes, a branch name or a file name making platoon run a command, or
+- text from a transcript, a task, a project's notes, a branch name or a file name making platoon run a command, or
   escaping out of the terminal (escape sequences that do more than draw);
 - a task's session getting past the publish gate (`git push`, `gh pr create` and the other commands the
   [guide](guide/what-platoon-changes.md#tasks) lists, on Claude Code and on Codex) through a way of writing a command that

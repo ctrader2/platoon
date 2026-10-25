@@ -84,8 +84,10 @@ One call at a time, in this order: a description search you asked for, conversat
 substantive messages, i.e. not "yes", "continue", "ok", "go ahead", "thanks" or anything under 10 characters, and quiet for
 60 seconds), a conversation you just took out of the archive or opened, first-time names for active conversations (newest
 first), then archived ones if you chose that. Archived conversations may use at most half (a setting) of what is left of
-the day's limit, so the conversations you are using always have room. The header shows `✦ Indexing 12 of 240` while there
-is work.
+the day's limit, so the conversations you are using always have room. The work goes on quietly: names and summaries
+appear in the list as they arrive, and when naming is held up the settings' Smart features tab says why under its
+entries (`Naming is waiting: ...`). (The `indexing N…` that can show in the header is platoon reading your
+conversations from disk, which spends no tokens: see [Big histories](sessions.md#big-histories).)
 
 ## Where it is kept
 
@@ -153,9 +155,9 @@ the switches, the daily limit and the back-off. The call is `codex exec` with yo
 
 ## `platoon tokens`
 
-`platoon tokens` shows whether the features are on (the master switch and each feature's switch) and today's total
-(each installed program's apart, with its plan usage and any back-off), and under it how many tokens each feature used
-and in how many calls (the hand-off, tasks from a conversation, task checks and
+`platoon tokens` (or `platoon tokens status`) shows whether the features are on (the master switch and each feature's
+switch) and today's total (each installed program's apart, with its plan usage and any back-off), and under it how many
+tokens each feature used and in how many calls (the hand-off, tasks from a conversation, task checks and
 `platoon tokens test` appear there too, by name).
 
 It also names the model each setting uses and the program that runs it (`Model for smart features: Haiku (Claude

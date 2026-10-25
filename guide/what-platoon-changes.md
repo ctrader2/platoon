@@ -123,13 +123,22 @@ an editor with a window of its own. It never deletes the branch. See [Starting a
 **Config** (`~/.config/platoon`, or `$XDG_CONFIG_HOME/platoon`, or `$PLATOON_CONFIG_DIR`): things you made or chose, kept
 because they would be lost or cost tokens to make again.
 
-- `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what an earlier setup remembered)
+- `settings.json`, `keys.json` (yours; platoon never writes it)
 - `names.json` (names you gave), `archive.json` (archived conversations), `summaries.json` (smart names and summaries)
-- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `project.md.bak` (the notes as they were the first time an update condensed them), `notes-state.json`, and the tasks
-  (`tasks.json`, `tasks/` with each task's text and its own folder: the squad it was started with, its plan, the last
-  check of its work); `tasks.json` and `tasks/` at the top for tasks in no project
-- `squads/` (your own squads, and built-in ones you replaced, `<id>.md`), `prompts/` (system prompts you changed),
-  `themes/` (your own themes)
+- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `project.md.bak` (the notes as
+  they were the first time an update condensed them), `notes-state.json`, and the tasks (`tasks.json`, `tasks/` with
+  each task's text and its own folder: the squad it was started with (`squad.md`, `squads/`), its plan (`plan.md`),
+  the last check of its work (`verdict.json`), and for a task on Codex `plan-pending` (its plan still waits for your
+  answer) and `held-command.json` (the command held back for your yes)); `tasks.json` and `tasks/` at the top for
+  tasks in no project
+- `projects.lock`, `project.lock` and `tasks.lock`: empty files beside `projects.json`, a project's notes and each
+  `tasks.json`, which platoon's parts (the app, the hooks, the notes helper, `platoon task add`) lock so that only one
+  writes at a time
+- `squads/` (your own squads, and built-in ones you replaced, `<id>.md`), `prompts/` (system prompts you changed, and
+  `built-in.json`), `themes/` (your own themes)
+- `.bak` copies: of a file platoon couldn't read, kept before it wrote a fresh one (`settings.json.bak`,
+  `names.json.bak`, `archive.json.bak`, `summaries.json.bak`, `projects.json.bak`; `.bak.1` and on when there is one
+  already), of a system prompt you restored (`prompts/<name>.md.bak`) and of a squad you deleted (`squads/<id>.md.bak`)
 
 **Cache** (`~/.cache/platoon`, or `$XDG_CACHE_HOME/platoon`, or `$PLATOON_CACHE_DIR`): things platoon can make again, or
 small marks its parts leave for each other.
@@ -138,14 +147,16 @@ small marks its parts leave for each other.
   and the messages you typed, for the list and search. Deleting them is harmless: they are rebuilt.
 - `hosts/`: one small file and one socket per session platoon runs, in a folder only you can enter
 - `status/`: the figures the status line reports, per session
-- `ai-usage.json`: tokens used per day (numbers only), and `ai-work/`, the empty folder the `claude -p` and `codex exec`
-  calls run in
+- `ai-usage.json`: tokens used per day (numbers only), with `ai-usage.lock` beside it so two writers take turns, and
+  `ai-work/`, the empty folder the `claude -p` and `codex exec` calls run in
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
 - `offer-asked/`: one empty file per session that has been asked whether to make tasks (one older than 90 days goes the
   next time a session is asked)
 - `deleted-projects/`: one backup of each project you deleted
+- `task-drafts/`: a task drafted from a conversation (`t`) while you edit it with `e`, as a file of its own; it goes
+  when the editor is done
 - `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon,
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
 
@@ -155,7 +166,8 @@ small marks its parts leave for each other.
 platoon's hooks, and the trust in the folders of tasks' worktrees while they are there, which Codex writes in its
 `config.toml` when platoon asks it to.
 
-**In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it.
+**In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it (setup makes the file,
+and the folder, when Claude Code hasn't yet).
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
 `~/.claude/projects` for platoon's `claude -p` calls, and the sessions platoon starts are ordinary Claude Code sessions,
 saved by Claude Code like any other.

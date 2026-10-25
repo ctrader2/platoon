@@ -23,7 +23,7 @@ Any one of these. Each puts the `platoon` command on your path (the package is c
 | --- | --- | --- |
 | Homebrew (macOS, Linux) | `brew install ctrader2/tap/platoon` | `brew upgrade platoon` |
 | The install script (macOS, Linux) | `curl -LsSf https://github.com/ctrader2/platoon/releases/latest/download/platoon-tui-installer.sh \| sh` | the same command again |
-| crates.io | `cargo install platoon-tui` | the same command again |
+| crates.io | `cargo install --locked platoon-tui` | the same command again |
 | Nix | `nix run github:ctrader2/platoon` (or add the flake to your configuration) | `nix run --refresh github:ctrader2/platoon` |
 | From source | `git clone https://github.com/ctrader2/platoon && cd platoon && cargo install --path .` | `git pull`, then `cargo install --path .` |
 
@@ -46,7 +46,8 @@ out.
 `platoon setup` is a one-time step, and where Claude Code is installed `platoon` won't start until it's done. It shows a
 checklist of what it changes in Claude Code's `settings.json` (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`). When that file is already
 there, it backs it up first, as `settings.json.platoon-bak` beside it (and says so), and leaves everything else in it
-alone, your own hooks included.
+alone, your own hooks included. When it isn't there yet (Claude Code is installed but you haven't run it), setup makes
+it, and its folder if needed.
 
 | Step | Why |
 | --- | --- |
@@ -111,6 +112,7 @@ With both installed, either one can be [switched off](settings-and-keys.md#switc
 (General, Programs): platoon then treats it as not installed. `platoon setup` skips it and says so ("Codex is switched off
 in platoon's settings, so setup skipped it"), leaving what it added there before as it is, and with Claude Code switched
 off `platoon` starts without asking for Claude Code's steps.
+
 ### Running it again
 
 Running `platoon setup` again is harmless: finished steps show as already done, and a step whose command points at a

@@ -84,7 +84,7 @@ N on Codex, of M tokens each`), and, when naming is held up, why (`Naming is wai
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
-| Enable features which require tokens | The master switch for everything that uses your Claude plan. | Off (default), On |
+| Enable features which require tokens | The master switch for everything that uses your plan (Claude's, or your ChatGPT plan through Codex). | Off (default), On |
 | Smart names and summaries, Find a session by description, Project notes, Project descriptions | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off / On (the two project ones are On once the master switch is) |
 | Daily token limit | The most tokens those features may use in a day, on Claude Code and on Codex each (tokens of the two aren't one currency); at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
 | Pause above plan usage | Background work stops while the plan it would use is used more than this much: Claude's plan for a Claude model, your ChatGPT plan's Codex limits for an OpenAI one. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
@@ -177,14 +177,16 @@ The settings live in `~/.config/platoon/settings.json` (`$PLATOON_CONFIG_DIR`, o
 shows the exact path). platoon doesn't create it until you change something, and you can edit it by hand too:
 
 ```json
-{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
+{"version": 1, "idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
  "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000,
- "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
- "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
+ "tokens_enabled": false, "tokens_asked": true, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000,
+ "ai_pause_percent": 80, "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
  "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "", "files_editor_ask": false, "notes_quiet_minutes": 3,
- "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true}
+ "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true, "offer_tasks": true}
 ```
+
+This one has no `ai_model` or `notes_model`: no model has been picked, so the defaults for this computer apply.
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that setting, when
 it moves to the nearest step. Off is the same as `0` in the file. The limits:
@@ -206,6 +208,12 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `update_check` is `true` or `false`; anything else there means the default (`true`).
+- `offer_tasks` is `true` (the default) or `false`: **Offer tasks before starting work** on the Sessions tab; anything
+  else there means `true`.
+- `tokens_enabled` is the master switch for the smart features (`false` unless you said yes), and `token_features` has
+  one switch per feature (`names`, `find`, `project_notes`, `project_description`). `tokens_asked` is `true` once
+  `platoon setup` has asked whether platoon may use your plan, so it doesn't ask again.
+- `version` is the file's format; platoon writes `1` and leaves it alone.
 - `use_claude_code` and `use_codex` are `true` (the default) or `false`: whether platoon uses each program (see
   [Switching a program off](#switching-a-program-off)); anything else there means `true`. A file that switches off every
   program this computer has is ignored, since platoon needs one.
@@ -285,7 +293,12 @@ Each is explained where it matters; this is the list.
 | --- | --- |
 | `PLATOON_CONFIG_DIR` | platoon's config folder, instead of `$XDG_CONFIG_HOME/platoon` or `~/.config/platoon` |
 | `PLATOON_CACHE_DIR` | platoon's cache folder, instead of `$XDG_CACHE_HOME/platoon` or `~/.cache/platoon` |
+| `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | where platoon's config and cache folders go when `PLATOON_CONFIG_DIR` and `PLATOON_CACHE_DIR` aren't set (`$XDG_CONFIG_HOME/platoon`, `$XDG_CACHE_HOME/platoon`) |
 | `CLAUDE_CONFIG_DIR` | Claude Code's own: where platoon looks for Claude Code's folder, instead of `~/.claude` |
+| `CODEX_HOME` | Codex's own: where platoon looks for Codex's folder, instead of `~/.codex` |
+| `PLATOON_CLAUDE_BIN` | the program platoon runs as Claude Code, instead of `claude` on your path (a wrapper script, say); set, Claude Code counts as installed |
+| `PLATOON_CODEX_BIN` | the program platoon runs as Codex, instead of `codex` |
+| `CLAUDE_CODE_DISABLE_1M_CONTEXT` | Claude Code's own, read from platoon's environment or the `env` of Claude Code's `settings.json`: a Claude conversation's CONTEXT figure counts against a 200,000-token window instead of 1M (see [What a row shows](sessions.md#what-a-row-shows)) |
 | `PLATOON_COLORS` | `truecolor` or `256`: see [Terminals without 24-bit color](themes.md#terminals-without-24-bit-color) |
 | `PLATOON_BADGES` | `rounded` or `square`: the [count badges](sessions.md#keys) |
 | `PLATOON_GLYPHS` | `plain` for `*` and `-` in place of `✦` and `•` (the default on the Linux console); `fancy` for the symbols |

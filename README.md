@@ -11,8 +11,9 @@ review, each done only when a reviewing agent agrees the work does what you aske
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
-list, and everything below works with each, but for the status line. With both installed, either can be switched off in
-platoon's settings. → [Switching a program off](guide/settings-and-keys.md#switching-a-program-off)
+list, and everything below works with each, but for the status line and the names of a task's helpers at work, which
+only Claude Code has. With both installed, either can be switched off in platoon's settings.
+→ [Switching a program off](guide/settings-and-keys.md#switching-a-program-off)
 
 ## What it does
 
@@ -29,9 +30,9 @@ platoon's settings. → [Switching a program off](guide/settings-and-keys.md#swi
   (the squad's model decides) in a copy of your folder (a git worktree on the branch `task/<N>`), following a squad, a
   short Markdown file of steps for that kind of work (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or
   your own). It can show you its plan first and wait for your yes, and it waits for you before a push, a pull request
-  or a release. It runs your repo's tests itself, and when it stops a fresh check that can only read goes over its
-  work against the task before it is Done. The Tasks tab shows every task across your projects, what each one needs
-  from you and which of its squad's steps it is on.
+  or a release. The session runs your repo's tests and names them in its last message, and when it stops a fresh
+  check that can only read goes over its work against the task before it is Done. The Tasks tab shows every task
+  across your projects, what each one needs from you and which of its squad's steps it is on.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
@@ -57,7 +58,7 @@ curl -LsSf https://github.com/ctrader2/platoon/releases/latest/download/platoon-
 ### Cargo (Rust 1.88 or newer)
 
 ```
-cargo install platoon-tui
+cargo install --locked platoon-tui
 ```
 
 ### Nix

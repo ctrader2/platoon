@@ -128,12 +128,12 @@ next time. If platoon finds nothing at all it offers `nano` and `vi`.
 The same list of editors is used for a task's text and for the
 [system prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).
 
-**A new file starts from a template**: the two headings that are always there, **Summary** and **Decisions**. The
-sections in between are added as the work needs them (see [The shape of the notes](#the-shape-of-the-notes)). You don't
-have to start it: with Project notes on, platoon writes the template itself the first time a session of the project
-finishes answering, or a session joins it, and fills it in a few minutes later (see
-[Notes that keep themselves up to date](#notes-that-keep-themselves-up-to-date)). Until then the notes pane says so;
-`e` starts the file by hand straight away if you would rather write the first lines yourself.
+**A new file starts from a template**: two headings, **Summary** and **Decisions**. **Open questions** is added after
+the summary the first time something is open, and the sections in between as the work needs them (see
+[The shape of the notes](#the-shape-of-the-notes)). You don't have to start it: with Project notes on, platoon writes
+the template itself the first time a session of the project finishes answering, or a session joins it, and fills it in
+a few minutes later (see [Notes that keep themselves up to date](#notes-that-keep-themselves-up-to-date)). Until then
+the notes pane says so; `e` starts the file by hand straight away if you would rather write the first lines yourself.
 
 **Nothing is lost.** Before every change platoon didn't make itself, the version that was there is copied into
 `~/.config/platoon/projects/<id>/history/`, newest first, at most 20 per project (the oldest goes). `c` shows the last
@@ -147,7 +147,8 @@ so and only the first 8,000 characters are sent (see [The notes reach every sess
 
 ## The shape of the notes
 
-Three parts of `project.md` are fixed, and everything else fits the work:
+Three parts of `project.md` have a fixed place (the template starts with the first and the last; Open questions comes the
+first time something is open), and everything else fits the work:
 
 - **Summary**, at the top: a few lines saying what this project is and where it stands, so a new session (and you) can
   read it in ten seconds.
@@ -247,7 +248,7 @@ The three that stop **everything** that uses tokens - the day's limit, the plan 
 said quietly in the header, on every tab, because those arrive out of nowhere:
 
 ```
-platoon   1 Sessions 3   2 Projects 1   ✦ smart features paused · your Claude plan is 82% used (weekly limit) · press s for the settings
+platoon    1 Sessions   2 Projects   3 Tasks   4 Squads    ✦ smart features paused · your Claude plan is 82% used (weekly limit) · press s for the settings
 ```
 
 A switch you turned off yourself is not in the header (it would sit there for as long as you left it off); it is said

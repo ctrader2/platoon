@@ -321,7 +321,9 @@ as `gpt-6-luna`) and kept exactly so; the model decides the program that runs it
   start: `s` says why, and nothing is made.
 - **The verdict model can be any model installed**, Claude's or Codex's (see
   [Choosing a model](settings-and-keys.md#choosing-a-model)): the check is one call, which either program can make. On
-  Codex it runs in Codex's read-only sandbox in the task's folder (see [Calls on Codex](tokens.md#calls-on-codex)). A file of your own in `~/.config/platoon/squads/<id>.md` is a squad of yours, and one named like a
+  Codex it runs in Codex's read-only sandbox in the task's folder (see [Calls on Codex](tokens.md#calls-on-codex)).
+
+A file of your own in `~/.config/platoon/squads/<id>.md` is a squad of yours, and one named like a
 built-in (`feature.md`) replaces it. A file with something wrong in it is listed as **needs fixing** and can't start a
 task; the list says what is wrong. A started task keeps the squad it started with (its copy is in the task's own folder).
 
@@ -329,7 +331,7 @@ task; the list says what is wrong. A started task keeps the squad it started wit
 
 The fourth tab, `4` **Squads**, lists every squad: the built-ins first, then yours by name, each with what it is for and
 where it comes from (**built in**, **yours**, or **yours, replaces the built-in**), and **needs fixing** when its file has
-something wrong. From 80 columns the picked squad is beside the list: what it is for, its model and verdict model (by
+something wrong. From 78 columns the picked squad is beside the list: what it is for, its model and verdict model (by
 their names; with both programs installed, the one that runs each, **Opus (Claude Code)**, **GPT-6-Luna (Codex)**; and
 **(needs Codex, not installed)** or the like for one this computer can't run), whether it plans first,
 its steps, and under them what is wrong with its file, one line each.
