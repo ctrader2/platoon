@@ -310,7 +310,11 @@ impl Projects {
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                     .unwrap_or_default(),
-                description: o.get("description").and_then(Value::as_str).map(|d| clean(d, crate::describe::MAX_CHARS)).unwrap_or_default(),
+                description: o
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(|d| clean(d, crate::describe::KEEP_CHARS))
+                    .unwrap_or_default(),
                 description_at: o.get("description_at").and_then(Value::as_u64).unwrap_or(0),
                 name,
             });
@@ -431,7 +435,7 @@ impl Projects {
     /// The one line that says what the project is, and when it was written. Written by the notes helper, read by
     /// every screen that lists projects; the text is cleaned before it ever gets here.
     pub fn set_description(&mut self, id: &str, text: &str, at: u64) -> io::Result<()> {
-        let text = clean(text, crate::describe::MAX_CHARS);
+        let text = clean(text, crate::describe::KEEP_CHARS);
         self.edit(id, |p| {
             p.insert("description".into(), json!(text));
             p.insert("description_at".into(), json!(at));

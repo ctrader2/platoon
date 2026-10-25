@@ -4,8 +4,8 @@
 //!
 //! The description is generated from the summaries platoon already made for the project's conversations plus the
 //! project's own notes, so it costs one small call and no reading of transcripts. What comes back is text from a
-//! model that has read untrusted chat text, so it is stripped of control characters and escape sequences, cut to
-//! one short line, and refused outright when it says nothing.
+//! model that has read untrusted chat text, so it is stripped of control characters and escape sequences, kept to
+//! one sentence of at most `KEEP_CHARS` (cut at a word, never inside one), and refused outright when it says nothing.
 
 use crate::smart::clean_text;
 use serde_json::Value;
@@ -13,8 +13,12 @@ use serde_json::Value;
 /// The feature id in `ai::FEATURES`: the switch, the gate and the ledger all go by it.
 pub const FEATURE: &str = "project_description";
 
-/// The longest description kept, in characters: one line on a row of a list.
+/// The length the model is asked to keep a description to, in characters.
 pub const MAX_CHARS: usize = 100;
+
+/// The longest description kept, in characters. A model often runs a little past `MAX_CHARS`, and a sentence that
+/// does is kept whole (the screens wrap it); past this, it is cut at a word and ends with `…`.
+pub const KEEP_CHARS: usize = 200;
 
 /// How long a description lasts before a new one may be asked for.
 pub const REFRESH_SECS: u64 = 3600;
@@ -129,9 +133,23 @@ pub fn parse(reply: &str) -> Option<String> {
         other => other,
     };
     let raw = v.as_object()?.get("description")?.as_str()?;
-    let text = clean_text(raw.trim_start_matches('#').trim(), MAX_CHARS);
-    let text = text.trim_matches(|c: char| c == '"' || c.is_whitespace()).to_string();
+    let text = clean_text(raw.trim_start_matches('#').trim(), KEEP_CHARS + 1);
+    let text = fit(text.trim_matches(|c: char| c == '"' || c.is_whitespace()));
     says_something(&text).then_some(text)
+}
+
+/// `text` as it is when it fits in `KEEP_CHARS`; else as many whole words as fit beside a closing `…`.
+pub fn fit(text: &str) -> String {
+    if text.chars().count() <= KEEP_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(KEEP_CHARS - 1).collect();
+    let ends_a_word = text.chars().nth(KEEP_CHARS - 1).is_some_and(char::is_whitespace);
+    let head = match head.rfind(' ') {
+        Some(at) if !ends_a_word => &head[..at],
+        _ => head.as_str(),
+    };
+    format!("{}…", head.trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':'))
 }
 
 #[cfg(test)]
@@ -212,11 +230,21 @@ mod tests {
         let got = parse(reply).expect("still says something");
         assert_eq!(got, "Red socks and hats for sale");
         assert!(!got.contains('\u{1b}') && !got.chars().any(char::is_control) && !got.starts_with('#'));
-        // Longer than one line is cut to the cap.
-        let long = format!(r#"{{"description":"{}"}}"#, "word ".repeat(80));
-        assert_eq!(parse(&long).unwrap().chars().count(), MAX_CHARS - 1, "cut to the cap, trailing space trimmed");
+        // Far too long is cut at a word, never inside one, and says so with `…`.
+        let long = format!(r#"{{"description":"{}"}}"#, "words ".repeat(80));
+        let got = parse(&long).unwrap();
+        assert!(got.chars().count() <= KEEP_CHARS && got.ends_with("words…"), "{got:?}");
+        assert!(got.trim_end_matches('…').split(' ').all(|w| w == "words"), "no word cut in half: {got:?}");
         // Text that can reorder what is drawn is gone.
         assert_eq!(parse("{\"description\":\"safe \\u202etxet\"}").as_deref(), Some("safe txet"));
+    }
+
+    #[test]
+    fn a_sentence_a_little_past_the_asked_length_is_kept_whole() {
+        // 130 characters: past the 100 asked for, as models often are. Nothing of it is lost.
+        let sentence = "Terminal app for running Claude Code and Codex sessions from one list; the feature work is in progress and the tests are passing.";
+        assert!(sentence.chars().count() > MAX_CHARS);
+        assert_eq!(parse(&format!(r#"{{"description":"{sentence}"}}"#)).as_deref(), Some(sentence));
     }
 
     #[test]

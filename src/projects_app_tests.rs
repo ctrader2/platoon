@@ -882,7 +882,7 @@ fn a_long_description_on_the_projects_list_wraps_and_the_next_row_starts_after_i
     app.notice = None;
     // The long description goes on the middle row, so there is a row above it and one after it.
     let order: Vec<(String, String)> = app.project_rows().iter().map(|&i| app.projects.all()[i].clone()).map(|p| (p.id, p.name)).collect();
-    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::KEEP_CHARS);
     app.projects.set_description(&order[1].0, &desc, 1).unwrap();
     app.pselected = 0;
     let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
@@ -919,7 +919,7 @@ fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen
     let mut app = w.app();
     let names = ["One", "Two", "Three", "Four", "Five", "Six"];
     let ids: Vec<String> = names.iter().map(|n| make_project(&mut app, n)).collect();
-    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::KEEP_CHARS);
     // Every other project has a long description, including (whatever the order) some near the end.
     for id in ids.iter().step_by(2) {
         app.projects.set_description(id, &desc, 1).unwrap();
@@ -978,7 +978,7 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     let title = lines_with(&shown, "Fruit")[0];
     let bare = top(&shown);
     assert_eq!(bare, title + 2, "{shown}");
-    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::KEEP_CHARS);
     app.projects.set_description(&a, &desc, 1).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);

@@ -275,8 +275,9 @@ It is written from the summaries platoon already made for the project's conversa
 transcript is read for it, and no conversation's id or folder is ever in the request. It is refreshed **straight after a
 notes update**, and at most **once an hour** per project, so it costs one small call at a time and only when something has
 actually happened. Archived projects and archived sessions are left out entirely, an answer that isn't understood changes
-nothing (the line that is there stays, and the next update tries again), and the line is cut to 100 characters with every
-control character and escape sequence removed before it is drawn. It is kept beside the project in
+nothing (the line that is there stays, and the next update tries again), and every control character and escape
+sequence is removed before it is drawn. The model is asked for about 100 characters; a sentence that runs a little over
+is kept whole and wraps onto a second line, and one past 200 characters is cut at a word and ends with "…". It is kept beside the project in
 `~/.config/platoon/projects.json`.
 
 ## Handing work on to a new session
