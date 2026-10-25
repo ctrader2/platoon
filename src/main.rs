@@ -791,6 +791,45 @@ mod tests {
         assert!(text.contains(" 61%") && !text.contains("25%") && !text.contains("~"), "{text}");
     }
 
+    /// A conversation at 150,000 tokens, on `model`, as Claude Code saves it.
+    fn at_150k(w: &World, id: &str, model: &str, mins_ago: u64) {
+        let at = crate::testkit::now_ms() - mins_ago * 60_000;
+        let ts = crate::testkit::iso;
+        w.transcript_lines(
+            id,
+            &[
+                serde_json::json!({"type":"user","cwd":"/srv/a","timestamp":ts(at - 5000),"message":{"role":"user","content":model}})
+                    .to_string(),
+                serde_json::json!({"type":"assistant","cwd":"/srv/a","timestamp":ts(at),"message":{"model":model,
+                    "usage":{"input_tokens":2_000,"cache_creation_input_tokens":8_000,"cache_read_input_tokens":140_000}}})
+                .to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_models_own_window_decides_its_context_figure() {
+        let w = World::new("window");
+        let rows = [
+            ("aaa", "claude-opus-5-5", 15),
+            ("bbb", "claude-sonnet-5-5", 15),
+            ("ccc", "claude-haiku-5-5", 15),
+            ("ddd", "claude-haiku-4-5", 75),
+            ("eee", "claude-sonnet-5", 75),
+        ];
+        for (i, (id, model, _)) in rows.iter().enumerate() {
+            at_150k(&w, id, model, i as u64 + 1);
+        }
+        let app = w.app();
+        for (id, model, want) in rows {
+            let s = app.sessions.iter().find(|s| s.id == id).unwrap();
+            assert_eq!((s.context_pct, s.context_exact), (want, false), "{model} at 150,000 tokens");
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        let text = draw(&mut term, &app);
+        assert_eq!((text.matches(" 15%").count(), text.matches(" 75%").count()), (3, 2), "{text}");
+    }
+
     // --- one row per conversation (the earlier pid-per-row bug) ------------------------------------
 
     #[test]
