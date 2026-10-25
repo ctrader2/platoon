@@ -1,8 +1,7 @@
 # Contributing to platoon
 
-Thank you for wanting to help. platoon is a small project with one maintainer, so this page keeps things short. The
-deeper guide, for people and for AI coding agents alike, is [CLAUDE.md](CLAUDE.md): how the code is laid out, the
-safety rules and the test knobs.
+Thank you for wanting to help. The deeper guide, for people and for AI coding agents alike, is [CLAUDE.md](CLAUDE.md):
+how the code is laid out, the safety rules and the test knobs.
 
 Found a security problem? Don't open an issue: see [SECURITY.md](SECURITY.md).
 
