@@ -833,7 +833,7 @@ fn the_settings_name_the_program_each_setting_is_about() {
     assert_eq!(app.setting_explain(prompt_item(crate::instructions::NOTES)), prompt_item(crate::instructions::NOTES).explain);
     assert_eq!(
         app.setting_explain(item("Sessions per call")),
-        "How many sessions one request to Codex covers. Larger batches use less of your plan overall."
+        "Names and summaries are made for several sessions at once, in one request to Codex. This is how many go in each request. More per request uses less of your plan in total, because the instructions are sent once for all of them."
     );
     let mut term = Terminal::new(TestBackend::new(110, 44)).unwrap();
     key(&mut app, KeyCode::Char('s'));

@@ -266,7 +266,8 @@ Details worth knowing:
   restoring a conversation counts as activity, so restoring an old one sticks: it is not archived again until it has sat
   unused for the full time.
 - Restoring is the same as always: the Archived tab, `a` (or `enter` to restore and open).
-- Both times, and whether MCP servers count, are on the [settings screen](settings-and-keys.md#general): press `s`.
+- Both times are on the [settings screen](settings-and-keys.md#general): press `s`. Whether MCP servers count is only in
+  [`settings.json`](settings-and-keys.md#the-settings-file) (`"idle_stop_ignores_mcp": false` makes them count).
 
 ## Big histories
 

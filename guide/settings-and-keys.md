@@ -26,11 +26,11 @@ The other group, **Everything else**:
 | Theme | The colors platoon is drawn in. `enter` on it opens a list that previews each theme on your real screen (see [Themes](themes.md)). | The [built-in themes](themes.md#the-built-in-themes) (Catppuccin Mocha by default) and your own |
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive sessions after | A session nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
-| Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see [Automatic clean-up](sessions.md#automatic-clean-up)). | Ignore MCP servers (default), Count MCP servers |
 | Check for a newer platoon | Once a day at most, platoon asks GitHub for the number of its latest version and says once when a newer one is out (see [One network request](what-platoon-changes.md#one-network-request-no-telemetry)). Off: platoon makes no network request at all. Applies from the next start. | Once a day (default), Off |
 
-Choose Count MCP servers if you'd rather a session with any program running under it, MCP servers included, was never
-stopped: that is how idle stop worked before this choice existed.
+Idle stop ignores MCP servers by default. To have them count, so that a session with any program running under it, MCP
+servers included, is never stopped, set `"idle_stop_ignores_mcp": false` in [`settings.json`](#the-settings-file)
+(see [Automatic clean-up](sessions.md#automatic-clean-up)); there is no entry for it on the screen.
 
 #### Switching a program off
 
@@ -128,9 +128,9 @@ summarizing your conversations reads, and how often. Under the entries:
 | Setting | What it does | Choices |
 | --- | --- | --- |
 | Offer tasks before starting work | Just before a session platoon started begins the work (an edit, an agent, a worktree), it asks you once whether to turn the work into tasks for a squad, or do it right there; never in a task's own session (see [The session offers to make them](tasks-and-squads.md#the-session-offers-to-make-them)). Off: no session asks, and `t` still makes tasks from a conversation. A session already running stops asking at once; switched back on, a session asks once it is started or resumed again. platoon makes no call of its own for it: the session itself asks. | Ask once (default), Off |
-| Sessions per call | How many sessions one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
+| Sessions per call | Names and summaries are made for several sessions at once, in one request to Claude. This is how many go in each request. More per request uses less of your plan in total, because the instructions are sent once for all of them. | 5, 10, 20, 30 (default), 50, 100 |
 | Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
-| Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
+| Wait for quiet before refreshing | Before making a session's name and summary again, platoon waits until nothing new has been added to it for this long. That way a conversation you're still in isn't summarized again after every reply. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
 | Recent messages sent | How many of a conversation's latest messages go into its summary, besides the first one. | 3, 5, 8 (default), 12, 20 messages |
 | Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
 | Archived sessions | Whether archived sessions are named too, slowly in the background. | Skip (default), In the background |
@@ -160,7 +160,7 @@ In two groups:
 
 `↑` `↓` pick a setting on the tab showing (the popup opens on Theme, below the Programs); `←` `→` (or `h` `l`, `-` `+`)
 step through its choices (on a program, `←` is Off and `→` On); `enter` goes to the next choice and wraps around to the
-first one (Off, or Count MCP servers). On Theme, `enter`
+first one (Off, or Once a day). On Theme, `enter`
 opens the theme list instead, and `←` `→` switch to the previous or next theme and save it at once. With the mouse: click a
 row to select it, the `‹` `›` buttons to step, or the value itself to go to the next choice (on Theme, to open the list).
 

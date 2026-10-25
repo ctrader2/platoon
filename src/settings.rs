@@ -1,6 +1,7 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
-//! clean-ups, how idle stop treats MCP servers, the color theme, the four limits of the word search, and everything
-//! about the features that use the user's Claude tokens (see `ai.rs`). The
+//! clean-ups, the color theme, the four limits of the word search, and everything
+//! about the features that use the user's Claude tokens (see `ai.rs`). Whether idle stop counts MCP servers is
+//! kept here too (`idle_stop_ignores_mcp`) but has no entry on the screen: it is set by hand in the file. The
 //! settings screen edits them through `save`, and `TABS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
@@ -854,18 +855,6 @@ fn general_items() -> Vec<Item> {
             off: Some(0),
         },
         Item {
-            name: "Idle stop and MCP servers",
-            explain: "MCP servers are helper programs Claude starts with a session. By default they are ignored, so a session with only \
-                      those running is still stopped: they close with it and start again when you open it. Choose \"Count MCP servers\" \
-                      and they keep it alive like any other program.",
-            kind: Kind::Steps,
-            choices: &[0, 1],
-            get: |s| u64::from(s.idle_stop_ignores_mcp),
-            set: |s, v| s.idle_stop_ignores_mcp = v != 0,
-            label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
-            off: None,
-        },
-        Item {
             name: "Check for a newer platoon",
             explain: "Once a day at most, platoon asks GitHub for the number of its latest version (it sends only its own version \
                       number) and says once when a newer one is out. Off: platoon makes no network request at all. Applies from the \
@@ -1037,7 +1026,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Sessions per call",
-            explain: "How many sessions one request to Claude covers. Larger batches use less of your plan overall.",
+            explain: "Names and summaries are made for several sessions at once, in one request to Claude. This is how many go in each request. More per request uses less of your plan in total, because the instructions are sent once for all of them.",
             kind: Kind::Steps,
             choices: &[5, 10, 20, 30, 50, 100],
             get: |s| s.ai_batch_size,
@@ -1057,7 +1046,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Wait for quiet before refreshing",
-            explain: "A session is only refreshed once nothing has been written to it for this long, so a chat you are in the middle of isn't sent again and again.",
+            explain: "Before making a session's name and summary again, platoon waits until nothing new has been added to it for this long. That way a conversation you're still in isn't summarized again after every reply.",
             kind: Kind::Steps,
             choices: &[15, 30, 60, 120, 300, 600],
             get: |s| s.ai_quiet_seconds,
@@ -1550,11 +1539,12 @@ mod tests {
     #[test]
     fn the_two_way_choice_steps_between_its_two_values_and_only_the_numbers_can_be_off() {
         let mcp = &general()[3];
+        assert_eq!(mcp.name, "Check for a newer platoon");
         assert_eq!(mcp.choices, [0, 1]);
         let mut s = Settings::default();
         assert_eq!((mcp.get)(&s), 1);
-        assert_eq!((mcp.label)(1), "Ignore MCP servers");
-        assert_eq!((mcp.label)(0), "Count MCP servers");
+        assert_eq!((mcp.label)(1), "Once a day");
+        assert_eq!((mcp.label)(0), "Off");
         assert_eq!(mcp.step(1, Step::Prev), 0);
         assert_eq!(mcp.step(0, Step::Prev), 0);
         assert_eq!(mcp.step(0, Step::Next), 1);
@@ -1562,11 +1552,12 @@ mod tests {
         assert_eq!(mcp.step(1, Step::Cycle), 0, "cycling wraps");
         assert_eq!(mcp.step(0, Step::Cycle), 1);
         (mcp.set)(&mut s, 0);
-        assert!(!s.idle_stop_ignores_mcp);
+        assert!(!s.update_check);
         (mcp.set)(&mut s, 1);
-        assert!(s.idle_stop_ignores_mcp);
-        assert_eq!(mcp.off, None, "neither choice is 'off'");
+        assert!(s.update_check);
+        assert_eq!(mcp.off, Some(0));
         assert!(general()[1..3].iter().all(|i| i.off == Some(0)));
+        assert_eq!(find_item("Idle stop and MCP servers"), None, "the MCP choice is not on the screen any more");
     }
 
     #[test]
@@ -1689,15 +1680,7 @@ mod tests {
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(
             names("General"),
-            [
-                "Use Claude Code",
-                "Use Codex",
-                "Theme",
-                "Stop idle sessions after",
-                "Archive sessions after",
-                "Idle stop and MCP servers",
-                "Check for a newer platoon"
-            ]
+            ["Use Claude Code", "Use Codex", "Theme", "Stop idle sessions after", "Archive sessions after", "Check for a newer platoon"]
         );
         assert_eq!(
             names("Search"),

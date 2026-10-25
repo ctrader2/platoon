@@ -104,33 +104,33 @@ fn saved_ok(base: &std::path::Path) -> bool {
 }
 
 #[test]
-fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_columns() {
-    let base = tmp("settings-e2e-mcp");
+fn a_two_choice_entry_is_listed_explained_and_saved_from_the_real_screen_at_80_columns() {
+    let base = tmp("settings-e2e-two");
     let env = env(&base);
     let mut t = Term::spawn(&[], &env, &base, 30, 80);
     t.wait_for("enter open");
     t.send(b"s");
-    t.wait_for("Idle stop and MCP servers");
+    t.wait_for("Check for a newer platoon");
     t.wait_for("Changes are saved and apply immediately.");
-    // With this many entries only the selected one is explained at this height: move to the MCP entry, three below the
+    // With this many entries only the selected one is explained at this height: move to the update entry, three below the
     // Theme entry the settings open on.
     t.send(b"\x1b[B\x1b[B\x1b[B");
-    t.wait_for("helper programs");
+    t.wait_for("asks GitHub");
     let text = t.text();
-    assert!(text.contains("Ignore MCP servers") && text.contains("MCP servers are"), "{text}");
+    assert!(text.contains("Once a day") && text.contains("asks GitHub"), "{text}");
     assert!(!base.join("config/settings.json").exists(), "looking at the screen writes nothing");
 
-    t.send(b"\x1b[D"); // left: Count MCP servers
-    t.wait_for_flat("‹ Count MCP servers ›"); // (the explanation, on screen already, says it too)
-    until("the choice to reach the file", || saved_ok(&base) && saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(false));
+    t.send(b"\x1b[D"); // left: Off
+    t.wait_for_flat("‹ Off ›"); // (the explanation, on screen already, says it too)
+    until("the choice to reach the file", || saved_ok(&base) && saved(&base)["update_check"] == serde_json::json!(false));
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "the other settings are written as they were");
 
     // The value itself is a button that goes to the other choice (and back).
     let screen = t.text();
-    let (col, row) = find(&screen, "Count MCP servers");
+    let (col, row) = find(&screen, "Off");
     t.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", col + 2, row + 1, col + 2, row + 1).as_bytes());
-    until("the click to reach the file", || saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(true));
-    t.wait_for_flat("‹ Ignore MCP servers ›");
+    until("the click to reach the file", || saved(&base)["update_check"] == serde_json::json!(true));
+    t.wait_for_flat("‹ Once a day ›");
 
     t.send(b"\x1b");
     t.wait_gone("Settings file:");

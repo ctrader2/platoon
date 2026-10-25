@@ -2077,7 +2077,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, P + 1);
-        assert_eq!(ITEMS.len(), 7, "the General tab: the two programs, the theme, three numbers and the check for a newer platoon");
+        assert_eq!(ITEMS.len(), 6, "the General tab: the two programs, the theme, two numbers and the check for a newer platoon");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -2653,7 +2653,7 @@ mod tests {
                 let must_explain = roomy || i == app.setting;
                 assert!(!must_explain || text.contains(item.explain), "explanation cut off or mangled at {ctx}");
             }
-            for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "enter next choice", "esc back", file] {
+            for want in ["2 hours", "2 days", "Once a day", "‹", "›", "enter next choice", "esc back", file] {
                 // At 60 columns the back key's longer name leaves no room for this one (it goes first).
                 if want == "enter next choice" && cols < 70 {
                     continue;
@@ -2681,61 +2681,22 @@ mod tests {
     }
 
     #[test]
-    fn the_mcp_entry_reads_plainly_and_is_whole_at_80_100_and_140_columns_and_at_60_by_24() {
-        let w = World::new("set-mcp-render");
-        let mut app = w.app();
-        ch(&mut app, 's');
-        ch(&mut app, 'g');
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 26), (60, 24)] {
-            for _ in 0..P + 3 {
-                key(&mut app, KeyCode::Down); // the MCP entry is the one under test, and (small terminals) the one explained
-            }
-            assert_eq!(app.setting, P + 3);
-            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
-            let shown = draw(&mut term, &app);
-            let text = popup_flat(&shown);
-            let ctx = format!("{cols}x{rows}\n{shown}");
-            for want in [
-                "Idle stop and MCP servers",
-                "Ignore MCP servers",
-                "helper programs",
-                "they are ignored",
-                "start again when you open it",
-                "Count MCP servers",
-                ITEMS[P + 3].explain,
-            ] {
-                assert!(text.contains(want), "{want:?} missing at {ctx}");
-            }
-            let lower = text.to_lowercase();
-            for jargon in ["sigterm", "pid", "descendant", "child", "json:", "stdio", "subprocess", "daemon"] {
-                assert!(!lower.contains(jargon), "{jargon:?} in {ctx}");
-            }
-            for line in shown.lines().filter(|l| l.starts_with('│')) {
-                assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border at {ctx}");
-            }
-            assert!(text.contains("esc back") && text.contains("settings.json"), "{ctx}");
-            ch(&mut app, 'g');
-        }
-    }
-
-    #[test]
-    fn the_mcp_entry_steps_with_keys_and_mouse_and_is_saved_as_a_boolean() {
-        let w = World::new("set-mcp-input");
+    fn a_two_choice_entry_steps_with_keys_and_mouse_and_is_saved_as_a_boolean() {
+        let w = World::new("set-two-input");
         let on_disk_flag = || {
-            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["idle_stop_ignores_mcp"]
-                .clone()
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["update_check"].clone()
         };
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         for _ in 0..2 {
             key(&mut app, KeyCode::Down);
         }
         assert_eq!(app.setting, P + 3);
-        assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "the default");
-        assert!(!config_file(&w).exists() || on_disk(&w).idle_stop_ignores_mcp, "looking at it changes nothing");
+        assert!(draw(&mut term, &app).contains("Once a day"), "the default");
+        assert!(!config_file(&w).exists() || on_disk(&w).update_check, "looking at it changes nothing");
 
         key(&mut app, KeyCode::Left);
-        assert_eq!((on_disk_flag(), on_disk(&w).idle_stop_ignores_mcp), (serde_json::json!(false), false));
-        assert!(draw(&mut term, &app).contains("Count MCP servers"));
+        assert_eq!((on_disk_flag(), on_disk(&w).update_check), (serde_json::json!(false), false));
+        assert!(draw(&mut term, &app).contains("Off"));
         key(&mut app, KeyCode::Left);
         assert_eq!(on_disk_flag(), serde_json::json!(false), "the left end holds");
         key(&mut app, KeyCode::Right);
@@ -2744,12 +2705,12 @@ mod tests {
         assert_eq!(on_disk_flag(), serde_json::json!(true), "and so does the right end");
         for (k, want) in [('h', false), ('l', true), ('-', false), ('+', true), ('=', true), (' ', false), (' ', true)] {
             ch(&mut app, k);
-            assert_eq!(on_disk(&w).idle_stop_ignores_mcp, want, "{k:?}");
+            assert_eq!(on_disk(&w).update_check, want, "{k:?}");
         }
         key(&mut app, KeyCode::Enter);
-        assert!(!on_disk(&w).idle_stop_ignores_mcp, "enter goes to the other choice");
+        assert!(!on_disk(&w).update_check, "enter goes to the other choice");
         key(&mut app, KeyCode::Enter);
-        assert!(on_disk(&w).idle_stop_ignores_mcp, "and wraps back");
+        assert!(on_disk(&w).update_check, "and wraps back");
         assert_eq!(on_disk(&w).idle_stop_minutes, 120, "the other settings are untouched");
 
         // The mouse: the buttons step, the value toggles, a click on the row selects it.
@@ -2757,47 +2718,38 @@ mod tests {
         draw(&mut term, &app);
         let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Prev) if *i == P + 3));
         click(&mut app, prev.x + 1, prev.y);
-        assert_eq!((app.setting, on_disk(&w).idle_stop_ignores_mcp), (P + 3, false), "a button on another row selects it and steps");
+        assert_eq!((app.setting, on_disk(&w).update_check), (P + 3, false), "a button on another row selects it and steps");
         draw(&mut term, &app);
         let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 3));
         click(&mut app, value.x + 1, value.y);
-        assert!(on_disk(&w).idle_stop_ignores_mcp);
+        assert!(on_disk(&w).update_check);
         draw(&mut term, &app);
         let next = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Next) if *i == P + 3));
         click(&mut app, next.x + 1, next.y);
-        assert!(on_disk(&w).idle_stop_ignores_mcp, "already at the end");
+        assert!(on_disk(&w).update_check, "already at the end");
         let buf = term.backend().buffer();
         assert_eq!(buf[(next.x + 1, next.y)].fg, app.theme.border, "the button that can't go further is muted");
-        // Neither choice is drawn as "off": both read as a live value.
-        let accent_of = |app: &App, term: &Terminal<TestBackend>| {
-            let row = hit_rect(app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 3));
-            term.backend().buffer()[(row.x + 2, row.y)].fg
-        };
-        assert_eq!(accent_of(&app, &term), app.theme.accent);
-        click(&mut app, value.x + 1, value.y);
-        draw(&mut term, &app);
-        assert_eq!(accent_of(&app, &term), app.theme.accent, "Count MCP servers is a choice, not 'off'");
     }
 
     #[test]
-    fn the_mcp_entry_survives_odd_files_and_keeps_what_else_is_in_them() {
-        let w = World::new("set-mcp-odd");
-        std::fs::write(config_file(&w), r#"{"idle_stop_ignores_mcp":"no","keep":{"a":[1]},"idle_stop_minutes":60}"#).unwrap();
+    fn a_two_choice_entry_survives_odd_files_and_keeps_what_else_is_in_them() {
+        let w = World::new("set-two-odd");
+        std::fs::write(config_file(&w), r#"{"update_check":"no","keep":{"a":[1]},"idle_stop_minutes":60}"#).unwrap();
         let (mut app, mut term) = settings_screen(&w, 100, 30);
-        assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "a wrong-typed value shows the default");
+        assert!(draw(&mut term, &app).contains("Once a day"), "a wrong-typed value shows the default");
         for _ in 0..2 {
             key(&mut app, KeyCode::Down);
         }
         key(&mut app, KeyCode::Left);
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
         assert_eq!(
-            (v["idle_stop_ignores_mcp"].clone(), v["keep"].clone(), v["idle_stop_minutes"].clone()),
+            (v["update_check"].clone(), v["keep"].clone(), v["idle_stop_minutes"].clone()),
             (serde_json::json!(false), serde_json::json!({"a": [1]}), serde_json::json!(60))
         );
         // An edit made elsewhere shows up on the open screen.
-        std::fs::write(config_file(&w), r#"{"idle_stop_ignores_mcp":true}"#).unwrap();
+        std::fs::write(config_file(&w), r#"{"update_check":true}"#).unwrap();
         app.refresh_for_test();
-        assert!(draw(&mut term, &app).contains("Ignore MCP servers"));
+        assert!(draw(&mut term, &app).contains("Once a day"));
     }
 
     #[test]
@@ -2827,19 +2779,19 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[P + 1].explain) && !second.contains(ITEMS[P].explain), "{second}");
-        // The long MCP explanation needs a few more lines (and the tab's two headings two more): the reassurance line steps aside for it at 21.
+        // The update check's explanation (and the tab's two headings) fits whole at 21 rows.
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
         let mut term = Terminal::new(TestBackend::new(60, 21)).unwrap();
         let third = draw(&mut term, &app);
-        assert!(flat(&third).contains(ITEMS[P + 3].explain) && !third.contains("apply immediately"), "{third}");
+        assert!(flat(&third).contains(ITEMS[P + 3].explain), "{third}");
         // Too cramped to explain it (the smallest size platoon draws in): the entries and the way back are still whole.
         let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
         assert!(cramped.contains(ITEMS[P + 3].name) && cramped.contains("esc back"), "{cramped}");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         let cramped = draw(&mut term, &app);
-        assert!(cramped.contains(ITEMS[P + 3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
+        assert!(cramped.contains(ITEMS[P + 3].name) && cramped.contains("Once a day") && cramped.contains("esc back"), "{cramped}");
     }
 
     #[test]
