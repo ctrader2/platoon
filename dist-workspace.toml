@@ -24,8 +24,8 @@ install-updater = false
 tap = "ctrader2/homebrew-tap"
 # The formula is called platoon (the command), not platoon-tui (the crate): `brew install ctrader2/tap/platoon`
 formula = "platoon"
-# The theme credits go in every archive beside the license
-include = ["THIRD_PARTY_NOTICES.md"]
+# The theme credits, and every library's license, go in every archive beside platoon's own license
+include = ["THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.md"]
 # Publish jobs to run in CI: the Homebrew formula, and crates.io (.github/workflows/publish-crate.yml, which does
 # nothing until trusted publishing is set up and the CRATES_IO_TRUSTED_PUBLISHING variable is true)
 publish-jobs = ["homebrew", "./publish-crate"]

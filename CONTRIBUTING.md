@@ -62,8 +62,11 @@ Claude Code's `settings.json` and Codex's `hooks.json`, and keeps its own files 
 - **Users' docs follow the code.** A change to what the user sees or does updates the matching page in
   [`guide/`](guide/README.md) in the same pull request (and the README if it mentions it).
 - **The file table in CLAUDE.md** stays current when a source file is added or its job changes.
-- **A changelog line**: if the repository has a `CHANGELOG.md`, add a line for a user-visible change under
-  "Unreleased".
+- **A changelog line**: add a line for a user-visible change under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
+- **A new or updated dependency**: make [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) again with
+  [cargo-about](https://github.com/EmbarkStudios/cargo-about) (`cargo install --locked cargo-about --features cli`):
+  `cargo about generate --frozen --fail about.hbs -o THIRD_PARTY_LICENSES.md` (`about.toml` accepts the same licenses
+  as `deny.toml`).
 
 ## Commit messages
 

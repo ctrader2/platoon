@@ -1,0 +1,16 @@
+# cargo-about: writes THIRD_PARTY_LICENSES.md, the license of every crate built into the platoon binary.
+# Regenerate after a dependency changes (cargo-about 0.9 or newer, with its `cli` feature):
+#   cargo about generate --frozen --fail about.hbs -o THIRD_PARTY_LICENSES.md
+# --frozen: Cargo.lock as it is, and nothing looked up on the network (each crate's own license files only).
+# The licenses accepted are deny.toml's, MIT first where a crate offers a choice; any other fails the run.
+accepted = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0"]
+# The release targets in dist-workspace.toml: what ships.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+# Only what is built into the binary: not the tests' crates, and not the build scripts' helpers.
+ignore-dev-dependencies = true
+ignore-build-dependencies = true

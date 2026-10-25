@@ -134,7 +134,8 @@ The [guide](guide/README.md) covers everything:
 ## License
 
 MIT: see [LICENSE](LICENSE). The color themes belong to their authors and are credited in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the licenses of the libraries built into platoon are in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 platoon is an independent project. It is not affiliated with or endorsed by Anthropic or OpenAI. Claude and
 Claude Code are trademarks of Anthropic.
