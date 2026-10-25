@@ -94,7 +94,9 @@ const FLOOD: &str = "yes platoon-flood | head -n 200000; echo flood-done-$((6*7)
 /// Read what `stream` was sent until the host closes it (true), or until nothing more comes for a while (false: the
 /// connection is still open, with nothing on its way).
 fn drained_to_the_end(stream: &mut UnixStream) -> bool {
-    stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    // macOS refuses a new timeout (EINVAL) on a socket the other end has already shut down; the reads below then see the
+    // end at once, so the timeout set earlier is enough.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let start = Instant::now();
     let mut buf = [0u8; 1 << 16];
     while start.elapsed() < WAIT {
