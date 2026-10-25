@@ -79,7 +79,7 @@ fn lab(name: &str, state: State) -> Lab {
     let mut t = Tickets::open(&w.config, &project);
     let n = t.add(NewTicket { title: "Basket".into(), folder: Some(folder.clone()), ..Default::default() }).unwrap();
     let made = crate::worktrees::prepare("git", &folder, n, None).unwrap().unwrap();
-    t.start(n, "feature", "sess-1", Some(made.clone())).unwrap();
+    t.start(n, "feature", "sess-1", Some(made.clone()), &[]).unwrap();
     let wt = PathBuf::from(&made.path);
     fs::write(wt.join("basket.txt"), "basket\n").unwrap();
     git(&wt, &["add", "."]);

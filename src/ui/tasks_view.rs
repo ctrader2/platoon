@@ -1,7 +1,8 @@
 //! The Tasks tab (`3`): the list showing (Active in the board's sections, Archived in one) and their two-line rows, each
 //! list's words when it is empty, the picked task's details beside the list from
-//! `SPLIT_MIN_WIDTH` columns (its state and why, its squad, its folder and branch, its plan when one is ready, its "Done
-//! when" boxes, its tests and what it has spent), a task's own screen (the same details and its text), the list of
+//! `SPLIT_MIN_WIDTH` columns (its state and why, what just sent its work back, its squad, its folder and branch, the
+//! check of its work, what it has spent, its helpers at work, its plan when one is ready, its squad's Steps checked off,
+//! its "Done when" boxes), a task's own screen (the same details and its text), the list of
 //! squads a task starts with (`s`) and the project picker of a new task (`n`).
 
 use super::{Hint, ROW_H, badge_span, badge_width, centered, draw_footer, fit_end, hint_fg, modal_block, popup_ground, wrap};
@@ -53,8 +54,8 @@ pub(crate) fn state_color(t: &Theme, s: &State) -> Color {
 }
 
 /// The pieces of a row's second line in `room` cells, whole where they fit. When one doesn't, the line ends there with
-/// "…": the first piece (the squad's words) is cut after a word, never in the middle of one; a later piece (a step's
-/// mark, the tokens) goes whole.
+/// "…": the first piece (the squad's words) and a piece that may be cut (a step's title) are cut after a word, never in
+/// the middle of one; any other piece (a step's number, the tokens) goes whole.
 pub(super) fn fit_pieces(t: &Theme, pieces: &[Piece], room: usize, bg: Color) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let mut used = 0usize;
@@ -69,7 +70,7 @@ pub(super) fn fit_pieces(t: &Theme, pieces: &[Piece], room: usize, bg: Color) ->
         }
         let left = room.saturating_sub(used + 1);
         let mut cut = String::new();
-        for word in p.text.split_inclusive(' ').take_while(|_| k == 0) {
+        for word in p.text.split_inclusive(' ').take_while(|_| k == 0 || p.cut) {
             if cut.width() + word.trim_end().width() > left {
                 break;
             }
@@ -391,6 +392,12 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
             lines.push(Line::styled(l, Style::new().fg(t.warn)));
         }
     }
+    // What has just sent its work back to its session, while it works on that.
+    if let Some(said) = board::sent_back(x, now) {
+        for l in wrap(&said, w).into_iter().take(4) {
+            lines.push(Line::styled(l, Style::new().fg(t.warn)));
+        }
+    }
     lines.push(Line::raw(""));
     let label = |s: &str| Span::styled(format!("{s:<LABEL_W$}"), Style::new().fg(t.dim));
     let room = w.saturating_sub(LABEL_W);
@@ -462,12 +469,27 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
             ]));
         }
     }
+    // Its helpers at work, and the ones finished since a step was last marked (Claude Code's, as its session writes them).
+    if !x.state.closed()
+        && let Some(words) = x
+            .session_id()
+            .and_then(|s| app.session_log(s))
+            .and_then(|l| crate::steps::helpers_words(&crate::steps::helpers_now(&l.helpers, x.steps.last_marked(), now), false))
+    {
+        for (k, l) in wrap(&words, room).into_iter().enumerate() {
+            lines.push(Line::from(vec![
+                if k == 0 { label("Helpers") } else { Span::raw(" ".repeat(LABEL_W)) },
+                Span::styled(l, Style::new().fg(t.text)),
+            ]));
+        }
+    }
     // The plan, while it waits for the user's yes.
     if x.state == State::NeedsYou(Need::Plan) {
         lines.push(Line::raw(""));
         lines.push(Line::styled("The plan", bold));
         lines.extend(plan_lines(app, project, x, w, plan_most));
     }
+    lines.extend(step_lines(app, x, w));
     // The "Done when" boxes: as the last check found them (a tick or a cross), else as its text has them.
     let checked: Vec<(&str, Color, String)> = x
         .verdict
@@ -495,6 +517,53 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
                 let lead = if k == 0 { Span::styled(mark.clone(), Style::new().fg(c)) } else { Span::raw("    ") };
                 lines.push(Line::from(vec![lead, Span::styled(l, Style::new().fg(t.text))]));
             }
+        }
+    }
+    lines
+}
+
+/// A task's Steps checklist, `w` cells wide: a heading with how far it is, then each step of its squad with its mark
+/// (`✓` done, `▸` the one it is on, `–` skipped, `○` not reached; plain letters where the terminal lacks those), its
+/// number and title, and under it what the session said about it. Nothing for a squad without steps.
+fn step_lines(app: &App, x: &Ticket, w: usize) -> Vec<Line<'static>> {
+    let t = app.effective_theme();
+    let Some(head) = board::steps_heading(x) else { return Vec::new() };
+    let mut lines = vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Steps", Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
+            Span::styled(" · ", Style::new().fg(t.dim)),
+            Span::styled(head.text, Style::new().fg(tone(t, head.tone))),
+        ]),
+    ];
+    let current = x.steps.current().filter(|_| !x.state.closed());
+    let [done, at, skipped, open] = if app.plain_marker { ["x", ">", "-", "o"] } else { ["✓", "▸", "–", "○"] };
+    let num_w = x.steps.list.len().to_string().len();
+    let indent = 2 + num_w + 1;
+    for (i, step) in x.steps.list.iter().enumerate() {
+        use crate::steps::Mark;
+        let (mark, mark_c, title_c, said) = match &step.mark {
+            Mark::Done { note, .. } => (done, t.ok, t.text, note.clone()),
+            Mark::Skipped { why, .. } => (skipped, t.dim, t.subtext, format!("skipped: {why}")),
+            _ if current == Some(i) => (at, t.busy, t.text, String::new()),
+            Mark::Started { .. } => (at, t.busy, t.subtext, String::new()),
+            Mark::Open => (open, t.dim, t.subtext, String::new()),
+        };
+        let room = w.saturating_sub(indent);
+        for (k, l) in wrap(&step.title, room).into_iter().enumerate() {
+            let lead = if k == 0 {
+                vec![
+                    Span::styled(format!("{mark} "), Style::new().fg(mark_c)),
+                    Span::styled(format!("{:>num_w$} ", i + 1), Style::new().fg(t.dim)),
+                ]
+            } else {
+                vec![Span::raw(" ".repeat(indent))]
+            };
+            lines.push(Line::from([lead, vec![Span::styled(l, Style::new().fg(title_c))]].concat()));
+        }
+        // What the session said about it, under its title.
+        for l in wrap(&said, room).into_iter().filter(|l| !l.is_empty()).take(3) {
+            lines.push(Line::from(vec![Span::raw(" ".repeat(indent)), Span::styled(l, Style::new().fg(t.subtext))]));
         }
     }
     lines

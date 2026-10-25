@@ -387,11 +387,22 @@ pub struct Ticket {
     pub verdict: Option<Verdict>,
     /// How many ends of a turn in a row were refused because the check found problems (reset when the user types).
     pub checks_refused: u32,
-    /// The check of its work is running, since then (seconds since the epoch). Cleared when it ends or the user types.
-    pub checking: Option<u64>,
+    /// The check of its work is running. Cleared when it ends or the user types.
+    pub checking: Option<Checking>,
+    /// The squad's steps as the session marks them (`steps.rs`): taken from the squad when the task starts.
+    pub steps: crate::steps::Steps,
     /// Which list of the Tasks tab a finished task is on, when the user said with `a`. Only a Done or Cancelled task
     /// keeps what the user said: one that is opened and worked on again is `Auto` once it is written.
     pub archiving: Archiving,
+}
+
+/// The check of a task's work, while it runs: since when (seconds since the epoch) and on which model.
+///
+/// In the file: `"checking": <since>`, and `"checking_model"` when known.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Checking {
+    pub since: u64,
+    pub model: String,
 }
 
 /// Which list of the Tasks tab a finished (Done or Cancelled) task is on: as platoon decides (`board::place`: Active
@@ -530,7 +541,11 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         }),
         verdict: o.get("verdict").and_then(Verdict::from_json),
         checks_refused: o.get("checks_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
-        checking: o.get("checking").and_then(Value::as_u64),
+        checking: o
+            .get("checking")
+            .and_then(Value::as_u64)
+            .map(|since| Checking { since, model: clean(o.get("checking_model").and_then(Value::as_str).unwrap_or_default(), 60) }),
+        steps: crate::steps::Steps::from_json(o.get("steps")),
         // What the user said about a finished task only: an open one is on the board whatever the file says.
         archiving: match o.get("archived").and_then(Value::as_bool) {
             Some(true) if state_closed => Archiving::Archived,
@@ -578,7 +593,9 @@ fn ticket_into(t: &Ticket, o: &mut Map<String, Value>) {
     set("from", t.from.as_ref().map(|f| json!({"session": f.session, "project": f.project})));
     set("verdict", t.verdict.as_ref().map(Verdict::to_json));
     set("checks_refused", (t.checks_refused > 0).then(|| json!(t.checks_refused)));
-    set("checking", t.checking.map(|at| json!(at)));
+    set("checking", t.checking.as_ref().map(|c| json!(c.since)));
+    set("checking_model", t.checking.as_ref().filter(|c| !c.model.is_empty()).map(|c| json!(c.model)));
+    set("steps", t.steps.to_json());
     set(
         "archived",
         match (t.state.closed(), t.archiving) {
@@ -927,8 +944,9 @@ impl Tickets {
         .map(|_| ())
     }
 
-    /// The task's session was started: with this squad, in this worktree (None: in its folder). Working.
-    pub fn start(&mut self, number: u32, squad: &str, session: &str, worktree: Option<Worktree>) -> io::Result<()> {
+    /// The task's session was started: with this squad, in this worktree (None: in its folder), with the squad's steps
+    /// (their titles: `steps::parse`), none marked. Working.
+    pub fn start(&mut self, number: u32, squad: &str, session: &str, worktree: Option<Worktree>, steps: &[String]) -> io::Result<()> {
         let (squad, session) = (squad.to_string(), session.to_string());
         let now = now_secs();
         self.update(number, |t| {
@@ -938,9 +956,29 @@ impl Tickets {
             t.worktree = worktree;
             t.state = State::Working;
             t.checks_refused = 0;
+            t.steps = crate::steps::Steps::new(steps);
             true
         })
         .map(|_| ())
+    }
+
+    /// The session says this about step `n` of task `number` (`platoon task step`, or Codex's hook). Err with why, in
+    /// words for the session (no such step, no such task, the file can't be written).
+    pub fn mark_step(&mut self, number: u32, n: usize, report: &crate::steps::Report) -> Result<(), String> {
+        let now = now_secs();
+        let mut wrong = None;
+        let changed = self.update(number, |t| match t.steps.mark(n, report, now) {
+            Ok(()) => true,
+            Err(why) => {
+                wrong = Some(why);
+                false
+            }
+        });
+        match (wrong, changed) {
+            (Some(why), _) => Err(why),
+            (None, Ok(_)) => Ok(()),
+            (None, Err(e)) => Err(plain(&e)),
+        }
     }
 
     /// Task `number`'s Codex session said its id (`session`): written in place of `PENDING`. True when it changed.
@@ -1128,11 +1166,13 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
 
 const USAGE: &str = "usage: platoon task add [--project <name or id>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
        platoon task list [--project <name or id>] [--json]
+       platoon task step <n> started | done \"<one line>\" | skipped \"<one line why>\"
   add    make a task and print its number (#N). The text comes from --body-file, else from what is piped in,
          else the template. Without --folder the task works in the current folder. With no --project, the task
          goes in the project whose sessions worked in the current folder, or in no project (\"No project\").
          --squad suggests the squad that starts it (an id from the Squads tab)
-  list   the tasks, open ones first, then the Done and Cancelled ones";
+  list   the tasks, open ones first, then the Done and Cancelled ones
+  step   inside a task's session: mark step <n> of its squad started, done or skipped (with why)";
 
 /// Where the command line looks when no project is named: the sessions' folders (the index platoon keeps in its
 /// cache, read as it is). None (a unit test, or no cache): no lookup, and the task goes in no project.
@@ -1142,11 +1182,13 @@ pub struct Roots<'a> {
     pub cache: &'a Path,
 }
 
-/// `platoon task ...`. Returns the exit code; what it prints goes to `out`, problems to `err`.
+/// `platoon task ...`. Returns the exit code; what it prints goes to `out`, problems to `err`. `task`: the task the
+/// environment names (`agents::TASK_ENV`), which `task step` marks.
 #[allow(clippy::too_many_arguments)]
 pub fn cli(
     args: &[String],
     config: &Path,
+    task: Option<&str>,
     roots: Option<Roots>,
     stdin: &mut dyn io::Read,
     stdin_is_terminal: bool,
@@ -1162,6 +1204,16 @@ pub fn cli(
             }
             Err(why) => {
                 let _ = writeln!(err, "platoon task add: {why}");
+                1
+            }
+        },
+        Some("step") => match cli_step(&args[1..], config, task) {
+            Ok(said) => {
+                let _ = writeln!(out, "{said}");
+                0
+            }
+            Err(why) => {
+                let _ = writeln!(err, "platoon task step: {why}");
                 1
             }
         },
@@ -1283,6 +1335,23 @@ fn cli_add(
         return Err(CORRUPT.into());
     }
     tickets.add(NewTicket { title, body, folder: Some(folder), squad, ..Default::default() }).map_err(|e| plain(&e))
+}
+
+/// `task step <n> started|done|skipped [<one line>]`: the step of the task the session's environment names is marked.
+fn cli_step(args: &[String], config: &Path, task: Option<&str>) -> Result<String, String> {
+    let tag = task
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or("this works inside a task's session only: platoon starts it with PLATOON_TASK naming the task, and it isn't set here")?;
+    let (project, number) = parse_tag(tag).ok_or_else(|| format!("PLATOON_TASK is \"{tag}\", which names no task"))?;
+    let (n, report) = crate::steps::parse_command(args)?;
+    let mut store = Tickets::open(config, &project);
+    if store.is_corrupt() {
+        return Err(CORRUPT.into());
+    }
+    store.get(number).ok_or_else(|| format!("there is no task #{number} (PLATOON_TASK is \"{tag}\")"))?;
+    store.mark_step(number, n, &report)?;
+    Ok(crate::steps::said(n, &report))
 }
 
 fn plain(e: &io::Error) -> String {
@@ -1526,7 +1595,7 @@ mod tests {
         let d = dir("unknown");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Login");
-        t.start(n, "feature", "s-1", Some(Worktree { path: "/w".into(), branch: "task/1".into(), ..Default::default() })).unwrap();
+        t.start(n, "feature", "s-1", Some(Worktree { path: "/w".into(), branch: "task/1".into(), ..Default::default() }), &[]).unwrap();
         let mut v = saved(&d);
         v.as_object_mut().unwrap().insert("future".into(), json!({"a": 1}));
         let o = v["tasks"][0].as_object_mut().unwrap();
@@ -1584,7 +1653,7 @@ mod tests {
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Login");
         assert!(!t.mark_worktree(n, WtMark::Removed).unwrap(), "no worktree, nothing to mark");
-        t.start(n, "feature", "s-1", Some(Worktree { path: "/w".into(), branch: "task/1".into(), ..Default::default() })).unwrap();
+        t.start(n, "feature", "s-1", Some(Worktree { path: "/w".into(), branch: "task/1".into(), ..Default::default() }), &[]).unwrap();
         let updated = t.get(n).unwrap().updated;
         assert!(t.mark_opened_in(n, "VS Code").unwrap());
         assert!(!t.mark_opened_in(n, "VS Code").unwrap());
@@ -1605,7 +1674,7 @@ mod tests {
         let mut p = Tickets::open(&d, "p1");
         add(&mut p, "In a project");
         let n = add(&mut p, "Started");
-        p.start(n, "feature", "sess-9", None).unwrap();
+        p.start(n, "feature", "sess-9", None, &[]).unwrap();
         assert_eq!(find_session(&d, "sess-9"), Some(("p1".to_string(), 2)));
         assert_eq!(find_session(&d, "nope"), None);
         assert_eq!(find_session(&d, ""), None);
@@ -1632,8 +1701,54 @@ mod tests {
     fn run(d: &Path, args: &[&str], stdin: &str, terminal: bool) -> (i32, String, String) {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = cli(&args, d, None, &mut stdin.as_bytes(), terminal, d, &mut out, &mut err);
+        let code = cli(&args, d, None, None, &mut stdin.as_bytes(), terminal, d, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn task_step_marks_a_step_of_the_task_the_environment_names_and_says_plainly_what_is_wrong() {
+        use crate::steps::Mark;
+        let d = dir("cli-step");
+        let id = crate::projects::Projects::open(&d).create("Web shop").unwrap();
+        let mut store = Tickets::open(&d, &id);
+        let n = store.add(NewTicket { title: "Login".into(), folder: Some("/w".into()), ..Default::default() }).unwrap();
+        store.start(n, "feature", "s-1", None, &["Look".into(), "Build".into(), "Check".into()]).unwrap();
+        let tag = task_tag(&id, n);
+        let step = |args: &[&str], task: Option<&str>| {
+            let args: Vec<String> = ["step"].iter().chain(args).map(|s| s.to_string()).collect();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = cli(&args, &d, task, None, &mut "".as_bytes(), true, &d, &mut out, &mut err);
+            (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+        };
+        assert_eq!(step(&["1", "done", "read the login code"], Some(&tag)), (0, "Step 1 done.\n".into(), String::new()));
+        assert_eq!(step(&["2", "started"], Some(&tag)).1, "Step 2 started.\n");
+        assert_eq!(step(&["3", "skipped", "nothing to check"], Some(&tag)).1, "Step 3 skipped.\n");
+        let t = Tickets::open(&d, &id).get(n).unwrap().clone();
+        assert!(matches!(&t.steps.list[0].mark, Mark::Done { note, .. } if note == "read the login code"));
+        assert!(matches!(t.steps.list[1].mark, Mark::Started { .. }));
+        assert!(matches!(&t.steps.list[2].mark, Mark::Skipped { why, .. } if why == "nothing to check"));
+        // What is wrong, in one line, exit 1; nothing written.
+        for (args, task, said) in [
+            (vec!["4", "done"], Some(tag.as_str()), "platoon task step: there is no step 4: the steps are 1 to 3\n"),
+            (
+                vec!["2", "skipped"],
+                Some(tag.as_str()),
+                "platoon task step: say why step 2 was skipped: platoon task step 2 skipped \"<one line why>\"\n",
+            ),
+            (vec!["x", "done"], Some(tag.as_str()), "platoon task step: \"x\" isn't a step number (1, 2, ...)\n"),
+            (vec!["2", "finished"], Some(tag.as_str()), "platoon task step: \"finished\" isn't started, done or skipped\n"),
+            (vec!["2", "done"], Some("9:nowhere"), "platoon task step: there is no task #9 (PLATOON_TASK is \"9:nowhere\")\n"),
+            (vec!["2", "done"], Some("nonsense"), "platoon task step: PLATOON_TASK is \"nonsense\", which names no task\n"),
+        ] {
+            assert_eq!(step(&args, task), (1, String::new(), said.to_string()), "{args:?}");
+        }
+        let (code, _, err) = step(&["2", "done"], None);
+        assert_eq!(code, 1);
+        assert!(err.contains("works inside a task's session only"), "{err}");
+        assert_eq!(Tickets::open(&d, &id).get(n).unwrap().steps, t.steps, "nothing written by a wrong one");
+        // A fresh start takes the squad's steps afresh, none marked.
+        Tickets::open(&d, &id).start(n, "feature", "s-2", None, &["Only".into()]).unwrap();
+        assert_eq!(Tickets::open(&d, &id).get(n).unwrap().steps, crate::steps::Steps::new(&["Only".into()]));
     }
 
     #[test]
@@ -1715,7 +1830,7 @@ mod tests {
         let run_in = |cwd: &Path, args: &[&str]| {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             let (mut out, mut err) = (Vec::new(), Vec::new());
-            let code = cli(&args, &d, Some(roots), &mut "".as_bytes(), true, cwd, &mut out, &mut err);
+            let code = cli(&args, &d, None, Some(roots), &mut "".as_bytes(), true, cwd, &mut out, &mut err);
             (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
         };
         assert_eq!(run_in(&shop.join("sub"), &["add", "--title", "Linter"]), (0, "#1\n".into(), String::new()));

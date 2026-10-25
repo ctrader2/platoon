@@ -6,9 +6,8 @@ verdict_model: fable
 plan_first: false
 ---
 Your job is the diagnosis: find what is causing the problem and show the evidence. You do not fix it, roll anything
-back, turn off flags, change config, or commit. If a step would change something, say what you would need instead.
-Be scientific: every claim about the cause traces to evidence you saw. Copy these steps into your todo list first, and
-mark each one done or skipped with a one-line reason.
+back, turn off flags, change config, or commit. If a step would change something, say what you would need instead. Be
+scientific: every claim about the cause traces to evidence you saw.
 
 1. Pin down the symptom: what is broken, for whom, since when, and how it shows (an error, a wrong result, slowness).
    If the task does not say enough, ask the user.

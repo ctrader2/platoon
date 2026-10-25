@@ -1532,6 +1532,7 @@ pub(crate) mod tests {
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "# How this task works\n\n- Say \"done\" at the end.\n".into(),
             tag: "5:p1".into(),
+            checker: "Fable".into(),
         }
     }
 

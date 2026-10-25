@@ -357,6 +357,7 @@ impl App {
         };
         let task_dir = crate::tickets::task_dir(&self.config, project, number);
         let catalog = self.catalog();
+        let steps = crate::steps::parse(&squad.body);
         let rules = Rules {
             agent,
             folder: worktree.as_ref().map(|w| w.path.clone()).or(t.folder.clone()).unwrap_or_default(),
@@ -365,6 +366,8 @@ impl App {
             plan_first: squad.plan_first,
             helper_models: catalog.of_agent(agent).map(|m| m.id.clone()).filter(|_| agent == Agent::Codex).collect(),
             squad_files: Vec::new(),
+            exe: crate::offerhook::this_platoon(),
+            steps: steps.len(),
         };
         // Every squad as it would run here: a step that follows another squad follows what this computer runs.
         let all: Vec<Squad> = crate::squads::all(&self.config).iter().map(|s| s.as_run(&catalog)).collect();
@@ -376,7 +379,7 @@ impl App {
             Agent::Claude => taskrun::new_session_id(),
             Agent::Codex => format!("{}{}", crate::tickets::PENDING, crate::tickets::task_tag(project, number)),
         };
-        if let Err(e) = store.start(number, &squad.id, &session, worktree) {
+        if let Err(e) = store.start(number, &squad.id, &session, worktree, &steps) {
             return self.report_task_error(e);
         }
         // Written down before it starts, so its hooks find it from its first moment.
@@ -431,7 +434,8 @@ impl App {
         }
         let agent = self.task_agent(&squad)?;
         let resume = resume && t.session_id().is_some();
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
+        let exe = crate::offerhook::this_platoon();
+        let checker = crate::agents::model_display_name(&taskrun::verdict_model(&self.config, project, &t, &self.catalog()));
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));
         let launch = TaskLaunch {
             session: t.session_id().unwrap_or_default().to_string(),
@@ -444,6 +448,7 @@ impl App {
             exe,
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
             tag: crate::tickets::task_tag(project, number),
+            checker,
         };
         let args = agent.task_args(&launch);
         let mut env: Vec<(&str, String)> = launch.env();

@@ -1199,7 +1199,7 @@ mod tests {
         };
         for k in [Some("/home/u/shop-worktrees/task-1"), Some("/home/u/web-worktrees/task-2"), Some("/home/u/shop"), None] {
             let n = store.add(tickets::NewTicket { title: "T".into(), ..Default::default() }).unwrap();
-            store.start(n, "feature", &format!("s-{n}"), Some(trusted(k))).unwrap();
+            store.start(n, "feature", &format!("s-{n}"), Some(trusted(k)), &[]).unwrap();
         }
         assert_eq!(codex_trust_left(&p.config), ["/home/u/shop-worktrees/task-1", "/home/u/web-worktrees/task-2"]);
         let fake = crate::testkit::CodexServerFake::new("uninstall-folders", &p.codex);
@@ -1226,7 +1226,7 @@ mod tests {
         let project = crate::projects::Projects::open(&p2.config).create("Shop").unwrap();
         let mut store = tickets::Tickets::open(&p2.config, &project);
         let n = store.add(tickets::NewTicket { title: "T".into(), ..Default::default() }).unwrap();
-        store.start(n, "feature", "s-1", Some(trusted(Some("/home/u/shop-worktrees/task-1")))).unwrap();
+        store.start(n, "feature", "s-1", Some(trusted(Some("/home/u/shop-worktrees/task-1"))), &[]).unwrap();
         p2.codex_program = "/nonexistent/platoon-test/codex".into();
         let (_, out) = uninstall(&p2, &Options::default(), None, &mut no_stop());
         assert!(

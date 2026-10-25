@@ -209,7 +209,19 @@ fn enter_on_a_squad_makes_the_worktree_and_starts_the_session_with_the_squads_mo
         assert_eq!((at("--model"), at("--permission-mode")), (Some(model), Some(mode)), "{args:?}");
         assert_eq!(at("--session-id"), t.session.as_deref());
         let task_dir = crate::tickets::task_dir(&w.config, &project, n);
-        assert!(fs::read_to_string(task_dir.join("squad.md")).unwrap().contains(&format!("on the branch `task/{n}`")));
+        let squad_md = fs::read_to_string(task_dir.join("squad.md")).unwrap();
+        assert!(squad_md.contains(&format!("on the branch `task/{n}`")));
+        // The squad's steps kept with the task, none marked; the session told to mark each one; who checks, said while
+        // the check runs.
+        let titles = crate::steps::parse(&crate::squads::get(&w.config, &t.squad).unwrap().body);
+        assert_eq!(t.steps, crate::steps::Steps::new(&titles));
+        assert!(squad_md.contains(&format!("numbered steps below, 1 to {}", titles.len())) && squad_md.contains(" task step <n> started`"));
+        let settings: serde_json::Value = serde_json::from_str(at("--settings").unwrap()).unwrap();
+        let checker = if n == 1 { "Opus" } else { "Fable" };
+        assert_eq!(
+            settings["hooks"]["Stop"][0]["hooks"][0]["statusMessage"],
+            format!("{checker} is checking the work against \"Done when\"…").as_str()
+        );
         // The session is in the task's project.
         assert_eq!(app.projects.project_id_of(t.session.as_deref().unwrap()), Some(project.as_str()));
     }
@@ -274,7 +286,7 @@ fn a_tasks_session_is_on_neither_sessions_list_nor_counted_nor_found_by_the_sear
     }
     key(&mut app, KeyCode::Char('a'));
     assert_eq!(app.counts, [2, 1]);
-    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
+    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None, &[]).unwrap();
     Tickets::open(&w.config, &project)
         .update(1, |t| {
             t.state = State::Done;
@@ -284,7 +296,7 @@ fn a_tasks_session_is_on_neither_sessions_list_nor_counted_nor_found_by_the_sear
     // A second task whose session is the archived one.
     let mut store = Tickets::open(&w.config, &project);
     let n = store.add(NewTicket { title: "Again".into(), folder: Some(folder.clone()), ..Default::default() }).unwrap();
-    store.start(n, "docs", "old-task-sess", None).unwrap();
+    store.start(n, "docs", "old-task-sess", None, &[]).unwrap();
     app.reload_for_test();
     let ids = |app: &App| app.visible().iter().map(|&i| app.sessions[i].id.clone()).collect::<Vec<_>>();
     assert_eq!((ids(&app), app.counts.clone()), (vec!["user-1".to_string()], vec![1, 0]), "Active, and the counts");
@@ -381,7 +393,7 @@ fn a_moves_a_finished_task_to_archived_and_back_where_it_stays_and_archived_list
             ("Older cancel", "docs", State::NotStarted),
         ],
     );
-    Tickets::open(&w.config, &project).start(1, "feature", "fresh-sess", None).unwrap();
+    Tickets::open(&w.config, &project).start(1, "feature", "fresh-sess", None, &[]).unwrap();
     w.transcript("fresh-sess", &folder, "Task #1: Fresh done", 1);
     finished(&w, &project, 1, "done", 60);
     finished(&w, &project, 3, "done", 3 * DAY);
@@ -516,7 +528,7 @@ fn an_old_done_task_stays_on_active_while_its_work_is_not_merged_and_a_can_archi
 #[test]
 fn sessions_platoon_starts_offer_to_make_tasks_but_a_tasks_own_session_does_not() {
     let (w, mut app, project, folder) = lab("tasks-offer", &[("Write the guide", "docs", State::NotStarted)]);
-    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
+    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None, &[]).unwrap();
     w.transcript("task-sess", &folder, "Task #1: Write the guide", 1);
     app.reload_for_test();
     assert!(app.offers_tasks(Start::New(None)), "a new session");
@@ -558,7 +570,7 @@ fn checked(w: &World, project: &str, n: u32, v: Option<crate::tickets::Verdict>,
     Tickets::open(&w.config, project)
         .update(n, |t| {
             t.verdict = v;
-            t.checking = checking.then(crate::usage::now);
+            t.checking = checking.then(|| crate::tickets::Checking { since: crate::usage::now(), model: "fable".into() });
             true
         })
         .unwrap();
@@ -711,7 +723,7 @@ fn a_projects_screen_lists_its_sessions_and_its_tasks_apart_and_enter_on_a_task_
         ],
     );
     // #2 has a session, in the project: it is listed as its task, not among the sessions.
-    Tickets::open(&w.config, &project).start(2, "feature", "task-sess", None).unwrap();
+    Tickets::open(&w.config, &project).start(2, "feature", "task-sess", None, &[]).unwrap();
     w.transcript("task-sess", &folder, "Task #2: Add a basket", 1);
     app.projects.assign("task-sess", Some(&project)).unwrap();
     app.reload_for_test();
@@ -776,4 +788,142 @@ fn a_projects_screen_lists_its_sessions_and_its_tasks_apart_and_enter_on_a_task_
     key(&mut app, KeyCode::Enter);
     assert!(app.sq.launched.contains(&2), "its session was continued");
     assert!(app.open_project().is_some(), "still on the project's screen");
+}
+
+/// The foreground color of the first cell of `word` inside the first `row` on the screen last drawn.
+fn fg_in(term: &Terminal<TestBackend>, row: &str, word: &str) -> Color {
+    let buf = term.backend().buffer();
+    for y in 0..buf.area.height {
+        let cells: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        let line = cells.concat();
+        let Some(at) = line.find(row) else { continue };
+        let x = line[..at + row.find(word).unwrap()].chars().count();
+        return buf[(x as u16, y)].fg;
+    }
+    panic!("{row:?} isn't on the screen");
+}
+
+/// Task `n` of `project` at work on its squad's steps: 1 and 2 done (2 with what was done), 3 skipped, 4 the one it is on.
+fn on_step_four(w: &World, project: &str, n: u32, session: &str) {
+    use crate::steps::Report;
+    let mut store = Tickets::open(&w.config, project);
+    let titles = crate::steps::parse(&crate::squads::get(&w.config, "bug-fix").unwrap().body);
+    store.start(n, "bug-fix", session, None, &titles).unwrap();
+    for (step, report) in [
+        (1, Report::Done(String::new())),
+        (2, Report::Done("the basket forgets the last item".into())),
+        (3, Report::Skipped("the fix is one line".into())),
+        (4, Report::Started),
+    ] {
+        store.mark_step(n, step, &report).unwrap();
+    }
+}
+
+#[test]
+fn a_working_tasks_row_names_its_step_and_its_details_check_off_the_steps_with_its_helpers_and_the_checks_timer() {
+    use crate::tickets::{Checking, Finding, Verdict};
+    let (w, mut app, project, _) = lab("tasks-steps", &[("Fix the basket", "bug-fix", State::NotStarted)]);
+    on_step_four(&w, &project, 1, "s-steps");
+    // Its session's transcript, with two helpers as Claude Code writes them down.
+    let transcript = w.transcript("s-steps", "/w", "Task #1: Fix the basket", 1);
+    let subagents = transcript.with_extension("").join("subagents");
+    fs::create_dir_all(&subagents).unwrap();
+    for (id, description, model, finished) in
+        [("a1", "Reviewer A on the fix", "opus", true), ("b2", "Reviewer B on the fix", "fable", false)]
+    {
+        let meta = serde_json::json!({"agentType": "general-purpose", "description": description, "model": model, "finished": finished});
+        fs::write(subagents.join(format!("agent-{id}.meta.json")), meta.to_string()).unwrap();
+    }
+    app.reload_for_test();
+    app.refresh_until_for_test(10, "the helpers read", |a| a.session_log("s-steps").is_some_and(|l| l.helpers.len() == 2));
+    let mut term = Terminal::new(TestBackend::new(150, 44)).unwrap();
+    let shown = draw(&mut term, &app);
+    let t = app.effective_theme().clone();
+    // The row: its squad, the step it is on and that step's title.
+    assert!(shown.contains("Bug fix · step 4/8 · Fix it where it first goes wrong, not where it shows"), "{shown}");
+    assert_eq!(fg_in(&term, "Bug fix · step 4/8", "step 4/8"), t.subtext);
+    // The details: the helpers, then the steps checked off, each mark in its color, what was said under its title.
+    for want in [
+        "Helpers Reviewers: Opus ✓ · Fable …",
+        "Steps · 3 of 8 marked",
+        "✓ 1 Reproduce it yourself, on the surface where it was reported",
+        "✓ 2 Find the cause by elimination",
+        "    the basket forgets the last item",
+        "– 3 Plan the fix, present it and wait for the user's yes",
+        "    skipped: the fix is one line",
+        "▸ 4 Fix it where it first goes wrong, not where it shows",
+        "○ 5 Commit the failing test first",
+    ] {
+        assert!(shown.contains(want), "{want:?}:\n{shown}");
+    }
+    assert_eq!(fg_of(&term, "✓ 1 Reproduce"), t.ok);
+    assert_eq!(fg_of(&term, "– 3 Plan the fix"), t.dim);
+    assert_eq!(fg_of(&term, "▸ 4 Fix it"), t.busy);
+    assert_eq!(fg_of(&term, "○ 5 Commit"), t.dim);
+    assert_eq!(fg_in(&term, "○ 5 Commit", "Commit"), t.subtext, "a step not reached is quieter");
+    assert_eq!(fg_in(&term, "▸ 4 Fix it", "Fix it"), t.text);
+    assert_eq!(fg_in(&term, "    the basket forgets", "the basket"), t.subtext);
+    // The check running: who checks, and for how long, on the row and in the details; the board keeps the clock going.
+    let set = |f: &dyn Fn(&mut crate::tickets::Ticket)| {
+        Tickets::open(&w.config, &project)
+            .update(1, |x| {
+                f(x);
+                true
+            })
+            .unwrap();
+    };
+    set(&|x| x.checking = Some(Checking { since: crate::usage::now() - 23, model: "fable".into() }));
+    app.reload_for_test();
+    assert!(app.board_clock_running());
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Verdict Fable is checking the work… 0:2"), "{shown}");
+    assert_eq!(fg_of(&term, "Fable is checking the work…"), t.busy);
+    // The check sent it back: said with what it found while the session works on it.
+    let found = Verdict {
+        at: crate::usage::now(),
+        model: "fable".into(),
+        findings: vec![Finding { file: "src/basket.rs".into(), line: 3, problem: "The last item is still dropped.".into() }],
+        ..Default::default()
+    };
+    set(&|x| {
+        x.checking = None;
+        x.checks_refused = 1;
+        x.verdict = Some(found.clone());
+    });
+    app.reload_for_test();
+    assert!(!app.board_clock_running());
+    let shown = draw(&mut term, &app);
+    assert!(
+        shown.contains("Fable's check sent it back: 1 problem: src/basket.rs:3: The last") && shown.contains("item is still dropped."),
+        "{shown}"
+    );
+    assert_eq!(fg_of(&term, "Fable's check sent it back"), t.warn);
+    // Sent back to mark its steps: which ones, and the heading counts them.
+    set(&|x| {
+        x.checks_refused = 0;
+        x.verdict = None;
+        x.steps.sent_back = true;
+    });
+    app.reload_for_test();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Sent back to mark steps 4, 5, 6, 7 and 8 done or skipped."), "{shown}");
+    assert_eq!(fg_of(&term, "Sent back to mark steps"), t.warn);
+    assert!(shown.contains("Steps · 5 steps not marked"), "{shown}");
+    assert_eq!(fg_of(&term, "5 steps not marked"), t.warn);
+    // Narrow: no details, and the row's step title is cut after a word.
+    let mut narrow = Terminal::new(TestBackend::new(60, 30)).unwrap();
+    let shown = draw(&mut narrow, &app);
+    let row = shown.lines().find(|l| l.contains("step 4/8")).unwrap_or_else(|| panic!("{shown}"));
+    assert_eq!(row.trim(), "Bug fix · step 4/8 · Fix it where it first goes…", "{row:?}");
+    assert!(!shown.contains("Steps ·"), "no details at this width:\n{shown}");
+}
+
+#[test]
+fn a_task_whose_squad_has_no_numbered_steps_shows_no_steps() {
+    let (w, mut app, project, _) = lab("tasks-no-steps", &[("Write the guide", "docs", State::NotStarted)]);
+    Tickets::open(&w.config, &project).start(1, "docs", "s-plain", None, &[]).unwrap();
+    app.reload_for_test();
+    let mut term = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("#1 Write the guide") && !shown.contains("Steps ·") && !shown.contains("step 1/"), "{shown}");
 }

@@ -919,7 +919,7 @@ mod tests {
         let config = rig.dir.join("config");
         let mut t = Tickets::open(&config, "p1");
         let n = t.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start(n, "feature", "task-1", None).unwrap();
+        t.start(n, "feature", "task-1", None, &[]).unwrap();
         let t0 = Instant::now();
         assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::TaskAtWork));
         for s in [State::NeedsYou(Need::Plan), State::Done, State::Cancelled] {

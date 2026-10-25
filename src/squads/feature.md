@@ -5,8 +5,7 @@ model: opus
 verdict_model: fable
 plan_first: true
 ---
-You own the design: plan it, build it, verify it. Copy these steps into your todo list first, and mark each one done
-or skipped with a one-line reason.
+You own the design: plan it, build it, verify it.
 
 1. Learn how the affected part works before you plan. Read the code yourself. When it spans many files or services,
    split the question into two to four angles. If you can start helpers (subagents), start one explorer per angle,

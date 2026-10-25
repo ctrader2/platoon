@@ -1342,6 +1342,7 @@ impl App {
             || self.draft_busy()
             || self.squads_busy()
             || !self.stopping.is_empty()
+            || self.board_clock_running()
     }
 
     /// The sessions with a reply not yet looked at, as the header counts them (a task's session is its task's news).

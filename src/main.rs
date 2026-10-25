@@ -84,6 +84,7 @@ mod squad_settings_app_tests;
 mod squads;
 #[cfg(test)]
 mod squads_app_tests;
+mod steps;
 #[cfg(test)]
 mod stop_app_tests;
 mod summaries;
@@ -179,7 +180,18 @@ fn main() -> io::Result<()> {
             let terminal = io::stdin().is_terminal();
             let (claude_root, cache, config) = (agents::claude::claude_root(), usage::cache_dir(), archive::config_dir());
             let roots = tickets::Roots { claude_root: &claude_root, cache: &cache };
-            std::process::exit(tickets::cli(&args, &config, Some(roots), &mut io::stdin().lock(), terminal, &cwd, &mut out, &mut err));
+            let task = std::env::var(agents::TASK_ENV).ok();
+            std::process::exit(tickets::cli(
+                &args,
+                &config,
+                task.as_deref(),
+                Some(roots),
+                &mut io::stdin().lock(),
+                terminal,
+                &cwd,
+                &mut out,
+                &mut err,
+            ));
         }
         Some(_) => {
             eprintln!("{USAGE}");
@@ -224,7 +236,7 @@ fn version_line() -> String {
     format!("platoon {}", versions::running())
 }
 
-const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | themes | tokens |
+const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task step | themes | tokens |
                uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
@@ -239,6 +251,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   make a task and print its number (#N); with no --folder it works in the
                   current folder; --squad suggests the squad that starts it
   task list [--project <name>] [--json]   the tasks, open ones first
+  task step <n> started|done|skipped [\"<one line>\"]   inside a task's session: mark a step of its
+                  squad (skipped needs a reason)
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   uninstall [--all] [--stop-sessions]   take platoon out of Claude Code and delete its cache;
@@ -251,12 +265,22 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   --agent codex: hook guard, hook session-start, hook stop and the task hooks),
                   or by platoon itself";
 
-/// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
+/// Run by Claude Code as its status line command. Must be quick and must never fail loudly. Every session's usage
+/// figures are recorded; a task's session (its task in its environment) shows the task's line, the figures at its end.
 fn statusline() -> io::Result<()> {
     let mut input = String::new();
     io::Read::read_to_string(&mut io::stdin(), &mut input)?;
-    println!("{}", usage::record(&input, &usage::cache_dir(), usage::now()));
+    let now = usage::now();
+    let figures = usage::record(&input, &usage::cache_dir(), now);
+    let task = std::env::var_os(agents::TASK_ENV).filter(|t| !t.is_empty());
+    let line = task.and_then(|_| taskrun::status_line(&input, &archive::config_dir(), &figures, status_width(), now));
+    println!("{}", line.unwrap_or(figures));
     Ok(())
+}
+
+/// How wide a status line may be: the terminal's columns when the environment says (`COLUMNS`), else 120.
+fn status_width() -> usize {
+    std::env::var("COLUMNS").ok().and_then(|c| c.trim().parse::<usize>().ok()).filter(|c| *c >= 20).map_or(120, |c| c - 1)
 }
 
 /// Refuse to continue until setup is complete. Only the UI and `open` are gated; the commands Claude

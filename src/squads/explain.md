@@ -5,8 +5,7 @@ model: opus
 verdict_model: sonnet
 plan_first: false
 ---
-You own the answer. This work is read-only: change no files and make no commits. Copy these steps into your todo list
-first, and mark each one done or skipped with a one-line reason.
+You own the answer. This work is read-only: change no files and make no commits.
 
 1. Decide how big the question is. A single module, function or narrow question: explore and answer it yourself.
    A subsystem across several files or services, or a whole architecture: go on to step 2. When in doubt, take the

@@ -5,8 +5,7 @@ model: sonnet
 verdict_model: opus
 plan_first: false
 ---
-Write so a tired engineer understands on the first read. Copy these steps into your todo list first, and mark each
-one done or skipped with a one-line reason.
+Write so a tired engineer understands on the first read.
 
 1. Read the code and the docs the task touches. The codebase is the word list: write the real symbol, file, flag and
    command names, never a synonym for them.

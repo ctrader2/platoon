@@ -5,9 +5,8 @@ model: opus
 verdict_model: fable
 plan_first: true
 ---
-You own the contract. The structure changes; the behaviour does not. If you find a missing feature or a real bug on
-the way, note it and leave it for its own task. Copy these steps into your todo list first, and mark each one done or
-skipped with a one-line reason.
+You own the contract. The structure changes; the behaviour does not. If you find a missing feature or a real bug on the
+way, note it and leave it for its own task.
 
 1. Pin the behaviour before anything moves. Learn the contract from the code and its callers, then make sure a
    characterization test, snapshot or comparison script captures what it does now. Write one if nothing covers it.

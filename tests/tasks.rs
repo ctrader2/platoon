@@ -163,6 +163,23 @@ impl Lab {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
+    /// `platoon task step <args>` as task #1's session runs it (the task in its environment): what it printed.
+    fn step(&self, args: &[&str]) -> String {
+        let out = Command::new(BIN)
+            .args(["task", "step"])
+            .args(args)
+            .envs(self.env())
+            .envs(common::NO_REAL_CODEX)
+            .env("PLATOON_TASK", "1:pweb")
+            .env_remove("PLATOON_PROJECT")
+            .env_remove("PLATOON_OFFER_TASKS")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "task step {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     /// End the fake claudes the hosts run (an interactive `sh` ignores SIGTERM), by the exact pids they published.
     fn end_hosts(&self) {
         for e in fs::read_dir(self.cache.join("hosts")).into_iter().flatten().flatten() {
@@ -254,6 +271,10 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     let settings: Value = serde_json::from_str(&at("--settings").unwrap()).unwrap();
     assert!(settings["permissions"]["ask"].as_array().unwrap().contains(&json!("Bash(git push:*)")), "{settings}");
     assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("hook task-stop"), "{settings}");
+    assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["statusMessage"], "Fable is checking the work against \"Done when\"…");
+    assert_eq!(settings["statusLine"]["command"], json!(format!("{BIN} statusline")));
+    assert_eq!(settings["statusLine"]["refreshInterval"], 2);
+    assert_eq!(settings["permissions"]["allow"], json!([format!("Bash({BIN} task step:*)")]));
     assert!(!argv.iter().any(|a| a == "--agents" || a == "--agent"));
     // The task's own folder: squad.md (platoon's rules, then the squad's steps) and every squad beside it.
     let squad_md = fs::read_to_string(task_dir.join("squad.md")).unwrap();
@@ -296,7 +317,23 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     t.wait_for_all(&["Needs you · 1", "a question", "Feature · asks: Which mail client first?"]);
     lab.hook("task-tool", ev("PostToolUse", json!({"tool_name": "AskUserQuestion"})));
     t.wait_for("Working · 1");
-    // The turn ends, and the check of the work says done: Done.
+    // The session marks its steps as it goes: the board follows.
+    assert_eq!(lab.step(&["1", "done", "read the mail code"]), "Step 1 done.\n");
+    lab.step(&["2", "started"]);
+    t.wait_for_all(&["Feature · step 2/9 · Name the data shape first", "Steps · 1 of 9 marked", "▸ 2 Name the data shape first"]);
+    // The turn ends with steps not marked: sent back once to mark them, before any check.
+    let calls = || fs::read_dir(lab.fake.join("calls")).map(|d| d.count()).unwrap_or(0);
+    let before = calls();
+    let said: Value = serde_json::from_str(&lab.hook("task-stop", ev("Stop", json!({"permission_mode": "acceptEdits"})))).unwrap();
+    assert_eq!(said["decision"], "block");
+    assert!(said["reason"].as_str().unwrap().contains("Steps 2 (Name the data shape first), 3 (Write the plan)"), "{said}");
+    assert_eq!(calls(), before, "no check yet");
+    t.wait_for_all(&["Sent back to mark steps 2, 3, 4, 5, 6, 7, 8 and 9 done or", "Steps · 8 steps not marked"]);
+    for n in 2..=9 {
+        lab.step(&[&n.to_string(), "done"]);
+    }
+    t.wait_for_all(&["Feature · all 9 steps marked", "Steps · 9 of 9 marked"]);
+    // The turn ends again, and the check of the work says done: Done.
     fs::write(lab.fake.join("reply"), r#"{"done":true,"boxes":[],"findings":[]}"#).unwrap();
     let said = lab.hook("task-stop", ev("Stop", json!({"permission_mode": "acceptEdits"})));
     assert!(said.trim().is_empty(), "nothing refused: {said}");
@@ -511,4 +548,59 @@ fn a_task_finished_long_ago_is_on_archived_and_a_brings_it_back_to_active() {
     t.wait_for_all(&["Done · 1", "#1 Old work", "Not started · 1", "Active  2", "Archived  0"]);
     t.send(&[3]);
     t.wait_exit();
+}
+
+#[test]
+fn a_tasks_session_marks_its_steps_with_platoon_task_step_and_its_status_line_shows_where_it_is() {
+    let lab = Lab::new("tasks-steps");
+    // A task at work in the shop, three steps from its squad, none marked.
+    let v = json!({"next": 2, "tasks": [{"number": 1, "title": "Text mails", "file": "01-text-mails.md", "state": "working",
+        "folder": lab.shop, "squad": "feature", "session": "s-7", "started": 1, "created": 1, "updated": 1,
+        "steps": {"list": [{"title": "Look"}, {"title": "Build"}, {"title": "Check"}]}}]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
+    // Run as the session would: the task in its environment (PLATOON_TASK), or none; nothing inherited from here.
+    let run = |args: &[&str], task: Option<&str>, stdin: &str| {
+        let mut c = Command::new(BIN);
+        c.args(args).envs(lab.env()).envs(common::NO_REAL_CODEX).env("PLATOON_NO_UPDATE_CHECK", "1");
+        for k in ["PLATOON_TASK", "PLATOON_PROJECT", "PLATOON_OFFER_TASKS", "COLUMNS"] {
+            c.env_remove(k);
+        }
+        if let Some(t) = task {
+            c.env("PLATOON_TASK", t);
+        }
+        let mut child = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    assert_eq!(run(&["task", "step", "1", "done", "read the mail code"], Some("1:pweb"), ""), (0, "Step 1 done.\n".into(), String::new()));
+    assert_eq!(run(&["task", "step", "2", "started"], Some("1:pweb"), "").0, 0);
+    let (code, _, err) = run(&["task", "step", "5", "done"], Some("1:pweb"), "");
+    assert_eq!((code, err.as_str()), (1, "platoon task step: there is no step 5: the steps are 1 to 3\n"));
+    let (code, _, err) = run(&["task", "step", "3", "skipped"], Some("1:pweb"), "");
+    assert!(code == 1 && err.contains("say why step 3 was skipped"), "{err}");
+    let (code, _, err) = run(&["task", "step", "3", "done"], None, "");
+    assert!(code == 1 && err.contains("works inside a task's session only"), "{err}");
+    let steps = &lab.task(1)["steps"]["list"];
+    assert_eq!((steps[0]["mark"].as_str(), steps[0]["note"].as_str()), (Some("done"), Some("read the mail code")));
+    assert_eq!(steps[1]["mark"], "started");
+    assert!(steps[2].get("mark").is_none(), "nothing written by a wrong one: {steps}");
+    // The status line: the task's, in its session; the plan usage alone in any other. Both are recorded.
+    let payload = |session: &str| {
+        json!({"session_id": session, "transcript_path": lab.claude.join(format!("projects/-shop/{session}.jsonl")),
+            "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+            "rate_limits": {"five_hour": {"used_percentage": 12}, "seven_day": {"used_percentage": 40}}})
+        .to_string()
+    };
+    assert_eq!(run(&["statusline"], Some("1:pweb"), &payload("s-7")).1, "#1 Feature · step 2/3 Build · Opus · 5h 12% · 7d 40%\n");
+    assert_eq!(run(&["statusline"], None, &payload("s-other")).1, "5h 12% · 7d 40%\n");
+    assert_eq!(run(&["statusline"], Some("1:pweb"), &payload("s-other")).1, "5h 12% · 7d 40%\n", "another session than the task's");
+    for id in ["s-7", "s-other"] {
+        let saved: Value = serde_json::from_str(&fs::read_to_string(lab.cache.join(format!("status/{id}.json"))).unwrap()).unwrap();
+        assert_eq!(saved["five_hour"]["pct"], 12, "{id}");
+    }
 }

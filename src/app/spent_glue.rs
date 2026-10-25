@@ -48,7 +48,7 @@ fn stamp_of(path: &Path) -> Stamp {
 /// What a Codex rollout says a session spent, as a `SessionLog`: its running total, and when the file was last written.
 fn codex_log(path: &Path) -> Option<SessionLog> {
     let last_at = std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    Some(SessionLog { spent: Agent::Codex.spent(path)?, last_at: last_at.map(|d| d.as_millis() as u64) })
+    Some(SessionLog { spent: Agent::Codex.spent(path)?, last_at: last_at.map(|d| d.as_millis() as u64), helpers: Vec::new() })
 }
 
 /// Read what changed (off the UI thread): each session's transcript found under `root` (Claude Code's folder), else its

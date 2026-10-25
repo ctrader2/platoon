@@ -33,7 +33,12 @@
 //!   makes the task need the user; a check that could not run makes it need the user with why. platoon runs no tests
 //!   itself: the rules (`rules`) tell the session to find and run the repo's tests and report them, and the check
 //!   holds it to that. On Codex a stop with the plan still to approve is the plan (Needs you, no check), and a reply
-//!   that ends with a question for the user (`QUESTION_MARK`) waits for the answer.
+//!   that ends with a question for the user (`QUESTION_MARK`) waits for the answer. Before the check, a stop with
+//!   steps of the squad never marked done or skipped sends the session back once to mark them (`unmarked_steps`).
+//!
+//! The squad's steps (`steps.rs`) are kept on the task from its start; the rules have the session mark each one with
+//! `platoon task step` (`tickets::cli`), and on Codex, whose sandbox can't write platoon's folder, `task-before` records
+//! that command itself and refuses it (`record_steps`). A Claude Code task's status line is platoon's (`status_line`).
 
 use crate::agents::{Agent, HookEvent, HookInput, HookKind, HookReply, Tool, TurnEnd};
 use crate::squads::Squad;
@@ -107,6 +112,10 @@ pub struct Rules {
     /// Each squad copied beside the task: its name and its file's name (`write_task_files` fills it in). Codex's rules
     /// name them, so a step's "follow the Review squad" finds `review.md`.
     pub squad_files: Vec<(String, String)>,
+    /// platoon by its full path, as the session runs it (`platoon task step`).
+    pub exe: String,
+    /// How many numbered steps the squad has (`steps::parse`): the session marks each one (none: nothing to mark).
+    pub steps: usize,
 }
 
 /// The rule on tests: platoon runs none itself, so the session finds the repo's own and reports them (the check of the
@@ -170,6 +179,9 @@ pub fn rules(r: &Rules) -> String {
             ));
         }
     }
+    if r.steps > 0 {
+        out.push_str(&steps_rule(r));
+    }
     out.push_str("- When you finish, end with what you did and how you checked each \"Done when\" box of the task.\n");
     out.push_str(TESTS_RULE);
     out.push_str(match r.agent {
@@ -187,6 +199,21 @@ pub fn rules(r: &Rules) -> String {
             r.squads_dir
         )),
     }
+    out
+}
+
+/// The rule on the squad's steps: the session marks each one with `platoon task step` (by platoon's full path), so the
+/// user sees where it is. Codex's sandbox can't write platoon's folder: its hook takes the command instead of running it.
+fn steps_rule(r: &Rules) -> String {
+    let exe = crate::agents::claude::shell_word(&r.exe);
+    let mut out = format!(
+        "- The user follows your progress through the squad's numbered steps below, 1 to {n}, counted in order. When you start a step, run `{exe} task step <n> started`. When you finish it, run `{exe} task step <n> done \"<one line: what you did>\"`; when you leave it out, run `{exe} task step <n> skipped \"<one line: why>\"`. Mark every step done or skipped before you finish. Only this squad's steps are marked: the steps of another squad a step tells you to follow are part of that step.",
+        n = r.steps
+    );
+    if r.agent == Agent::Codex {
+        out.push_str(" platoon takes this command itself instead of running it, and answers \"Recorded: ...\": that answer means it worked, so don't run it again.");
+    }
+    out.push('\n');
     out
 }
 
@@ -223,6 +250,8 @@ pub struct Places {
     pub providers: crate::agents::Providers,
     pub check_timeout: Duration,
     pub task: Option<String>,
+    /// platoon by its full path, as the rules name it to the session (`platoon task step`).
+    pub exe: String,
 }
 
 /// The kind of hook each of the task's hook commands is installed as (see `HOOKS`).
@@ -324,13 +353,14 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
             }
             let _ = store.update(number, |t| {
                 let reopen = matches!(t.state, State::NeedsYou(_) | State::Done);
-                if !reopen && t.checks_refused == 0 && t.checking.is_none() {
+                if !reopen && t.checks_refused == 0 && t.checking.is_none() && !t.steps.sent_back {
                     return false;
                 }
                 if reopen {
                     t.state = State::Working;
                 }
                 t.checks_refused = 0;
+                t.steps.sent_back = false;
                 // A check still running is of the work before this message: its answer no longer moves the task.
                 t.checking = None;
                 true
@@ -384,6 +414,9 @@ fn codex_first(input: &HookInput, at: &Places, project: &str, store: &mut Ticket
                 Tool::Shell if plan_waits && crate::askmatch::runs_any(said, &["apply_patch", "applypatch"]) => {
                     return refuse(PLAN_WAITS.into());
                 }
+                Tool::Shell if !step_commands(said, &at.exe).0.is_empty() => {
+                    return refuse(record_steps(said, &at.exe, store, t.number));
+                }
                 Tool::Shell => {
                     if let Some(command) = crate::askmatch::waits(said) {
                         if held::take_if_allowed(&task_dir, said) {
@@ -406,6 +439,42 @@ fn codex_first(input: &HookInput, at: &Places, project: &str, store: &mut Ticket
         _ if t.session_id() == Some(input.session.as_str()) => Gate::Own,
         _ => Gate::Answer(None),
     }
+}
+
+/// The runs of `platoon task step ...` (platoon by its path, `exe`) in the shell line `said`, each as the words after
+/// `step`, and whether the line runs anything else too.
+fn step_commands(said: &str, exe: &str) -> (Vec<Vec<String>>, bool) {
+    let (runs, mut others) = crate::askmatch::runs_of(said, exe);
+    let mut steps = Vec::new();
+    for words in runs {
+        match words.as_slice() {
+            [task, step, rest @ ..] if task == "task" && step == "step" => steps.push(rest.to_vec()),
+            _ => others = true,
+        }
+    }
+    (steps, others)
+}
+
+/// A Codex task's `platoon task step ...` (Codex's sandbox can't write platoon's folder): each one in the shell line
+/// `said` is recorded here instead, and the command is refused with what was recorded, so it never runs and never asks
+/// for an approval. Anything else on the same line didn't run either, and the answer says so.
+fn record_steps(said: &str, exe: &str, store: &mut Tickets, number: u32) -> String {
+    let (runs, others) = step_commands(said, exe);
+    let mut out: Vec<String> = runs
+        .iter()
+        .map(|args| {
+            let marked = crate::steps::parse_command(args)
+                .and_then(|(n, report)| store.mark_step(number, n, &report).map(|()| crate::steps::said(n, &report)));
+            match marked {
+                Ok(said) => format!("Recorded: {}", said.replacen("Step", "step", 1)),
+                Err(why) => format!("Not recorded: {why}. The command is {}.", crate::steps::USAGE),
+            }
+        })
+        .collect();
+    if others {
+        out.push("Nothing else on that command line ran: run the rest as a command of its own.".into());
+    }
+    out.join(" ")
 }
 
 /// The commit message of a Codex task's work: its number and title.
@@ -525,13 +594,30 @@ fn stop(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, t: &Tick
         });
         return None;
     }
+    if let Some(reason) = unmarked_steps(at, store, t) {
+        return Some(reason);
+    }
     check(end, at, project, store, t.number)
+}
+
+/// The end of the work with steps never marked done or skipped: the session is sent back once in this round of work to
+/// mark them, before any tokens are spent on the check (Some, its reason). The next stop goes through to the check.
+fn unmarked_steps(at: &Places, store: &mut Tickets, t: &Ticket) -> Option<String> {
+    let unmarked = t.steps.unmarked();
+    if unmarked.is_empty() || t.steps.sent_back {
+        return None;
+    }
+    let _ = store.update(t.number, |x| {
+        x.steps.sent_back = true;
+        true
+    });
+    Some(crate::steps::send_back(&t.steps, &unmarked, &at.exe))
 }
 
 /// The model a task's work is checked with: the `verdict_model` of the squad it started with (its copy in the task's
 /// own folder, as it ran: `squads::Squad::as_run`, else the squad as it is now, the same way), else that squad's own
 /// model.
-fn verdict_model(config: &Path, project: &str, t: &Ticket, catalog: &crate::agents::Catalog) -> String {
+pub fn verdict_model(config: &Path, project: &str, t: &Ticket, catalog: &crate::agents::Catalog) -> String {
     let copy = tickets::task_dir(config, project, t.number).join("squads").join(format!("{}.md", t.squad));
     let squad = fs::read_to_string(&copy)
         .ok()
@@ -549,12 +635,12 @@ fn verdict_model(config: &Path, project: &str, t: &Ticket, catalog: &crate::agen
 /// and then the answer is kept but moves nothing.
 fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number: u32) -> Option<String> {
     let started = crate::usage::now();
+    let model = verdict_model(&at.config, project, store.get(number)?, &at.providers.catalog());
     let _ = store.update(number, |x| {
-        x.checking = Some(started);
+        x.checking = Some(tickets::Checking { since: started, model: model.clone() });
         true
     });
     let t = store.get(number)?.clone();
-    let model = verdict_model(&at.config, project, &t, &at.providers.catalog());
     let claim = end.last_message.as_deref().unwrap_or_default();
     let m = verdict::gather("git", &t, &store.body(&t), claim);
     let runner = crate::ai::Runner::new(&at.cache, at.providers.clone());
@@ -576,7 +662,7 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
     };
     let mut refuse = false;
     let _ = store.update(number, |x| {
-        let ours = x.checking == Some(started);
+        let ours = x.checking.as_ref().is_some_and(|c| c.since == started);
         if ours {
             x.checking = None;
         }
@@ -600,6 +686,35 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
     refuse.then(|| verdict::refusal(&found))
 }
 
+/// `platoon statusline` in a task's Claude Code session (its `--settings` names it, run every couple of seconds): the
+/// task's line (`steps::status_line`) for the session the payload `input` names, with the plan usage (`usage`, the line
+/// every session gets) at its end, in `width` cells. None when the session is no task's. Cheap: the tasks files, the
+/// squad's copy beside the task and the session's helpers' small files (`claude::helpers`), nothing else.
+pub fn status_line(input: &str, config: &Path, usage: &str, width: usize, now: u64) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(input).ok()?;
+    let session = v.get("session_id")?.as_str()?;
+    let (project, number) = tickets::find_session(config, session)?;
+    let store = Tickets::open(config, &project);
+    let t = store.get(number)?;
+    let copy = tickets::task_dir(config, &project, number).join("squads").join(format!("{}.md", t.squad));
+    let squad = fs::read_to_string(&copy)
+        .ok()
+        .map(|text| crate::squads::parse(&t.squad, &text, crate::squads::Origin::Own))
+        .or_else(|| crate::squads::get(config, &t.squad))
+        .map(|s| s.name_or_id())
+        .unwrap_or_else(|| t.squad.clone());
+    let text = |p: &str| v.pointer(p).and_then(serde_json::Value::as_str).filter(|s| !s.is_empty());
+    let model = text("/model/display_name")
+        .map(String::from)
+        .or_else(|| text("/model/id").map(crate::agents::model_display_name))
+        .unwrap_or_default();
+    let helpers = text("/transcript_path").map(|p| crate::agents::claude::helpers(Path::new(p))).unwrap_or_default();
+    let helpers = crate::steps::helpers_now(&helpers, t.steps.last_marked(), now);
+    let checking = t.checking.as_ref().filter(|_| crate::board::checking(t, now)).map(|c| (c.model.as_str(), now.saturating_sub(c.since)));
+    let line = crate::steps::StatusLine { number, squad: &squad, steps: &t.steps, model: &model, helpers: &helpers, checking, usage };
+    Some(crate::steps::status_line(&line, width))
+}
+
 /// `platoon hook <name>` (of `agent`): always 0, with what the hook says on stdout. It never fails the session. A
 /// Codex task hook in a session that is no task's (most of them: these hooks are every Codex session's) ends at once,
 /// without reading anything, except `task-before` in a session platoon started: its edit may be the start of the work,
@@ -620,6 +735,7 @@ pub fn run_hook(name: &str, agent: Agent) -> i32 {
             providers: crate::agents::Providers::installed_here(),
             check_timeout: verdict::TIMEOUT,
             task: task.clone(),
+            exe: crate::offerhook::this_platoon(),
         };
         hook(name, agent, &input, &at)
     })
@@ -675,6 +791,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             providers: crate::agents::Providers { claude: Some(script.to_string_lossy().into_owned()), codex: None, off: Vec::new() },
             check_timeout: Duration::from_secs(20),
             task: None,
+            exe: "/opt/platoon/bin/platoon".into(),
         }
     }
 
@@ -697,7 +814,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         let n = store
             .add(NewTicket { title: "Login".into(), folder: Some(folder.to_string_lossy().into_owned()), ..Default::default() })
             .unwrap();
-        store.start(n, "feature", "s-1", None).unwrap();
+        store.start(n, "feature", "s-1", None, &[]).unwrap();
         (d, p, n)
     }
 
@@ -745,6 +862,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "the rules".into(),
             tag: "5:p1".into(),
+            checker: "Fable".into(),
         };
         let a = Agent::Claude.task_args(&l);
         assert_eq!(&a[..2], ["--add-dir", "/c/tasks/05-work"], "first, so it can't take the message");
@@ -1087,7 +1205,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             .add(NewTicket { title: "Login".into(), folder: Some(folder.to_string_lossy().into_owned()), ..Default::default() })
             .unwrap();
         let pending = format!("{}{}", tickets::PENDING, tickets::task_tag(&p, n));
-        store.start(n, "feature", &pending, None).unwrap();
+        store.start(n, "feature", &pending, None, &[]).unwrap();
         (d, p, n)
     }
 
@@ -1406,7 +1524,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             .add(NewTicket { title: "Login".into(), folder: Some(shop.to_string_lossy().into_owned()), ..Default::default() })
             .unwrap();
         let w = crate::worktrees::prepare("git", &shop.to_string_lossy(), n, None).unwrap().unwrap();
-        store.start(n, "feature", CODEX_ID, Some(w.clone())).unwrap();
+        store.start(n, "feature", CODEX_ID, Some(w.clone()), &[]).unwrap();
         (d, p, n, shop, PathBuf::from(w.path))
     }
 
@@ -1458,5 +1576,174 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "1. Add the form."})), &d, &p, n);
         assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Plan));
         assert_eq!(git(&shop, &["rev-list", "--count", "main..task/1"]), "0");
+    }
+
+    // ---- the squad's steps ----
+
+    /// Task `n` of `p` has these steps (as it would from its squad when it started).
+    fn with_steps(d: &Path, p: &str, n: u32, titles: &[&str]) {
+        let titles: Vec<String> = titles.iter().map(|t| t.to_string()).collect();
+        Tickets::open(d, p)
+            .update(n, |t| {
+                t.steps = crate::steps::Steps::new(&titles);
+                true
+            })
+            .unwrap();
+    }
+
+    fn mark(d: &Path, p: &str, n: u32, step: usize, report: crate::steps::Report) {
+        Tickets::open(d, p).mark_step(n, step, &report).unwrap();
+    }
+
+    #[test]
+    fn a_stop_with_steps_not_marked_sends_the_session_back_once_before_any_check_and_typing_starts_that_again() {
+        use crate::steps::Report;
+        let (d, p, n) = world("unmarked");
+        with_steps(&d, &p, n, &["Look", "Build", "Check"]);
+        mark(&d, &p, n, 1, Report::Done("read it".into()));
+        let said = hook("task-stop", &input("Stop", json!({"last_assistant_message": "Built it."})), &d).expect("sent back");
+        let v: Value = serde_json::from_str(&said).unwrap();
+        assert_eq!(v["decision"], "block");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(reason.starts_with("Before you finish: Steps 2 (Build), 3 (Check) aren't marked done or skipped."), "{reason}");
+        assert!(reason.contains("`/opt/platoon/bin/platoon task step <n> done \"<one line: what you did>\"`"), "{reason}");
+        assert_eq!(checks_made(&d), 0, "no tokens spent on the check yet");
+        let t = task(&d, &p, n);
+        assert!(t.steps.sent_back && t.state == State::Working && t.checking.is_none());
+        // Still not marked at the next stop: it goes through to the check as ever.
+        assert_eq!(hook("task-stop", &input("Stop", json!({})), &d), None);
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 1));
+        // The user types: a new round of work, so the steps are asked for once more.
+        hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "one more thing"})), &d);
+        assert!(!task(&d, &p, n).steps.sent_back);
+        assert!(hook("task-stop", &input("Stop", json!({})), &d).is_some(), "sent back again");
+        assert_eq!(checks_made(&d), 1);
+        // Every step marked: straight to the check.
+        hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "and now?"})), &d);
+        mark(&d, &p, n, 2, Report::Done(String::new()));
+        mark(&d, &p, n, 3, Report::Skipped("nothing to check".into()));
+        assert_eq!(hook("task-stop", &input("Stop", json!({})), &d), None);
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 2));
+    }
+
+    #[test]
+    fn a_stop_while_subagents_work_or_planning_asks_for_no_steps() {
+        let (d, p, n) = world("unmarked-busy");
+        with_steps(&d, &p, n, &["Look", "Build"]);
+        assert_eq!(hook("task-stop", &input("Stop", json!({"background_tasks": [{"id": "a1"}]})), &d), None);
+        assert_eq!(hook("task-stop", &input("Stop", json!({"permission_mode": "plan", "last_assistant_message": "Red?"})), &d), None);
+        assert!(!task(&d, &p, n).steps.sent_back);
+    }
+
+    #[test]
+    fn a_codex_tasks_step_command_is_recorded_by_its_hook_and_refused_so_it_never_runs() {
+        use crate::steps::Mark;
+        let (d, p, n) = codex_world("codex-steps");
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        with_steps(&d, &p, n, &["Look", "Build", "Check"]);
+        let run = |cmd: &str, session: &str| denied(&chook("task-before", &cinput(session, "PreToolUse", shell(cmd)), &d, &p, n));
+        let exe = "/opt/platoon/bin/platoon";
+        assert_eq!(run(&format!("{exe} task step 1 done 'read the code'"), CODEX_ID).as_deref(), Some("Recorded: step 1 done."));
+        let t = task(&d, &p, n);
+        assert!(matches!(&t.steps.list[0].mark, Mark::Done { note, .. } if note == "read the code"), "{:?}", t.steps);
+        // A helper's, inside a shell; on a line with something else (which didn't run either, and it says so).
+        assert_eq!(run(&format!("bash -lc '{exe} task step 2 started'"), "a-helper").as_deref(), Some("Recorded: step 2 started."));
+        let both = run(&format!("cd /w && {exe} task step 2 done"), CODEX_ID).unwrap();
+        assert_eq!(both, "Recorded: step 2 done. Nothing else on that command line ran: run the rest as a command of its own.");
+        // Wrong: said, nothing recorded.
+        let wrong = run(&format!("{exe} task step 9 done"), CODEX_ID).unwrap();
+        assert!(wrong.starts_with("Not recorded: there is no step 9: the steps are 1 to 3."), "{wrong}");
+        let why = run(&format!("{exe} task step 3 skipped"), CODEX_ID).unwrap();
+        assert!(why.starts_with("Not recorded: say why step 3 was skipped"), "{why}");
+        assert!(matches!(task(&d, &p, n).steps.list[2].mark, Mark::Open));
+        // By name too: the session may leave the path out, or another platoon may have started it.
+        assert_eq!(run("platoon task step 3 done", CODEX_ID).as_deref(), Some("Recorded: step 3 done."));
+        mark(&d, &p, n, 3, crate::steps::Report::Started);
+        // platoon's other commands, and a mention: not taken.
+        for cmd in [format!("{exe} task list"), format!("echo '{exe} task step 3 done'")] {
+            assert_eq!(chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell(&cmd)), &d, &p, n), None, "{cmd}");
+        }
+        // The end of the work with step 3 unmarked: sent back once in Codex's words, no check.
+        let back = chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Done."})), &d, &p, n).expect("sent back");
+        let v: Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(v["decision"], "block");
+        assert!(v["reason"].as_str().unwrap().contains("Step 3 (Check) isn't marked"), "{back}");
+        assert_eq!(checks_made(&d), 0);
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Done."})), &d, &p, n), None);
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 1));
+    }
+
+    #[test]
+    fn the_rules_have_the_session_mark_each_step_by_platoons_path_and_codex_hears_how_its_hook_takes_it() {
+        let base =
+            Rules { folder: "/w".into(), squads_dir: "/s".into(), exe: "/opt/my tools/platoon".into(), steps: 9, ..Default::default() };
+        let claude = rules(&base);
+        for want in [
+            "numbered steps below, 1 to 9, counted in order",
+            "run `'/opt/my tools/platoon' task step <n> started`",
+            "`'/opt/my tools/platoon' task step <n> done \"<one line: what you did>\"`",
+            "`'/opt/my tools/platoon' task step <n> skipped \"<one line: why>\"`",
+            "Mark every step done or skipped before you finish.",
+            "the steps of another squad a step tells you to follow are part of that step",
+        ] {
+            assert!(claude.contains(want), "{want}\n{claude}");
+        }
+        assert!(!claude.contains("Recorded"), "{claude}");
+        let codex = rules(&Rules { agent: Agent::Codex, ..base.clone() });
+        assert!(codex.contains("answers \"Recorded: ...\": that answer means it worked, so don't run it again"), "{codex}");
+        assert!(!rules(&Rules { steps: 0, ..base }).contains("task step"), "a squad without steps has nothing to mark");
+    }
+
+    #[test]
+    fn a_task_sessions_status_line_names_its_task_step_model_helpers_and_check_and_another_sessions_has_none() {
+        use crate::steps::Report;
+        let (d, p, n) = world("status-line");
+        let task_dir = tickets::task_dir(&d, &p, n);
+        let all = crate::squads::all(&d);
+        write_task_files(&task_dir, &all[0], &all, &Rules { exe: "/p".into(), steps: 9, ..Default::default() }).unwrap();
+        let titles = crate::steps::parse(&all[0].body);
+        Tickets::open(&d, &p)
+            .update(n, |t| {
+                t.steps = crate::steps::Steps::new(&titles);
+                true
+            })
+            .unwrap();
+        mark(&d, &p, n, 1, Report::Done("read it".into()));
+        mark(&d, &p, n, 2, Report::Started);
+        // Two reviewers, as Claude Code 2.1.310 writes them: one finished, one at work.
+        let transcript = d.join("claude/projects/-w/s-1.jsonl");
+        let subagents = d.join("claude/projects/-w/s-1/subagents");
+        fs::create_dir_all(&subagents).unwrap();
+        fs::write(&transcript, "").unwrap();
+        let meta = |id: &str, description: &str, model: &str, finished: bool| {
+            let v = json!({"agentType": "general-purpose", "description": description, "toolUseId": "toolu_1", "spawnDepth": 1,
+                "requestShape": "background", "requestNonInteractive": true, "model": model, "finished": finished});
+            fs::write(subagents.join(format!("agent-{id}.meta.json")), v.to_string()).unwrap();
+        };
+        meta("b2", "Reviewer B on the diff", "fable", false);
+        meta("a1", "Reviewer A on the diff", "opus", true);
+        let payload = |session: &str| {
+            json!({"session_id": session, "transcript_path": transcript, "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+                "rate_limits": {"five_hour": {"used_percentage": 12}}})
+            .to_string()
+        };
+        let now = crate::usage::now();
+        assert_eq!(
+            status_line(&payload("s-1"), &d, "5h 12%", 200, now).as_deref(),
+            Some("#1 Feature · step 2/9 Name the data shape first · Opus · Reviewers: Opus ✓ · Fable … · 5h 12%")
+        );
+        // The check running: who checks, and for how long.
+        Tickets::open(&d, &p)
+            .update(n, |t| {
+                t.checking = Some(tickets::Checking { since: now - 23, model: "fable".into() });
+                true
+            })
+            .unwrap();
+        let line = status_line(&payload("s-1"), &d, "", 200, now).unwrap();
+        assert!(line.ends_with(" · Fable is checking the work… 0:23"), "{line}");
+        assert!(status_line(&payload("s-1"), &d, "5h 12%", 60, now).unwrap().chars().count() <= 60);
+        // Not a task's session, or a payload that isn't one: none (the usage figures are shown as ever).
+        assert_eq!(status_line(&payload("someone-else"), &d, "5h 12%", 200, now), None);
+        assert_eq!(status_line("not json", &d, "", 200, now), None);
     }
 }

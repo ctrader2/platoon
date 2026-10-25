@@ -246,7 +246,7 @@ fn task_lab(name: &str) -> (World, App, String) {
             })
             .unwrap();
     }
-    store.start(1, "mine", "sess", None).unwrap();
+    store.start(1, "mine", "sess", None, &[]).unwrap();
     let codex = crate::agents::tests::codex_with_models(name);
     app.set_providers_for_test(Providers {
         claude: Some("/nonexistent/platoon-unit-test/claude".into()),

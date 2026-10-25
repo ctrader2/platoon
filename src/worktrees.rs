@@ -333,7 +333,7 @@ mod tests {
         let mut t = Tickets::open(&config, "p1");
         let n =
             t.add(NewTicket { title: "Basket".into(), folder: Some(shop.to_string_lossy().into_owned()), ..Default::default() }).unwrap();
-        t.start(n, "feature", "s", Some(got.clone())).unwrap();
+        t.start(n, "feature", "s", Some(got.clone()), &[]).unwrap();
         assert_eq!(Tickets::open(&config, "p1").get(n).unwrap().worktree, Some(got));
         let text = fs::read_to_string(crate::tickets::path_in(&config, "p1")).unwrap();
         assert!(text.contains(&format!("\"base\": \"{head}\"")), "{text}");

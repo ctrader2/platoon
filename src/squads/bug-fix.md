@@ -5,8 +5,7 @@ model: opus
 verdict_model: fable
 plan_first: true
 ---
-You own this fix. Be scientific: every line you ship traces to evidence you saw. Copy these steps into your todo list
-first, and mark each one done or skipped with a one-line reason.
+You own this fix. Be scientific: every line you ship traces to evidence you saw.
 
 1. Reproduce it yourself, on the surface where it was reported: run the command, the test, the request, the page.
    Ask the user only when you truly cannot reach that surface, and say exactly why. If it won't reproduce, tighten the

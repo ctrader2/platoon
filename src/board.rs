@@ -99,10 +99,18 @@ pub enum Tone {
 pub struct Piece {
     pub text: String,
     pub tone: Tone,
+    /// Where the line hasn't room for all of it, it may be cut after a word (a step's title); else it goes whole or
+    /// not at all (a count, a mark). The line's first piece is always cut that way.
+    pub cut: bool,
 }
 
 pub fn piece(text: impl Into<String>, tone: Tone) -> Piece {
-    Piece { text: text.into(), tone }
+    Piece { text: text.into(), tone, cut: false }
+}
+
+/// A piece that may be cut after a word.
+pub fn cuttable(text: impl Into<String>, tone: Tone) -> Piece {
+    Piece { text: text.into(), tone, cut: true }
 }
 
 /// One task on the board.
@@ -243,14 +251,60 @@ pub fn need_words(n: &Need) -> String {
 /// Is the check of a task's work running now? Its mark, unless it is older than the check can take (a hook that was
 /// ended before it could clear it).
 pub fn checking(t: &Ticket, now: u64) -> bool {
-    t.state == State::Working && t.checking.is_some_and(|at| now.saturating_sub(at) <= crate::verdict::TIMEOUT.as_secs() + 120)
+    t.state == State::Working && t.checking.as_ref().is_some_and(|c| now.saturating_sub(c.since) <= crate::verdict::TIMEOUT.as_secs() + 120)
+}
+
+/// "Fable is checking the work… 0:23", while the check runs.
+pub fn checking_words(t: &Ticket, now: u64) -> Option<String> {
+    let c = t.checking.as_ref().filter(|_| checking(t, now))?;
+    Some(crate::steps::checking_words(&c.model, now.saturating_sub(c.since)))
+}
+
+/// What has just sent a task's work back to its session, while the session works on it (until the next check, or the
+/// user types): the stop sent it back to mark its steps, or the check found problems.
+pub fn sent_back(t: &Ticket, now: u64) -> Option<String> {
+    if t.state != State::Working || checking(t, now) {
+        return None;
+    }
+    let unmarked = t.steps.unmarked();
+    if t.steps.sent_back && !unmarked.is_empty() && t.checks_refused == 0 {
+        return Some(format!("Sent back to mark {} done or skipped.", steps_not_marked(&unmarked)));
+    }
+    let v = t.verdict.as_ref().filter(|v| t.checks_refused > 0 && v.failed.is_none() && !v.done)?;
+    let by = if v.model.is_empty() { "The check".to_string() } else { format!("{}'s check", crate::agents::model_display_name(&v.model)) };
+    Some(format!("{by} sent it back: {}", crate::verdict::short(v)))
+}
+
+/// "step 4", "steps 4 and 8", "steps 2, 4 and 8".
+fn steps_not_marked(n: &[usize]) -> String {
+    let each: Vec<String> = n.iter().map(usize::to_string).collect();
+    match each.as_slice() {
+        [one] => format!("step {one}"),
+        [rest @ .., last] => format!("steps {} and {last}", rest.join(", ")),
+        [] => String::new(),
+    }
+}
+
+/// What the Steps checklist of a task's details is headed with, after "Steps": how far it is ("4 of 8 marked"), or,
+/// once the end of the work has sent it back to mark them, how many are still not marked ("2 not marked", a warning).
+pub fn steps_heading(t: &Ticket) -> Option<Piece> {
+    if t.steps.is_empty() {
+        return None;
+    }
+    let unmarked = t.steps.unmarked().len();
+    let total = t.steps.list.len();
+    Some(if t.steps.sent_back && unmarked > 0 {
+        piece(if unmarked == 1 { "1 step not marked".to_string() } else { format!("{unmarked} steps not marked") }, Tone::Warn)
+    } else {
+        piece(format!("{} of {total} marked", total - unmarked), Tone::Dim)
+    })
 }
 
 /// A task's Verdict line in its details (after the label "Verdict"): checking now, or what the last check said, who
 /// checked and when. Nothing before its first check.
 pub fn verdict_line(t: &Ticket, now: u64, clock: &dyn Fn(u64) -> String) -> Vec<Piece> {
-    if checking(t, now) {
-        return vec![piece("checking the work…", Tone::Busy)];
+    if let Some(words) = checking_words(t, now) {
+        return vec![piece(words, Tone::Busy)];
     }
     let Some(v) = &t.verdict else { return Vec::new() };
     let at = clock(v.at);
@@ -301,6 +355,13 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
             right = since(now, f.last_wrote(session).unwrap_or(t.updated));
             right_tone = Tone::Busy;
             second.push(piece(if squad.is_empty() { "Working".to_string() } else { squad.clone() }, Tone::Subtext));
+            match t.steps.current() {
+                Some(i) => {
+                    second.push(piece(format!(" · {}", t.steps.position(i)), Tone::Subtext));
+                    second.push(cuttable(format!(" · {}", t.steps.list[i].title), Tone::Subtext));
+                }
+                None => second.extend(t.steps.words().map(|w| piece(format!(" · {w}"), Tone::Subtext))),
+            }
             if checking(t, now) {
                 second.push(piece(" · checking the work", Tone::Busy));
             }
@@ -636,14 +697,14 @@ mod tests {
         let text = |p: Vec<Piece>| p.iter().map(|x| x.text.as_str()).collect::<String>();
         let mut t = started(task(1, "T", State::Working, NOW), "s-1");
         assert!(verdict_line(&t, NOW, &clock).is_empty(), "nothing before its first check");
-        t.checking = Some(NOW - 30);
-        assert_eq!(text(verdict_line(&t, NOW, &clock)), "checking the work…");
+        t.checking = Some(crate::tickets::Checking { since: NOW - 30, model: "fable".into() });
+        assert_eq!(text(verdict_line(&t, NOW, &clock)), "Fable is checking the work… 0:30", "who checks, and for how long");
         assert!(
             row(&In { project: "p", archived: false, task: &t, busy: None }, Section::Working, &Known)
                 .second_text()
                 .ends_with(" · checking the work")
         );
-        t.checking = Some(NOW - crate::verdict::TIMEOUT.as_secs() - 600);
+        t.checking = Some(crate::tickets::Checking { since: NOW - crate::verdict::TIMEOUT.as_secs() - 600, model: String::new() });
         assert!(!checking(&t, NOW), "a mark left by a hook that was ended");
         t.checking = None;
         t.verdict = Some(Verdict { at: NOW, model: "fable".into(), done: true, tokens: 8_200, ..Default::default() });

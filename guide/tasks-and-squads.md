@@ -28,14 +28,16 @@ opens an archived task's session as on Active, and `/` filters Archived too. A t
 in its session) is back among Active's sections, and once it is finished again it moves by itself as before.
 
 Each task takes two lines: its project's badge, its number and title, and at the right what it needs or how long since
-it last changed; under it, its squad and its own words (the question it asks), **Suggested: Docs · s starts it** for one
+it last changed; under it, its squad and its own words (the question it asks), the step a working task is on
+(**Bug fix · step 4/8 · Fix it where it first goes wrong**), **Suggested: Docs · s starts it** for one
 not started yet, and **No folder yet** when it has none. The header says
 how many tasks need you, **● 2 need you**, on every tab.
 
 On a terminal 100 columns wide or more, the picked task's details are beside the list: its state and why, its squad, its
 folder, its branch and worktree, the **Verdict** of the last check of its work (and what it
-found, `file:line: problem`), the tokens its session used, **The plan** when one waits for your yes, and its **Done when**
-boxes (ticked ✓ or crossed ✗ by the check, once it has run).
+found, `file:line: problem`), the tokens its session used, its **Helpers** while they work, **The plan** when one waits
+for your yes, its **Steps** checked off (see [Watching it work](#watching-it-work)), and its **Done when** boxes (ticked
+✓ or crossed ✗ by the check, once it has run).
 
 | Key (Tasks tab) | Does |
 | --- | --- |
@@ -128,6 +130,39 @@ platoon gives the session a few hooks, and they move the task along:
   **Done**.
 - You type into it: a task that needed you, or was Done, is Working again, with its tries counted from nothing.
 
+### Watching it work
+
+When a task starts, platoon takes its squad's numbered steps (the lines that start `1.`, `2.`, ... in the squad's
+file), each named by its first sentence, and keeps them with the task. platoon's rules tell the session to mark each
+one as it goes, with a command it runs by platoon's full path (so it works without `platoon` on your PATH):
+
+```
+platoon task step 3 started
+platoon task step 3 done "the plan is in plan.md"
+platoon task step 4 skipped "nothing contested, no review needed"
+```
+
+The command works only inside a task's session (the task is in its environment, `PLATOON_TASK`); a reason is needed
+to skip one. On Claude Code the session runs it without asking you each time. On Codex, whose sandbox can't write
+platoon's folder, platoon's hook takes the command instead of running it and answers **Recorded: step 3 done.**
+
+- **On the Tasks tab**, a working task's row says the step it is on, and its details have its **Steps**: `✓` done (with
+  what the session said under it), `▸` the one it is on, `–` skipped (with why), `○` not reached yet, and how many are
+  marked. While the session's helpers (subagents) work, **Helpers** names them by model, `✓` finished and `…` at work,
+  as **Reviewers: Opus ✓ · Fable … · Sonnet ✓ · Haiku ✓** when they are all reviewers (Claude Code's helpers only).
+- **Inside a Claude Code task's session**, its status line is platoon's: **#5 Bug fix · step 5/8 Commit the failing test
+  first · Opus**, then its helpers, the check of its work while it runs (**Fable is checking the work… 0:23**) and your
+  plan usage. It is run again every 2 seconds, and it is cut to fit, the plan usage first. This replaces a status line
+  of your own in task sessions only; every other session keeps yours. Codex has no status line platoon can set.
+- **Steps not marked**: when the session stops with its work finished but some steps never marked done or skipped,
+  platoon sends it back once, before the check, naming those steps and the command. The details say **Sent back to mark
+  steps 6 and 8 done or skipped.** The next stop goes to the check either way, and the details say **2 steps not
+  marked** if they still aren't. It asks again only after you have typed into the session.
+
+A squad with no numbered steps has nothing to mark. When a step says to follow another squad (the Review squad on your
+diff), that squad's steps are part of the step: its reviewers show as helpers, not as a second list. A task started
+afresh takes its squad's steps afresh; continuing its session keeps them as they are.
+
 ### The tests
 
 platoon runs no tests itself. Its rules for every task tell the session to find how its repo runs its tests (its
@@ -144,12 +179,15 @@ on Claude Code no shell and no edits; on Codex its read-only sandbox, where it c
 nothing), and it is given the task's text with its **Done when** boxes, the session's last message (what it
 says it did) and the change on the task's branch since it started (what isn't committed yet is listed too). It says, for
 each box, whether it is met, and what is missing or wrong, each with the file, the line and the exact text there. The
-task shows **Working · checking the work** meanwhile (10 minutes at most).
+task shows **Working · checking the work** meanwhile (10 minutes at most), its details say who checks and for how long
+(**Fable is checking the work… 0:23**), and so does a Claude Code session's status line; Claude Code also shows **Fable is
+checking the work against "Done when"…** beside its spinner.
 
 - **Done**: the task is Done; its details say **Verdict done · checked by fable at 13:52** and its boxes are ticked.
 - For a change to code, a last message that names no test run is **not done**: the check crosses the box **Tests run
   and reported**.
-- **Not done**: the session gets what the check found, `file:line: problem` first, and carries on, once. The next time
+- **Not done**: the session gets what the check found, `file:line: problem` first, and carries on, once (the details
+  say **Fable's check sent it back:** and what it found, while the session works on it). The next time
   it stops, the check runs again; a second "not done" makes the task **Needs you · the check found
   problems**, with what it found in its details.
 - platoon looks for the text the check quotes at each line it names. A finding whose text isn't there is left out; a
@@ -229,6 +267,8 @@ is Done); what differs is how Codex does each thing.
   where it can't, it does each helper's part itself, one pass each. The **Review** squad's four reviewers are Codex
   helpers on Codex's models, or four passes by the session itself.
 - **The check of the work** runs on the squad's verdict model, Claude's or Codex's, as for any task.
+- **Steps** are marked as on Claude Code (platoon's hook records the command, see [Watching it work](#watching-it-work)),
+  and the Tasks tab shows them; there is no status line inside the session and no **Helpers** line.
 
 ### On a computer with only Codex
 
@@ -269,6 +309,8 @@ plan_first: false
 1. Read what is there ...
 ```
 
+The numbered steps (`1.`, `2.`, ... at the start of a line) are the steps platoon follows on the Tasks tab (see
+[Watching it work](#watching-it-work)); a numbered line indented under a step is part of it.
 `description` is what the drafting reads to suggest a squad; `model` is the session's model; `plan_first: true` starts
 it in plan mode; `verdict_model` is the model that [checks the work](#the-check-of-the-work) (the session's own model
 when it has none). A model is written as its program names it (`opus`, a full Claude model name, or one of Codex's such
@@ -323,6 +365,7 @@ From a shell:
 ```
 platoon task add --project "Web shop" --title "Order emails in plain text" [--body-file text.md] [--folder ~/src/shop] [--squad bug-fix]
 platoon task list [--project "Web shop"] [--json]
+platoon task step <n> started | done "<one line>" | skipped "<why>"    (inside a task's session)
 ```
 
 The text comes from `--body-file`, else from what is piped in, else the template. `--squad` suggests the squad that

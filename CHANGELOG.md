@@ -8,6 +8,16 @@ here.
 
 ### Added
 
+- **Watch a task work through its squad.** platoon keeps a task's squad steps with it, and the session marks each one
+  as it goes (`platoon task step <n> started`, `done "<one line>"`, `skipped "<why>"`; on Codex platoon's hook records
+  the command itself). The Tasks tab's row says the step a task is on, and its details check the steps off (`✓` done,
+  `▸` on it, `–` skipped, `○` not reached) and name the helpers at work by model (**Reviewers: Opus ✓ · Fable …**).
+  Inside a Claude Code task's session the status line is platoon's: **#5 Bug fix · step 5/8 Commit the failing test
+  first · Opus**, its helpers, and the check of the work with a timer (**Fable is checking the work… 0:23**); other
+  sessions keep their own status line. While the check runs, the details and Claude Code's spinner say so; when it
+  sends the work back, the details say what it found. A session that finishes with steps not marked is sent back once
+  to mark them, before the check.
+
 - **Switch Claude Code or Codex off.** Settings → General has a **Programs** group at the top: **Use Claude Code** and
   **Use Codex**, each On or Off (**Not installed** where it isn't). A program switched off is left out as if it weren't
   installed: its sessions leave the lists and the search, its plan usage the header, its models every model choice, `n`
@@ -21,6 +31,8 @@ here.
 
 ### Changed
 
+- **The built-in squads no longer ask the session to copy their steps into a todo list.** platoon follows the steps
+  itself now (see above), and its rules tell the session how to mark them.
 - **A session asks about tasks just before it starts working.** The "Ready to create tasks?" note a session got as it
   started never once made it ask, so a hook asks instead: the first time a session platoon started or resumed (not a
   task's own) is about to launch an agent, edit a file in its folder or make a worktree, platoon holds that step back

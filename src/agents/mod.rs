@@ -360,6 +360,8 @@ pub struct TaskLaunch {
     pub instructions: String,
     /// The task, as the session's environment names it to its hooks (`TASK_ENV`, `tickets::task_tag`).
     pub tag: String,
+    /// The model the task's work is checked on, by name ("Fable"), for what Claude Code shows while the check runs.
+    pub checker: String,
 }
 
 /// The variable in a task's session's environment that names the task (`tickets::task_tag`). Codex's task hooks are
@@ -820,6 +822,16 @@ pub fn needs(model: &str) -> Option<Agent> {
     }
 }
 
+/// A model's name as the user reads it, without a catalog: `fable` -> `Fable`, `claude-sonnet-5` -> `Sonnet 5`,
+/// `gpt-6-luna` -> `GPT-6-Luna`; anything else as it is.
+pub fn model_display_name(model: &str) -> String {
+    match needs(model) {
+        Some(Agent::Claude) => claude::alias_name(model),
+        Some(a) => a.model_name(model),
+        None => model.to_string(),
+    }
+}
+
 /// Is `program` on `path` (a `PATH` value)? A name with a `/` is looked at where it says.
 pub fn on_path(program: &str, path: &str) -> bool {
     if program.contains('/') {
@@ -910,6 +922,24 @@ pub struct Spent {
 pub struct SessionLog {
     pub spent: Spent,
     pub last_at: Option<u64>,
+    /// The session's helpers (subagents), as its agent writes them down: Claude Code only.
+    pub helpers: Vec<Helper>,
+}
+
+/// One helper (subagent) a session started, as its agent writes it down (Claude Code's `subagents/agent-<id>.meta.json`:
+/// `claude::helpers`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Helper {
+    /// What the session said it is for ("Reviewer A on the diff").
+    pub description: String,
+    /// The model it runs on, when said (an alias such as `haiku`, or a full name).
+    pub model: Option<String>,
+    /// Its kind of agent (`general-purpose`, `Explore`, ...; "" when not said).
+    pub kind: String,
+    /// It has finished.
+    pub finished: bool,
+    /// When its files last changed (seconds since the epoch).
+    pub at: u64,
 }
 
 // ---- reading what agents write ---------------------------------------------------------------------------------------

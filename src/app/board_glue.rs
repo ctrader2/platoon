@@ -90,6 +90,12 @@ impl App {
         self.top == TOP_TASKS && self.open_project.is_none()
     }
 
+    /// The Tasks tab shows a task whose work is being checked: its timer ("… 0:23") moves every second.
+    pub fn board_clock_running(&self) -> bool {
+        let now = usage::now();
+        self.board_showing() && self.every_ticket().iter().any(|(_, t)| board::checking(t, now))
+    }
+
     /// A task's own screen is showing.
     pub fn task_screen_showing(&self) -> bool {
         self.tk.open.is_some() && self.board_showing()

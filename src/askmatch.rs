@@ -28,12 +28,43 @@ const TOO_DEEP: &str = "(commands nested too deep to read)";
 /// The first command in the shell line `line` that waits for the user (as it was read, its words joined by spaces);
 /// None when none does.
 pub fn waits(line: &str) -> Option<String> {
-    commands(line, 0).into_iter().find(|words| matches_table(words)).map(|words| words.join(" "))
+    commands(line, 0, Program::Name).into_iter().find(|words| matches_table(words)).map(|words| words.join(" "))
 }
 
 /// Does the shell line `line` run one of `programs` (by name, read as `waits` reads a line)?
 pub fn runs_any(line: &str, programs: &[&str]) -> bool {
-    commands(line, 0).iter().any(|words| words.first().is_some_and(|p| programs.contains(&p.as_str()) || p == TOO_DEEP))
+    commands(line, 0, Program::Name).iter().any(|words| words.first().is_some_and(|p| programs.contains(&p.as_str()) || p == TOO_DEEP))
+}
+
+/// Each run of the program `exe` in the shell line `line` (read as `waits` reads a line), as the words after it, and
+/// whether the line runs anything else too. The program is matched by its path, as written or a path to the same file,
+/// and by its name (`platoon` on the PATH, or another copy of it): what is done with a run is harmless either way.
+pub fn runs_of(line: &str, exe: &str) -> (Vec<Vec<String>>, bool) {
+    let (mut runs, mut others) = (Vec::new(), false);
+    for words in commands(line, 0, Program::Path) {
+        match words.split_first() {
+            Some((program, rest)) if same_program(program, exe) => runs.push(rest.to_vec()),
+            Some(_) => others = true,
+            None => {}
+        }
+    }
+    (runs, others)
+}
+
+/// Is the program `word` names the file `exe`?
+fn same_program(word: &str, exe: &str) -> bool {
+    if word == exe {
+        return true;
+    }
+    let real = |p: &str| std::fs::canonicalize(p).ok();
+    program_name(word) == program_name(exe) || word.contains('/') && real(word).is_some_and(|w| real(exe) == Some(w))
+}
+
+/// How a command's program is given back: by its name (`/usr/bin/git` is `git`), or as written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Program {
+    Name,
+    Path,
 }
 
 /// Does this one command (its words, normalized) match a rule of the table?
@@ -80,23 +111,23 @@ fn glob(parts: &[&str], text: &str) -> bool {
 
 /// Every simple command in `script`, each as its words (normalized: `normalize`), those run by the commands inside it
 /// too (`$( )`, backticks, `sh -c`, `eval`).
-fn commands(script: &str, depth: usize) -> Vec<Vec<String>> {
+fn commands(script: &str, depth: usize, program: Program) -> Vec<Vec<String>> {
     if depth > MAX_DEPTH {
         return vec![vec![TOO_DEEP.to_string()]];
     }
-    let mut lexed = Lexer::new(script, depth);
+    let mut lexed = Lexer::new(script, depth, program);
     lexed.run();
     let mut out = lexed.nested;
     for words in lexed.commands {
-        out.extend(expand(words, depth));
+        out.extend(expand(words, depth, program));
     }
     out
 }
 
 /// One simple command's words, normalized, or what it runs when it is a shell given a script (`sh -c`) or `eval`.
-fn expand(words: Vec<String>, depth: usize) -> Vec<Vec<String>> {
-    let words = normalize(words);
-    let Some(program) = words.first() else { return Vec::new() };
+fn expand(words: Vec<String>, depth: usize, as_given: Program) -> Vec<Vec<String>> {
+    let words = normalize(words, as_given);
+    let Some(program) = words.first().map(|w| program_name(w)) else { return Vec::new() };
     if matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh" | "mksh" | "ash" | "fish") {
         // `bash -lc 'script'`, `sh -e -c 'script'`: the first word that isn't an option after a `c` option.
         let mut it = words.iter().skip(1);
@@ -113,17 +144,17 @@ fn expand(words: Vec<String>, depth: usize) -> Vec<Vec<String>> {
                 continue;
             }
             if takes_script {
-                return commands(w, depth + 1);
+                return commands(w, depth + 1, as_given);
             }
             break;
         }
         if takes_script && let Some(w) = it.next() {
-            return commands(w, depth + 1);
+            return commands(w, depth + 1, as_given);
         }
         return vec![words];
     }
     if program == "eval" {
-        return commands(&words[1..].join(" "), depth + 1);
+        return commands(&words[1..].join(" "), depth + 1, as_given);
     }
     vec![words]
 }
@@ -134,7 +165,7 @@ const KEYWORDS: [&str; 12] = ["!", "{", "}", "then", "do", "else", "elif", "if",
 /// One command's words as the program sees them: no leading `VAR=value`s, keywords or wrappers (`env`, `command`,
 /// `exec`, `nohup`, `sudo`, `nice`, `timeout`, ... with their own options), the program by its name (`/usr/bin/git` is
 /// `git`), and for git, its options before its command left out (`git -C dir push` is `git push`).
-fn normalize(mut words: Vec<String>) -> Vec<String> {
+fn normalize(mut words: Vec<String>, program: Program) -> Vec<String> {
     loop {
         let Some(first) = words.first() else { return words };
         let assignment = first.split_once('=').is_some_and(|(name, _)| {
@@ -166,13 +197,15 @@ fn normalize(mut words: Vec<String>) -> Vec<String> {
                 n + 1 // the duration
             }
             _ => {
-                words[0] = name;
+                if program == Program::Name {
+                    words[0] = name;
+                }
                 break;
             }
         };
         words.drain(..(1 + skip).min(words.len()));
     }
-    if words[0] == "git" {
+    if program_name(&words[0]) == "git" && program == Program::Name {
         let mut i = 1;
         while let Some(w) = words.get(i) {
             if !w.starts_with('-') {
@@ -215,6 +248,8 @@ fn program_name(word: &str) -> String {
 struct Lexer<'a> {
     chars: std::iter::Peekable<std::str::Chars<'a>>,
     depth: usize,
+    /// How the commands inside `$( )` and backticks give their program back.
+    program: Program,
     word: String,
     /// The word has begun (so `''` is an empty word, not none).
     in_word: bool,
@@ -226,10 +261,11 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(script: &'a str, depth: usize) -> Self {
+    fn new(script: &'a str, depth: usize, program: Program) -> Self {
         Lexer {
             chars: script.chars().peekable(),
             depth,
+            program,
             word: String::new(),
             in_word: false,
             current: Vec::new(),
@@ -313,7 +349,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_nested(&mut self, script: &str) {
-        let found = commands(script, self.depth + 1);
+        let found = commands(script, self.depth + 1, self.program);
         self.nested.extend(found);
     }
 
@@ -563,5 +599,35 @@ mod tests {
         assert!(waits("echo \"unclosed $(git push").is_some());
         assert_eq!(waits("echo 'unclosed"), None);
         assert!(waits("git push 'unclosed").is_some());
+    }
+
+    #[test]
+    fn a_programs_runs_are_found_by_its_path_with_the_words_after_it_and_whether_anything_else_runs() {
+        let exe = "/opt/my tools/platoon";
+        let words = |w: &[&str]| w.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            runs_of("'/opt/my tools/platoon' task step 3 done 'wrote it'", exe),
+            (vec![words(&["task", "step", "3", "done", "wrote it"])], false)
+        );
+        assert_eq!(
+            runs_of(
+                "cd /w && FOO=1 '/opt/my tools/platoon' task step 1 started; bash -lc \"'/opt/my tools/platoon' task step 2 done\"",
+                exe
+            ),
+            (vec![words(&["task", "step", "1", "started"]), words(&["task", "step", "2", "done"])], true)
+        );
+        // By its name too (on the PATH, another copy); a mention, or nothing of it: none.
+        assert_eq!(runs_of("platoon task step 1 started", exe), (vec![words(&["task", "step", "1", "started"])], false));
+        assert_eq!(runs_of("/usr/local/bin/platoon task list", exe), (vec![words(&["task", "list"])], false));
+        assert_eq!(runs_of("platoonish task step 1", exe), (vec![], true));
+        assert_eq!(runs_of("echo '/opt/my tools/platoon task step 1 done'", exe), (vec![], true));
+        assert_eq!(runs_of("", exe), (vec![], false));
+        // The same file by another path.
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-askmatch-{}", std::process::id())));
+        std::fs::create_dir_all(d.join("bin")).unwrap();
+        std::fs::write(d.join("bin/platoon"), "").unwrap();
+        let real = d.join("bin/platoon").to_string_lossy().into_owned();
+        let other = format!("{}/./bin/platoon task step 4 done", d.display());
+        assert_eq!(runs_of(&other, &real).0, vec![words(&["task", "step", "4", "done"])]);
     }
 }

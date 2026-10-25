@@ -97,6 +97,13 @@ Claude Code is started with:
   `cargo publish` and `npm publish`, whatever your own settings allow. They are Claude Code's own permission rules, not a
   sandbox: something they don't name (another tool, a script that pushes, `sh -c 'git push'`, `/usr/bin/git push`, or
   an MCP server that publishes) is not stopped by them.
+- One `allow` rule in the same `--settings`, `Bash(<platoon> task step:*)`, so the session marks the
+  [squad's steps](tasks-and-squads.md#watching-it-work) without asking you each time. It allows only that command,
+  written with platoon's full path.
+- platoon's own status line (`statusLine`: `<platoon> statusline`, run again every 2 seconds), in place of yours in a
+  task's session only: it shows the task, the step it is on, its helpers and the check of its work. Every other
+  session keeps the status line you set up. The `Stop` hook also says, while the check runs, which model is checking
+  the work (`statusMessage`).
 
 **When a task's session stops, a fresh call checks the work.** From the session's `Stop` hook platoon runs, on the
 squad's `verdict_model`, `claude -p` (or, for one of OpenAI's models, `codex exec` in Codex's read-only sandbox) in the

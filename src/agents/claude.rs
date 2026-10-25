@@ -3,7 +3,7 @@
 //! knowledge of them lives in this file.
 
 use super::{
-    Agent, Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Tools,
+    Agent, Helper, Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Tools,
     Transcript, TurnEnd, one_line, parse_iso_ms, tidy_reply, truncate_to,
 };
 use crate::ai::{Outcome, Request, classify, extract_json};
@@ -437,17 +437,26 @@ pub fn shell_word(s: &str) -> String {
     }
 }
 
-/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules. The `Stop`
-/// hook waits as long as the check of the work may take, and a little more.
-pub fn settings_json(exe: &str) -> String {
+/// How often a task's status line is run again besides Claude Code's own updates, in seconds (Claude Code's
+/// `statusLine.refreshInterval`, at least 1): the step, the helpers and the check's timer stay current.
+pub const STATUS_EVERY: u64 = 2;
+
+/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules; platoon's own
+/// status line (the task's line: `platoon statusline`), run again every `STATUS_EVERY` seconds, in place of the user's
+/// in this session only; and `exe task step` allowed without a permission prompt (the rules have the session run it
+/// at each step, written as here). The `Stop` hook waits as long as the check of the work may take, and a little more,
+/// and Claude Code shows while it runs that `checker` (the check's model, by name) is checking the work.
+pub fn settings_json(exe: &str, checker: &str) -> String {
     let exe = shell_word(exe);
     let cmd = |name: &str| json!({"type": "command", "command": format!("{exe} hook {name}")});
     let mut stop = cmd("task-stop");
     if let Some(o) = stop.as_object_mut() {
         o.insert("timeout".into(), json!(crate::verdict::TIMEOUT.as_secs() + STOP_MARGIN));
+        o.insert("statusMessage".into(), json!(format!("{checker} is checking the work against \"Done when\"…")));
     }
     json!({
-        "permissions": {"ask": ASK},
+        "permissions": {"ask": ASK, "allow": [format!("Bash({exe} task step:*)")]},
+        "statusLine": {"type": "command", "command": format!("{exe} statusline"), "refreshInterval": STATUS_EVERY},
         "hooks": {
             "PreToolUse": [
                 {"matcher": "ExitPlanMode", "hooks": [cmd("task-plan")]},
@@ -477,7 +486,7 @@ pub fn task_args(l: &TaskLaunch) -> Vec<String> {
         "--permission-mode".into(),
         if l.plan { "plan" } else { "acceptEdits" }.into(),
         "--settings".into(),
-        settings_json(&l.exe),
+        settings_json(&l.exe, &l.checker),
         "--append-system-prompt-file".into(),
         l.task_dir.join(crate::taskrun::SQUAD_FILE).to_string_lossy().into_owned(),
     ]);
@@ -872,7 +881,41 @@ pub fn read_session_log(path: &Path) -> Option<SessionLog> {
             last_at = last_at.max(written(&e.path()).unwrap_or(0));
         }
     }
-    Some(SessionLog { spent: spent(path).unwrap_or_default(), last_at: Some(last_at) })
+    Some(SessionLog { spent: spent(path).unwrap_or_default(), last_at: Some(last_at), helpers: helpers(path) })
+}
+
+/// The helpers (subagents) of the session whose transcript is `transcript`: Claude Code writes one
+/// `<session folder>/subagents/agent-<id>.meta.json` for each (Claude Code 2.1.310: `{"agentType", "description",
+/// "model", "finished", ...}`; older ones have no `model` or `finished`), its transcript `agent-<id>.jsonl` beside it.
+/// Undocumented, so read defensively: a file that isn't JSON, or has no description, is left out, a key that is
+/// missing or of another kind reads as not said. `at` is the latest change of either file. Small files only: cheap
+/// enough for a status line.
+pub fn helpers(transcript: &Path) -> Vec<Helper> {
+    let secs = |p: &Path| {
+        fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs())
+    };
+    let dir = transcript.with_extension("").join("subagents");
+    let mut out = Vec::new();
+    for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = e.path();
+        let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".meta.json")) else { continue };
+        let Ok(meta) = fs::metadata(&path) else { continue };
+        if !meta.is_file() || meta.len() > 64 * 1024 {
+            continue;
+        }
+        let Some(v) = fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
+        let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+        let Some(description) = text("description") else { continue };
+        let at = secs(&path).unwrap_or(0).max(secs(&dir.join(format!("{id}.jsonl"))).unwrap_or(0));
+        out.push(Helper {
+            description: crate::projects::clean(&description, 200),
+            model: text("model").map(|m| crate::projects::clean(&m, 80)),
+            kind: text("agentType").map(|k| crate::projects::clean(&k, 60)).unwrap_or_default(),
+            finished: v.get("finished").and_then(Value::as_bool).unwrap_or(false),
+            at,
+        });
+    }
+    out
 }
 
 fn sum(u: &Usages) -> Spent {
@@ -1114,6 +1157,48 @@ mod tests {
     }
 
     #[test]
+    fn a_sessions_helpers_are_read_from_its_subagents_meta_files_and_odd_ones_are_left_out_or_read_as_not_said() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-helpers-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        let transcript = d.join("projects/-w/s-1.jsonl");
+        let subs = d.join("projects/-w/s-1/subagents");
+        fs::create_dir_all(&subs).unwrap();
+        fs::write(&transcript, "").unwrap();
+        assert!(helpers(&d.join("projects/-w/none.jsonl")).is_empty(), "no folder: none");
+        // Claude Code 2.1.310's shape, finished and not; an older one without model or finished; and odd files.
+        let write = |name: &str, text: &str| fs::write(subs.join(name), text).unwrap();
+        write(
+            "agent-a1.meta.json",
+            r#"{"agentType":"general-purpose","description":"Reviewer D on the diff","toolUseId":"toolu_1","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"haiku","finished":true}"#,
+        );
+        write("agent-a1.jsonl", "{}\n");
+        write(
+            "agent-b2.meta.json",
+            r#"{"agentType":"general-purpose","description":"Reviewer A on the diff","model":"opus","finished":false}"#,
+        );
+        write("agent-c3.meta.json", r#"{"agentType":"Explore","description":"Find the index","toolUseId":"toolu_3"}"#);
+        write("agent-d4.meta.json", "not json");
+        write("agent-e5.meta.json", r#"{"agentType":"general-purpose","model":"opus"}"#);
+        write("agent-f6.meta.json", r#"{"description":"Odd kinds","model":7,"finished":"yes","agentType":["x"]}"#);
+        write("notes.txt", "not a helper");
+        let mut got = helpers(&transcript);
+        got.sort_by(|a, b| a.description.cmp(&b.description));
+        let now = crate::usage::now();
+        assert!(got.iter().all(|h| now.saturating_sub(h.at) < 600), "{got:?}");
+        let seen: Vec<(&str, Option<&str>, &str, bool)> =
+            got.iter().map(|h| (h.description.as_str(), h.model.as_deref(), h.kind.as_str(), h.finished)).collect();
+        assert_eq!(
+            seen,
+            [
+                ("Find the index", None, "Explore", false),
+                ("Odd kinds", None, "", false),
+                ("Reviewer A on the diff", Some("opus"), "general-purpose", false),
+                ("Reviewer D on the diff", Some("haiku"), "general-purpose", true),
+            ]
+        );
+    }
+
+    #[test]
     fn the_calling_sessions_markers_are_dropped_and_what_configures_claude_is_kept() {
         // Everything a Claude Code 2.1.283 session gave its shell, plus the user's own settings.
         let seen = [
@@ -1309,8 +1394,30 @@ mod tests {
     const SETTINGS_BEFORE: &str = r##"{"permissions":{"ask":["Bash(git push:*)","Bash(git -C * push)","Bash(git -C * push *)","Bash(git -c * push)","Bash(git -c * push *)","Bash(git --git-dir* push)","Bash(git --git-dir* push *)","Bash(git --work-tree* push)","Bash(git --work-tree* push *)","Bash(gh pr create:*)","Bash(gh pr merge:*)","Bash(gh release:*)","Bash(gh api -X *)","Bash(gh api --method *)","Bash(gh api -f *)","Bash(gh api -F *)","Bash(gh api --field *)","Bash(gh api --raw-field *)","Bash(gh api --input *)","Bash(gh api * -X *)","Bash(gh api * --method *)","Bash(gh api * -f *)","Bash(gh api * -F *)","Bash(gh api * --field *)","Bash(gh api * --raw-field *)","Bash(gh api * --input *)","Bash(glab:*)","Bash(cargo publish:*)","Bash(npm publish:*)"]},"hooks":{"PreToolUse":[{"matcher":"ExitPlanMode","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-plan"}]},{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-question"}]}],"Notification":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-notify"}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-tool"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-prompt"}]}],"Stop":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-stop","timeout":660}]}]}}"##;
 
     #[test]
-    fn a_claude_tasks_settings_are_byte_for_byte_what_they_were() {
-        assert_eq!(settings_json("/opt/platoon/bin/platoon"), SETTINGS_BEFORE);
+    fn a_claude_tasks_settings_keep_what_they_had_and_add_platoons_status_line_the_step_command_and_the_checks_words() {
+        let mut now: Value = serde_json::from_str(&settings_json("/opt/platoon/bin/platoon", "Fable")).unwrap();
+        // The task's status line: platoon's, run again every 2 seconds.
+        assert_eq!(now["statusLine"], json!({"type": "command", "command": "/opt/platoon/bin/platoon statusline", "refreshInterval": 2}));
+        // `task step` by platoon's path, as the rules write it, needs no permission prompt.
+        assert_eq!(now["permissions"]["allow"], json!(["Bash(/opt/platoon/bin/platoon task step:*)"]));
+        // While the stop's check runs, Claude Code says who checks.
+        let stop = &now["hooks"]["Stop"][0]["hooks"][0];
+        assert_eq!(stop["statusMessage"], "Fable is checking the work against \"Done when\"…");
+        // Everything else is byte for byte what it was.
+        if let Some(o) = now.as_object_mut() {
+            o.remove("statusLine");
+        }
+        if let Some(p) = now.get_mut("permissions").and_then(Value::as_object_mut) {
+            p.remove("allow");
+        }
+        if let Some(h) = now.pointer_mut("/hooks/Stop/0/hooks/0").and_then(Value::as_object_mut) {
+            h.remove("statusMessage");
+        }
+        assert_eq!(now.to_string(), SETTINGS_BEFORE);
+        // A path with a space: the rule is written as the command is, quoted.
+        let quoted: Value = serde_json::from_str(&settings_json("/opt/my tools/platoon", "GPT-6-Luna")).unwrap();
+        assert_eq!(quoted["permissions"]["allow"], json!(["Bash('/opt/my tools/platoon' task step:*)"]));
+        assert_eq!(quoted["statusLine"]["command"], "'/opt/my tools/platoon' statusline");
     }
 
     #[test]
@@ -1326,8 +1433,9 @@ mod tests {
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "the rules".into(),
             tag: "5:p1".into(),
+            checker: "Fable".into(),
         };
-        let settings = settings_json("/opt/platoon/bin/platoon");
+        let settings = settings_json("/opt/platoon/bin/platoon", "Fable");
         let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert_eq!(
             task_args(&l),
