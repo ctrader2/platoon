@@ -81,15 +81,16 @@ minimum Rust (1.88, `rust-version`); warnings are errors (`RUSTFLAGS=-D warnings
 the tests with cargo-nextest (`.config/nextest.toml`): `--profile ci`, every test binary in one pool of 16 threads (the
 tests mostly wait), then `--profile ci-perf`, the scale checks (`perf::`) on their own, one per core, since they time
 themselves and miss their limits beside the pool. No retries; a hung test is named at 60s and ended at 3 minutes.
-Locally `cargo test` is the check; a test must pass both ways (nextest runs each test in its own process). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
---ref main`), not on pull requests while the repo is private (10x minutes); once public, on pull requests too. Every
+Locally `cargo test` is the check; a test must pass both ways (nextest runs each test in its own process). macOS (arm64: test and release build) runs on every push to `main` and every pull request too. A pull request into
+`main` needs every CI check (CodeQL's and cargo-deny's included) green and one approval (the ruleset `main`); only the
+maintainer pushes `v*` tags (the ruleset `release tags`). Every
 job has a `timeout-minutes` (checks 15, Linux tests 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat
 the free minutes. A failing test's output is printed as it happens and again at the end, and every test runs after one fails.
 Tests must hold on macOS too: no `/proc`, no GNU-only flags (`sed -i`, `date -d`), no `/bin/true`, no case-sensitive file
 names, and a temp folder that may be under the home folder (paths there are shown from `~`).
 `deny.yml` runs `cargo deny check` (`deny.toml`: licenses, advisories, crates.io only) with CI and weekly.
-`codeql.yml` runs CodeQL (Rust and the workflows, no build) on pushes to `main`, pull requests and weekly; while the
-repo is private it skips itself (code scanning needs a public repo or GitHub Code Security). Dependabot (`dependabot.yml`)
+`codeql.yml` runs CodeQL (Rust and the workflows, no build) on pushes to `main`, pull requests and weekly (on a private
+repo it would skip itself: code scanning needs a public repo or GitHub Code Security). Dependabot (`dependabot.yml`)
 opens weekly grouped minor/patch updates for cargo and the actions.
 `checked-with/claude-code` and `checked-with/codex` are the Claude Code and Codex versions platoon was last checked with
 (compiled in: the notice when a user's is newer): README.md and the guide must name the same ones (`scripts/check-versions.sh`
@@ -150,7 +151,7 @@ the release binaries, the install script and the Homebrew formula (tap `ctrader2
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane (`render`: a line break kept) and a squad's steps (`render_joined`: a hard-wrapped paragraph read as one) |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures (`AiFake`, `CodexServerFake`), scale checks with thousands of synthetic transcripts |
-| `.github/workflows/`, `deny.toml`, `.config/nextest.toml` | CI (`ci.yml`: Linux checks, Linux tests, minimum Rust, macOS on `main`; the tests run by cargo-nextest as `.config/nextest.toml`'s `ci` profile says), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `version-watch.yml` (daily: an issue for a newer Claude Code or Codex), `release.yml` (written by `dist`: a tagged release) and `publish-crate.yml` (crates.io, called by it) |
+| `.github/workflows/`, `deny.toml`, `.config/nextest.toml` | CI (`ci.yml`: Linux checks, Linux tests, minimum Rust, macOS; the tests run by cargo-nextest as `.config/nextest.toml`'s `ci` profile says), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `version-watch.yml` (daily: an issue for a newer Claude Code or Codex), `release.yml` (written by `dist`: a tagged release) and `publish-crate.yml` (crates.io, called by it) |
 | `versions.rs` | the version notices: Claude Code newer than `checked-with/claude-code` and Codex newer than `checked-with/codex` (compiled in; `claude --version`, `codex --version`, each only where `Providers` has it: `checks_for`), and a newer platoon from GitHub's latest release (`curl`, once a day at most: platoon's only network request), each said once per version, with the update command for how platoon was installed (`install_kind`); `<cache>/version-check.json`; the `update_check` setting and `PLATOON_NO_UPDATE_CHECK`; run off the UI thread when the app starts (`App::start_version_checks`), shown above the footer of the top-level lists (`App::news_showing`, tests in `versions_app_tests.rs` and `tests/codex.rs`); everything new in one notice (`decide`, `Found`); `setup_line`, `codex_setup_line` for `platoon setup` |
 | `CHANGELOG.md`, `dist-workspace.toml`, `flake.nix`, `flake.lock` | the changelog (Keep a Changelog; each release's notes); `dist`'s config for releases; the Nix flake (`nix run github:ctrader2/platoon`) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`, `checked-with/codex`: the versions platoon was last checked with (one file per program); `scripts/check-versions.sh` (the docs name those versions; tested in `tests/docs_versions.rs`), `scripts/version-watch.sh` (the watch's logic, one program per run; `DRY_RUN=1` locally), `scripts/uninstall.sh` (the complete uninstall, POSIX sh, `curl ... | sh`: runs `platoon uninstall`, or without a usable platoon asks the same questions and cleans the folders itself; then removes the program: Homebrew, cargo, or the install script's receipt in `~/.config/platoon-tui` and its line in the shell startup files; tested end to end in `tests/uninstall.rs` under sh, bash and dash) |

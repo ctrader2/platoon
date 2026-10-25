@@ -106,9 +106,6 @@ jobs:
 
   macos:
     name: macOS (test, release build)
-    # macOS minutes cost 10x while the repo is private: pushes to main and runs started by hand only. Once the repo is
-    # public, drop this line so pull requests run it too.
-    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
