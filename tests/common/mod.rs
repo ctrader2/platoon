@@ -203,6 +203,11 @@ impl Term {
         self.screen.screen_mut().set_size(rows, cols);
     }
 
+    /// The program's process id (to stop and continue it, as a computer that stalls would).
+    pub fn pid(&self) -> u32 {
+        self.child.process_id().expect("the program is running")
+    }
+
     pub fn send(&mut self, bytes: &[u8]) {
         self.writer.write_all(bytes).unwrap();
         self.writer.flush().unwrap();

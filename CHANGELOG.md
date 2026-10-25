@@ -216,6 +216,10 @@ here.
 
 ### Fixed
 
+- **An open session could stop showing new output until you left it and came back.** When a window fell behind for
+  half a second (a busy or briefly stalled computer), its session stopped sending it anything while your keys still
+  reached it, so a reply stayed hidden. The session now closes the connection of a window it can't keep up, and the
+  window, in platoon or `platoon open`, connects again by itself and catches up at once.
 - `platoon setup` names a backup ("Saved … (backup: settings.json.platoon-bak)") only when there was a file to back up.
 - With no sessions yet, the list says so ("No sessions yet. Press n to start one.") as soon as platoon has looked,
   instead of "Reading your sessions…" and `indexing…` coming back at every once-a-second pass on a busy computer.

@@ -5,11 +5,12 @@ mod common;
 use common::*;
 use std::{
     fs,
-    os::unix::{fs::PermissionsExt, process::CommandExt},
+    io::{ErrorKind, Read},
+    os::unix::{fs::PermissionsExt, net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
@@ -74,6 +75,61 @@ fn the_terminal_fits_the_smallest_window_and_grows_back_when_it_leaves() {
     big.retry("stty size", "24 80"); // and it grows back once that window is gone
 
     big.type_line("exit");
+    until("host to exit", || !alive(pid));
+}
+
+/// Ends the stand-in a host of the test's runs (and so the host), even when the test fails.
+struct Reap(u32);
+
+impl Drop for Reap {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
+    }
+}
+
+/// More output than any socket's buffer holds, and the line `flood-done-42` after it: typed into a shell session, it
+/// is more than a window that doesn't read can be handed.
+const FLOOD: &str = "yes platoon-flood | head -n 200000; echo flood-done-$((6*7))";
+
+/// Read what `stream` was sent until the host closes it (true), or until nothing more comes for a while (false: the
+/// connection is still open, with nothing on its way).
+fn drained_to_the_end(stream: &mut UnixStream) -> bool {
+    stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let start = Instant::now();
+    let mut buf = [0u8; 1 << 16];
+    while start.elapsed() < WAIT {
+        match stream.read(&mut buf) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::ConnectionReset => return true,
+            Err(_) => {} // nothing for a second: ask again until the time is up
+        }
+    }
+    false
+}
+
+#[test]
+fn a_window_that_stops_reading_is_cut_off_and_the_others_keep_getting_output() {
+    let cache = tmp("stalled");
+    let (pid, sock) = start_host(&cache, "sh");
+    let reap = Reap(pid);
+    // A window that takes its snapshot and then reads nothing more (stuck, or its computer stalled).
+    let mut stalled = UnixStream::connect(&sock).unwrap();
+    write_frame(&mut stalled, b'R', &[0, 24, 0, 80]).unwrap();
+    stalled.set_read_timeout(Some(WAIT)).unwrap();
+    read_frame(&mut stalled).expect("the snapshot");
+    let mut live = Viewer::connect(&sock, 24, 80);
+
+    live.type_line(FLOOD);
+    live.wait_for("flood-done-42");
+    // The host can't hand the stuck window what the session wrote: it closes its connection rather than keep it
+    // connected and sent nothing ever again (a screen frozen with no sign of it).
+    assert!(drained_to_the_end(&mut stalled), "the host kept a window it no longer feeds connected");
+
+    // The window that reads was never held up by the other one.
+    live.type_line("echo after-$((2+3))");
+    live.wait_for("after-5");
+    drop(reap);
     until("host to exit", || !alive(pid));
 }
 
@@ -161,6 +217,77 @@ fn platoon_open_starts_a_session_detaches_and_rejoins_it_by_id_with_the_screen_r
 
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     until("shell to exit", || !alive(pid));
+}
+
+#[test]
+fn platoon_open_connects_again_by_itself_when_the_host_cuts_it_off() {
+    let w = World::new("open-cut");
+    let mut t = Term::spawn(&["open"], &w.env(&w.shell()), &w.work, 24, 80);
+    t.send(b"echo first-$((6*7))\r");
+    t.wait_for("first-42");
+    let (pid, sock) = find_host(&w.cache).expect("the session's host");
+    let reap = Reap(pid);
+
+    // The window stops reading for a while (as when its computer stalls) while the session writes more than it can be
+    // handed: the host cuts it off. Another window sees the whole of it.
+    let open = t.pid();
+    unsafe { libc::kill(open as i32, libc::SIGSTOP) };
+    let mut other = Viewer::connect(&sock, 24, 80);
+    other.type_line(FLOOD);
+    other.wait_for("flood-done-42");
+    unsafe { libc::kill(open as i32, libc::SIGCONT) };
+
+    // Back, it shows the session as it is now and what it writes from then on, without leaving and coming back.
+    t.wait_for("flood-done-42");
+    t.send(b"echo back-$((3+4))\r");
+    t.wait_for("back-7");
+    assert!(!t.text().contains("session ended"), "{}", t.text());
+    t.send(&[0]); // Ctrl+Space
+    assert_eq!(t.wait_exit(), 0);
+    assert!(t.text().contains("detached"), "{}", t.text());
+    assert!(alive(pid), "the session runs on");
+    drop(reap);
+    until("host to exit", || !alive(pid));
+}
+
+#[test]
+fn platoon_connects_an_open_session_again_by_itself_when_the_host_cuts_it_off() {
+    let w = World::new("app-cut");
+    let (pid, sock) = start_host(&w.cache, "sh");
+    let reap = Reap(pid);
+    // The session's conversation, and the stand-in registered as Claude registers one.
+    let dir = w.claude.join("projects").join("-work");
+    fs::create_dir_all(&dir).unwrap();
+    let line = format!(
+        r#"{{"type":"user","cwd":"{}","timestamp":"2026-09-19T05:00:00.000Z","message":{{"role":"user","content":"tidy the widget"}}}}"#,
+        w.work.display()
+    );
+    fs::write(dir.join("aaaa-0001.jsonl"), line + "\n").unwrap();
+    w.register(pid, "aaaa-0001", 1);
+
+    let mut t = Term::spawn(&[], &w.env(NO_REAL_CLAUDE.1), &w.work, 30, 110);
+    t.wait_for("tidy the widget");
+    t.send(b"\r");
+    t.send(b"echo first-$((6*7))\r");
+    t.wait_for("first-42");
+
+    // platoon stops reading for a while (as when its computer stalls) while the session writes more than it can be
+    // handed: the host cuts it off. Another window sees the whole of it.
+    let app = t.pid();
+    unsafe { libc::kill(app as i32, libc::SIGSTOP) };
+    let mut other = Viewer::connect(&sock, 24, 80);
+    other.type_line(FLOOD);
+    other.wait_for("flood-done-42");
+    unsafe { libc::kill(app as i32, libc::SIGCONT) };
+
+    // Back, it shows the session as it is now and what it writes from then on, still in the session.
+    t.wait_for("flood-done-42");
+    t.send(b"echo back-$((3+4))\r");
+    t.wait_for("back-7");
+    assert!(!t.text().contains("Session ended"), "{}", t.text());
+    drop(t);
+    drop(reap);
+    until("host to exit", || !alive(pid));
 }
 
 #[test]

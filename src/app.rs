@@ -693,6 +693,8 @@ pub struct App {
     ai_notice_seen: Option<String>,
     /// The conversation opened in the attached view: never auto-archived, even before its process registers.
     viewing: Option<String>,
+    /// When the attached view last connected again by itself (`keep_attached`), since it was opened.
+    reconnected: Option<Instant>,
     /// When auto-archive last ran (None: not yet).
     last_auto_archive: Option<Instant>,
     /// A settings change is waiting to take effect in auto-archive, which is on hold until then.
@@ -975,6 +977,7 @@ impl App {
             tokens_today: Vec::new(),
             ai_notice_seen: None,
             viewing: None,
+            reconnected: None,
             last_auto_archive: None,
             apply_after: None,
             program: Agent::Claude.program(),
@@ -1435,13 +1438,11 @@ impl App {
         if self.squads_showing() {
             self.reload_squads(None);
         }
-        if let Some(pid) = attached
-            && (self.client.as_ref().is_none_or(|c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid))
+        self.keep_attached();
+        if let Some(pid) = self.attached_pid()
+            && (self.client.is_none() || !self.hosts.iter().any(|h| h.claude_pid == pid))
         {
-            self.mode = Mode::List;
-            self.client = None;
-            self.clear_selection();
-            self.notify("Session ended");
+            self.session_ended();
         }
 
         // What we knew about running conversations, for spotting busy -> idle across the rebuild.
@@ -2426,32 +2427,60 @@ impl App {
     }
 
     fn attach(&mut self, pid: u32) {
-        let Some(info) = self.hosts.iter().find(|h| h.claude_pid == pid).cloned() else {
+        if !self.hosts.iter().any(|h| h.claude_pid == pid) {
             self.notify("That session's host isn't running");
             return;
-        };
-        let (rows, cols) = self.pty_size();
-        match Client::connect(&info.sock, rows, cols) {
-            Ok(c) => {
-                self.client = Some(c);
-                self.mode = Mode::Attached(pid);
-                self.clear_selection();
-                if let Some(s) = self.sessions.iter_mut().find(|s| s.procs.iter().any(|p| p.pid == pid)) {
-                    s.unread = false;
-                }
-            }
-            Err(e) => {
-                // Most likely the host just went (an idle session stopped since the last refresh). Forget it now,
-                // so pressing enter again opens the conversation from its saved history instead of failing again.
-                self.hosts.retain(|h| h.claude_pid != pid);
-                self.reload();
-                if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) {
-                    self.notify("That session just stopped. Press enter to open it again.");
-                } else {
-                    self.notify(format!("Couldn't connect to the session: {e}"));
-                }
+        }
+        self.reconnected = None;
+        if let Err(e) = self.connect(pid) {
+            // Most likely the host just went (an idle session stopped since the last refresh). Forget it now,
+            // so pressing enter again opens the conversation from its saved history instead of failing again.
+            self.hosts.retain(|h| h.claude_pid != pid);
+            self.reload();
+            if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) {
+                self.notify("That session just stopped. Press enter to open it again.");
+            } else {
+                self.notify(format!("Couldn't connect to the session: {e}"));
             }
         }
+    }
+
+    /// Show the session `pid` runs in the attached view, connected to its host at the view's size.
+    fn connect(&mut self, pid: u32) -> io::Result<()> {
+        let sock = self.hosts.iter().find(|h| h.claude_pid == pid).map(|h| h.sock.clone()).ok_or(io::ErrorKind::NotFound)?;
+        let (rows, cols) = self.pty_size();
+        self.client = Some(Client::connect(&sock, rows, cols)?);
+        self.mode = Mode::Attached(pid);
+        self.clear_selection();
+        if let Some(s) = self.sessions.iter_mut().find(|s| s.procs.iter().any(|p| p.pid == pid)) {
+            s.unread = false;
+        }
+        Ok(())
+    }
+
+    /// Keep the attached view connected (the event loop asks on every pass). A host closes the connection of a window
+    /// it can't feed in time (`host::cut_off`): while the host still runs, connect again at once, which brings the
+    /// screen up to date just as leaving and coming back would. Only when that fails (the host is gone), or the
+    /// connection closes again right after it was made, does the view end: "Session ended".
+    pub fn keep_attached(&mut self) {
+        let Some(pid) = self.attached_pid() else { return };
+        if !self.client.as_ref().is_some_and(Client::closed) {
+            return;
+        }
+        let again_at_once = self.reconnected.is_some_and(|t| t.elapsed() < crate::client::RECONNECT_GAP);
+        if again_at_once || self.connect(pid).is_err() {
+            self.session_ended();
+        } else {
+            self.reconnected = Some(Instant::now());
+        }
+    }
+
+    /// Back to the list: the attached session has ended.
+    fn session_ended(&mut self) {
+        self.mode = Mode::List;
+        self.client = None;
+        self.clear_selection();
+        self.notify("Session ended");
     }
 
     /// What Enter does on the selected row (see `jump_plan_of`).

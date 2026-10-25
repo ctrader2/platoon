@@ -13,6 +13,7 @@ use crate::projects::{self, Projects};
 use ratatui::crossterm::terminal;
 use std::{
     io::{self, Read, Write},
+    net::Shutdown,
     os::unix::net::UnixStream,
     path::Path,
     sync::{
@@ -20,7 +21,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Undo anything claude switched on in the terminal (mouse reporting, bracketed paste, alt screen,
@@ -268,30 +269,12 @@ enum Ended {
 
 /// `back`: the byte forms of the back key (`keys::Chord::raw_forms`).
 fn attach(sock: &Path, rows: u16, cols: u16, back: &[Vec<u8>]) -> io::Result<Ended> {
-    let stream = UnixStream::connect(sock)?;
-    let writer = Arc::new(Mutex::new(stream.try_clone()?));
-    write_frame(&mut *writer.lock().unwrap(), F_RESIZE, &size_payload(rows, cols))?;
-
     let _raw = RawMode::enter()?;
     let mut out = io::stdout();
-    out.write_all(b"\x1b[2J\x1b[H")?;
-    out.flush()?;
-
-    let host_gone = Arc::new(AtomicBool::new(false));
+    let (stream, mut host_gone) = connect(sock, (rows, cols), b"", &mut out)?;
+    // Swapped for the new connection's when the window connects again, so the resize watcher always tells the host.
+    let writer = Arc::new(Mutex::new(stream));
     let stop = Arc::new(AtomicBool::new(false));
-    {
-        let (gone, mut reader) = (host_gone.clone(), stream.try_clone()?);
-        thread::spawn(move || {
-            let mut out = io::stdout();
-            while let Ok((kind, payload)) = read_frame(&mut reader) {
-                if kind == F_OUTPUT {
-                    let _ = out.write_all(&payload);
-                    let _ = out.flush();
-                }
-            }
-            gone.store(true, Ordering::Relaxed);
-        });
-    }
     {
         // Tell the host when this window is resized (it fits the smallest window attached).
         let (writer, stop) = (writer.clone(), stop.clone());
@@ -311,9 +294,19 @@ fn attach(sock: &Path, rows: u16, cols: u16, back: &[Vec<u8>]) -> io::Result<End
 
     let mut stdin = io::stdin();
     let mut buf = [0u8; 4096];
+    let mut reconnected: Option<Instant> = None;
     let ended = loop {
         if host_gone.load(Ordering::Relaxed) {
-            break Ended::SessionEnded;
+            // The host closes the connection of a window it can't feed in time (`host::cut_off`). While it still runs,
+            // connect again, which redraws the screen as leaving and coming back would; once it has gone, the session
+            // has ended (and a connection that closes again right after it was made is not chased in a loop).
+            let again_at_once = reconnected.is_some_and(|t| t.elapsed() < crate::client::RECONNECT_GAP);
+            let size = terminal::size().map(|(c, r)| (r, c)).unwrap_or((rows, cols));
+            let fresh = if again_at_once { None } else { connect(sock, size, RESET_TERMINAL, &mut out).ok() };
+            let Some((stream, gone)) = fresh else { break Ended::SessionEnded };
+            let _ = std::mem::replace(&mut *writer.lock().unwrap(), stream).shutdown(Shutdown::Both);
+            host_gone = gone;
+            reconnected = Some(Instant::now());
         }
         // Wake regularly so we notice when the session ends while we're waiting for a key.
         let mut fd = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
@@ -327,18 +320,45 @@ fn attach(sock: &Path, rows: u16, cols: u16, back: &[Vec<u8>]) -> io::Result<End
         // The back key (Ctrl+Space arrives as a NUL byte): everything before it is still sent, then we detach.
         let cut = crate::keys::find_back(&buf[..n], back).map(|(at, _)| at);
         let send = &buf[..cut.unwrap_or(n)];
-        if !send.is_empty() && write_frame(&mut *writer.lock().unwrap(), F_INPUT, send).is_err() {
-            break Ended::SessionEnded;
+        // A failed write means the connection closed: the reader sees that too, and the top of the loop deals with it.
+        if !send.is_empty() {
+            let _ = write_frame(&mut *writer.lock().unwrap(), F_INPUT, send);
         }
         if cut.is_some() {
             break Ended::Detached;
         }
     };
     stop.store(true, Ordering::Relaxed);
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    let _ = writer.lock().unwrap().shutdown(Shutdown::Both);
     let _ = out.write_all(RESET_TERMINAL);
     let _ = out.flush();
     Ok(ended)
+}
+
+/// Connect this window to the host at `sock`: say its size (rows, cols), write `reset` and clear the screen for the
+/// snapshot the host sends first, then show everything the host sends on a thread of its own. The flag returned is set
+/// when that connection ends (the host closed it, or went).
+fn connect(sock: &Path, (rows, cols): (u16, u16), reset: &[u8], out: &mut impl Write) -> io::Result<(UnixStream, Arc<AtomicBool>)> {
+    let mut stream = UnixStream::connect(sock)?;
+    write_frame(&mut stream, F_RESIZE, &size_payload(rows, cols))?;
+    out.write_all(reset)?;
+    out.write_all(b"\x1b[2J\x1b[H")?;
+    out.flush()?;
+    let gone = Arc::new(AtomicBool::new(false));
+    let (said, mut reader) = (gone.clone(), stream.try_clone()?);
+    // It ends with its connection, after the last of what it was sent, so nothing it writes can land on the screen of
+    // a connection made after it.
+    thread::spawn(move || {
+        let mut out = io::stdout();
+        while let Ok((kind, payload)) = read_frame(&mut reader) {
+            if kind == F_OUTPUT {
+                let _ = out.write_all(&payload);
+                let _ = out.flush();
+            }
+        }
+        said.store(true, Ordering::Relaxed);
+    });
+    Ok((stream, gone))
 }
 
 pub fn run(args: &[String]) -> i32 {

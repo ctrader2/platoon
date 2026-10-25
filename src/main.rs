@@ -441,6 +441,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
             // Anything may have changed (sessions, tickets, usage, the time a row says); the frame says whether it did.
             screen.dirty = true;
         }
+        // A session's host may have closed its connection: connect again (or leave the session) before drawing.
+        app.keep_attached();
         // A notice that appears or runs out changes the footer. (One given by the work above belongs to this screen.)
         app.settle_notice();
         let notice = app.active_notice().map(str::to_string);
@@ -3761,6 +3763,127 @@ mod tests {
         assert_eq!(cell(&term, 0, 0).fg, mocha.ansi.unwrap()[1], "back to the saved theme");
         drop(app); // closes the connection, which lets the server thread finish
         server.join().unwrap();
+    }
+
+    /// A stand-in for a session's host at `sock`: each window that connects is sent a screen naming its connection
+    /// ("screen of connection 1", ...), and is then cut off at once when `cut_off` says so for its number, else served
+    /// until it leaves. Says how many have connected.
+    fn stand_in_host(
+        sock: &std::path::Path,
+        cut_off: impl Fn(usize) -> bool + Send + 'static,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        let listener = std::os::unix::net::UnixListener::bind(sock).unwrap();
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = count.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                std::thread::spawn({
+                    let cut = cut_off(n);
+                    move || {
+                        let _ = crate::host::read_frame(&mut stream); // the window's size
+                        let _ =
+                            crate::host::write_frame(&mut stream, crate::host::F_OUTPUT, format!("screen of connection {n}").as_bytes());
+                        if cut {
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                        }
+                        while crate::host::read_frame(&mut stream).is_ok() {}
+                    }
+                });
+            }
+        });
+        count
+    }
+
+    /// An app attached to the session `pid` whose host is at `sock`, once its window has been sent its first screen.
+    fn attached_to(w: &World, pid: u32, sock: &std::path::Path) -> App {
+        let mut app = w.app();
+        app.hosts = vec![crate::host::HostInfo { sock: sock.to_path_buf(), ..hosted(pid) }];
+        let client = crate::client::Client::connect(sock, 20, 60).unwrap();
+        wait_until("the first screen", || !client.parser.lock().unwrap().screen().contents().is_empty() || client.closed());
+        app.client = Some(client);
+        app.mode = Mode::Attached(pid);
+        app
+    }
+
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "timed out waiting for {what}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn connection_closed(app: &App) -> bool {
+        app.client.as_ref().is_some_and(|c| c.closed())
+    }
+
+    #[test]
+    fn a_window_its_host_cuts_off_connects_again_by_itself_and_catches_up() {
+        let w = World::new("reconnect");
+        let sock = w.base.join("host.sock");
+        let connections = stand_in_host(&sock, |n| n == 1);
+        let mut app = attached_to(&w, 4242, &sock);
+        wait_until("the host to cut the window off", || connection_closed(&app));
+
+        app.keep_attached();
+        assert!(matches!(app.mode, Mode::Attached(4242)), "still in the session");
+        assert_eq!(app.active_notice(), None, "nothing to tell: it is as if the window had never been cut off");
+        let shows =
+            |app: &App, text: &str| app.client.as_ref().is_some_and(|c| c.parser.lock().unwrap().screen().contents().contains(text));
+        wait_until("the new connection's screen", || shows(&app, "screen of connection 2"));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::Relaxed), 2);
+        // A connection that stays open is left alone.
+        app.keep_attached();
+        assert!(matches!(app.mode, Mode::Attached(4242)));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn a_window_whose_host_has_gone_still_says_the_session_ended() {
+        let w = World::new("host-gone");
+        let sock = w.base.join("host.sock");
+        let (gone, sock_file) = (std::sync::Arc::new(std::sync::Barrier::new(2)), sock.clone());
+        // The host ends: its socket goes, then the window's connection closes.
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let host = std::thread::spawn({
+            let gone = gone.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = crate::host::read_frame(&mut stream);
+                crate::host::write_frame(&mut stream, crate::host::F_OUTPUT, b"last screen").unwrap();
+                gone.wait();
+                drop(listener);
+                std::fs::remove_file(&sock_file).unwrap();
+                stream.shutdown(std::net::Shutdown::Both).unwrap();
+            }
+        });
+        let mut app = attached_to(&w, 4242, &sock);
+        gone.wait();
+        host.join().unwrap();
+        wait_until("the connection to close", || connection_closed(&app));
+
+        app.keep_attached();
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(app.active_notice(), Some("Session ended"));
+        assert!(app.client.is_none());
+    }
+
+    #[test]
+    fn a_host_that_keeps_cutting_the_window_off_is_not_chased_in_a_loop() {
+        let w = World::new("cut-again");
+        let sock = w.base.join("host.sock");
+        let connections = stand_in_host(&sock, |_| true);
+        let mut app = attached_to(&w, 4242, &sock);
+        // As the event loop does, about every 50 ms.
+        wait_until("the window to give up", || {
+            app.keep_attached();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            matches!(app.mode, Mode::List)
+        });
+        assert_eq!(app.active_notice(), Some("Session ended"));
+        assert!(connections.load(std::sync::atomic::Ordering::Relaxed) < 5, "it connected again and again");
     }
 
     #[test]

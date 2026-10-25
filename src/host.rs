@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read, Write},
+    net::Shutdown,
     os::unix::{
         fs::{DirBuilderExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -371,7 +372,14 @@ pub fn run(args: &[String]) -> i32 {
         *lock(&shared.quiet_since) = Instant::now();
         let mut p = lock(&shared.parser);
         p.process(&buf[..n]);
-        lock(&shared.clients).retain_mut(|c| !c.ready || write_frame(&mut c.stream, F_OUTPUT, &buf[..n]).is_ok());
+        // A window that can't take this in time is cut off, never left waiting: see `cut_off`.
+        lock(&shared.clients).retain_mut(|c| {
+            let fed = !c.ready || write_frame(&mut c.stream, F_OUTPUT, &buf[..n]).is_ok();
+            if !fed {
+                cut_off(c);
+            }
+            fed
+        });
     }
     let _ = child.wait();
     let _ = fs::remove_file(&info_path);
@@ -607,6 +615,14 @@ fn parse_size(payload: &[u8]) -> Option<(u16, u16)> {
     (payload.len() == 4).then(|| (u16::from_be_bytes([payload[0], payload[1]]), u16::from_be_bytes([payload[2], payload[3]])))
 }
 
+/// Give up on a window that didn't take its output in time (it is slow, or stuck): close its connection, both ways.
+/// Only dropping it from the list would leave it connected but sent nothing ever again, its screen frozen while its keys
+/// still reach the session; closed, the window sees the end, connects again and gets a fresh snapshot, and this
+/// window's `serve_client` sees it too and finishes. The caller takes it off the list.
+fn cut_off(viewer: &Viewer) {
+    let _ = viewer.stream.shutdown(Shutdown::Both);
+}
+
 fn serve_client(mut stream: UnixStream, sh: &Shared) {
     // The first frame is the window's size, so the snapshot below is made at the right size.
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
@@ -626,6 +642,7 @@ fn serve_client(mut stream: UnixStream, sh: &Shared) {
         let mut clients = lock(&sh.clients);
         let Some(me) = clients.iter_mut().find(|c| c.id == id) else { return };
         if write_frame(&mut me.stream, F_OUTPUT, &snapshot).is_err() {
+            cut_off(me);
             clients.retain(|c| c.id != id);
             return;
         }

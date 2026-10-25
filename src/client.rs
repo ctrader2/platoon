@@ -12,7 +12,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Duration,
 };
+
+/// How soon after connecting again a window gives up when its connection closes once more: a host that keeps closing
+/// it is not chased in a loop, and the window ends as if the session had.
+pub const RECONNECT_GAP: Duration = Duration::from_secs(1);
 
 pub struct Client {
     pub parser: Arc<Mutex<vt100::Parser>>,
@@ -32,15 +37,8 @@ impl Client {
         write_frame(&mut writer, F_RESIZE, &size_payload(rows, cols))?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
         let closed = Arc::new(AtomicBool::new(false));
-        let (p, c, mut reader) = (parser.clone(), closed.clone(), stream.try_clone()?);
-        thread::spawn(move || {
-            while let Ok((kind, payload)) = read_frame(&mut reader) {
-                if kind == F_OUTPUT {
-                    lock(&p).process(&payload);
-                }
-            }
-            c.store(true, Ordering::Relaxed);
-        });
+        let p = parser.clone();
+        read_output(stream.try_clone()?, closed.clone(), move |payload| lock(&p).process(payload));
         Ok(Self { parser, stream, closed, size: (rows, cols) })
     }
 
@@ -121,6 +119,29 @@ pub fn wheel_report(up: bool, col: u16, row: u16, encoding: vt100::MouseProtocol
     }
 }
 
+/// Read the host's output on a thread of its own, handing each piece to `feed` (the emulator), until the connection
+/// ends. However the thread ends, `closed` says so, a panic inside `feed` included: a window is never left showing a
+/// screen nothing updates any more while it looks connected.
+fn read_output(mut reader: UnixStream, closed: Arc<AtomicBool>, mut feed: impl FnMut(&[u8]) + Send + 'static) {
+    thread::spawn(move || {
+        let _ended = SaysClosed(closed);
+        while let Ok((kind, payload)) = read_frame(&mut reader) {
+            if kind == F_OUTPUT {
+                feed(&payload);
+            }
+        }
+    });
+}
+
+/// Marks the connection closed when dropped, which also happens when its thread panics.
+struct SaysClosed(Arc<AtomicBool>);
+
+impl Drop for SaysClosed {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 impl Drop for Client {
     /// Detaching only closes our connection; the host and claude keep running.
     fn drop(&mut self) {
@@ -196,8 +217,49 @@ pub fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::wheel_report;
+    use super::{F_OUTPUT, read_output, wheel_report, write_frame};
+    use std::{
+        os::unix::net::UnixStream,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
+    };
     use vt100::MouseProtocolEncoding::{Default, Sgr, Utf8};
+
+    fn closed_within(closed: &AtomicBool, wait: Duration) -> bool {
+        let start = Instant::now();
+        while !closed.load(Ordering::Relaxed) && start.elapsed() < wait {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        closed.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn a_reader_that_dies_on_what_it_was_sent_says_the_connection_is_closed() {
+        let (mut host, window) = UnixStream::pair().unwrap();
+        let closed = Arc::new(AtomicBool::new(false));
+        // Stands in for the emulator failing on some output (the host's connection stays open throughout).
+        read_output(window, closed.clone(), |payload| {
+            if payload == b"poison" {
+                panic!("a stand-in for the emulator failing on its input (expected by this test)");
+            }
+        });
+        write_frame(&mut host, F_OUTPUT, b"fine").unwrap();
+        assert!(!closed_within(&closed, Duration::from_millis(200)), "output it can take keeps it open");
+        write_frame(&mut host, F_OUTPUT, b"poison").unwrap();
+        assert!(closed_within(&closed, Duration::from_secs(5)), "the window must learn that nothing will update its screen");
+    }
+
+    #[test]
+    fn a_reader_whose_host_closes_the_connection_says_so() {
+        let (host, window) = UnixStream::pair().unwrap();
+        let closed = Arc::new(AtomicBool::new(false));
+        read_output(window, closed.clone(), |_| {});
+        host.shutdown(std::net::Shutdown::Both).unwrap();
+        assert!(closed_within(&closed, Duration::from_secs(5)));
+    }
 
     #[test]
     fn sgr_reports_carry_the_button_and_the_cell_as_numbers() {
