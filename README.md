@@ -7,7 +7,7 @@ which ones need you. Group work into projects whose shared notes grow as you wor
 project. Hand tasks to squads: repeatable workflows designed for one kind of work, like a feature, a bug fix or a
 review, each done only when a reviewing agent agrees the work does what you asked.
 
-https://github.com/user-attachments/assets/c60f98ec-8ee4-43d8-b5ad-6eb275e4a6dd
+https://github.com/user-attachments/assets/5580075d-726e-4ca6-86f3-c4a2b029b9b3
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
