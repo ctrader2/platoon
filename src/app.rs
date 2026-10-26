@@ -806,7 +806,6 @@ impl App {
         app.sync_providers();
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
-        app.clipboard = Clipboard::from_env();
         app.start_version_checks();
         // Know the running hosts before the first frame: until then every session platoon hosts looks like a copy
         // running in another terminal, and Enter on it would offer to take it over instead of opening it.
@@ -3502,8 +3501,8 @@ impl App {
         }
     }
 
-    #[cfg(test)]
-    pub fn set_clipboard_for_test(&mut self, clipboard: Clipboard) {
+    /// Where copies go (`Clipboard::off` until given one: the real one, or a test's).
+    pub fn set_clipboard(&mut self, clipboard: Clipboard) {
         self.clipboard = clipboard;
     }
 }

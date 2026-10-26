@@ -6,7 +6,10 @@ use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::mpsc::{Receiver, channel},
+    sync::{
+        Arc, Condvar, Mutex,
+        mpsc::{Receiver, channel},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -149,6 +152,8 @@ pub struct Term {
     screen: vt100::Parser,
     /// Every byte the program wrote, for what the screen model cannot show (an OSC 52 clipboard write).
     raw: Vec<u8>,
+    /// While true the terminal reads nothing the program writes (`stop_reading`).
+    stopped: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl Term {
@@ -181,15 +186,36 @@ impl Term {
         let mut reader = pair.master.try_clone_reader().unwrap();
         let writer = pair.master.take_writer().unwrap();
         let (tx, rx) = channel::<Vec<u8>>();
+        let stopped = Arc::new((Mutex::new(false), Condvar::new()));
+        let reading = stopped.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                    break;
+            loop {
+                let (flag, changed) = &*reading;
+                let mut stop = flag.lock().unwrap();
+                while *stop {
+                    stop = changed.wait(stop).unwrap();
+                }
+                drop(stop);
+                match reader.read(&mut buf) {
+                    Ok(n) if n > 0 && tx.send(buf[..n].to_vec()).is_ok() => {}
+                    _ => break,
                 }
             }
         });
-        Self { child, master: pair.master, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new() }
+        Self { child, master: pair.master, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new(), stopped }
+    }
+
+    /// The terminal stops reading what the program writes, as Ghostty does while its window is behind another one: once
+    /// the terminal's buffer is full, the program's writes to it wait. (A read already under way still finishes.)
+    pub fn stop_reading(&mut self) {
+        *self.stopped.0.lock().unwrap() = true;
+    }
+
+    /// The terminal reads again, from where it stopped.
+    pub fn read_again(&mut self) {
+        *self.stopped.0.lock().unwrap() = false;
+        self.stopped.1.notify_all();
     }
 
     /// Make the terminal `rows` by `cols`, as a window being resized does (the program gets SIGWINCH).
@@ -422,6 +448,7 @@ impl Term {
 
 impl Drop for Term {
     fn drop(&mut self) {
+        self.read_again(); // so its reader ends with the program
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

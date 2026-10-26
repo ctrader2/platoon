@@ -6,7 +6,8 @@
 //! What actually writes is behind `ClipboardSink`, so tests use a fake and never touch the real clipboard
 //! or the real terminal.
 
-use std::io::{self, Write};
+use crate::frames::TerminalBytes;
+use std::io;
 
 /// The most text that is copied. A selection can only be as big as the screen plus scrollback, so this is
 /// far above anything real; it is a guard, and the notice says when it cut something.
@@ -46,17 +47,18 @@ impl Target {
 pub trait ClipboardSink {
     /// The system clipboard, and the primary selection too where there is one (middle-click paste).
     fn set_system(&mut self, text: &str) -> Result<(), String>;
-    /// Bytes for the terminal, flushed at once.
+    /// Bytes for the terminal: in order with platoon's frames, without waiting for the terminal.
     fn write_terminal(&mut self, bytes: &[u8]) -> io::Result<()>;
 }
 
 /// The real thing. One `arboard::Clipboard` lives as long as this does, because on X11 (and Wayland) the
 /// program that set the clipboard is the one that hands the text to whoever pastes; drop it and the text is
 /// gone, unless a clipboard manager took a copy. It is created on the first copy, so a machine with no
-/// display costs nothing until then (and is retried on the next copy).
-#[derive(Default)]
+/// display costs nothing until then (and is retried on the next copy). OSC 52 goes to the terminal with platoon's
+/// frames (`frames::TerminalBytes`).
 pub struct SystemSink {
     board: Option<arboard::Clipboard>,
+    terminal: TerminalBytes,
 }
 
 impl ClipboardSink for SystemSink {
@@ -89,9 +91,8 @@ impl ClipboardSink for SystemSink {
     }
 
     fn write_terminal(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let mut out = io::stdout().lock();
-        out.write_all(bytes)?;
-        out.flush()
+        self.terminal.send(bytes);
+        Ok(())
     }
 }
 
@@ -165,9 +166,9 @@ impl Clipboard {
         Self { target, sink }
     }
 
-    /// The real clipboard, as `PLATOON_CLIPBOARD` says.
-    pub fn from_env() -> Self {
-        Self::new(Target::from_env(), Box::new(SystemSink::default()))
+    /// The real clipboard, as `PLATOON_CLIPBOARD` says; OSC 52 written to the terminal by `terminal`.
+    pub fn from_env(terminal: TerminalBytes) -> Self {
+        Self::new(Target::from_env(), Box::new(SystemSink { board: None, terminal }))
     }
 
     /// A clipboard that copies nothing anywhere: what an `App` has until it is given a real one.

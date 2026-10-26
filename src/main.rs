@@ -28,6 +28,7 @@ mod editors;
 mod fileeditors;
 #[cfg(test)]
 mod frame_app_tests;
+mod frames;
 mod gitfacts;
 mod guard;
 mod handoff;
@@ -115,7 +116,11 @@ mod worktree_app_tests;
 mod worktrees;
 
 use ratatui::crossterm::{
-    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyEventKind},
+    cursor::Show,
+    event::{
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
     terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode},
 };
@@ -199,21 +204,37 @@ fn main() -> io::Result<()> {
         }
     }
     require_setup();
-    let mut terminal = match ratatui::try_init() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("platoon needs an interactive terminal ({e}).");
-            std::process::exit(1);
-        }
-    };
-    let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
-    let result = run(&mut terminal);
-    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    // ratatui sets the terminal up (raw mode, the alternate screen, and a panic hook that puts it back); frames are
+    // written by `frames::Writer`, not by its `Terminal`.
+    if let Err(e) = ratatui::try_init() {
+        eprintln!("platoon needs an interactive terminal ({e}).");
+        std::process::exit(1);
+    }
+    let put_back = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        stop_asking_the_terminal();
+        put_back(info);
+    }));
+    ask_the_terminal();
+    let result = run();
+    stop_asking_the_terminal();
+    let _ = execute!(io::stdout(), Show);
     ratatui::restore();
     if let Some(line) = quit_line(result?) {
         println!("{line}");
     }
     Ok(())
+}
+
+/// What platoon asks of the terminal while its screen shows: the mouse, a paste as one piece, and a word when the window
+/// gains or loses focus (it comes back to the front: everything is drawn again, whatever the terminal skipped).
+fn ask_the_terminal() {
+    let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange);
+}
+
+/// Undo `ask_the_terminal`: before platoon leaves the screen (quitting, a panic, an editor taking the terminal).
+fn stop_asking_the_terminal() {
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
 }
 
 /// The agent a `platoon hook <kind> [--agent <id>]` is for.
@@ -406,8 +427,11 @@ fn uninstall_cli(args: &[String]) -> i32 {
 }
 
 /// Runs the UI. Returns how many platoon-hosted sessions are still running when it exits.
-fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
+fn run() -> io::Result<usize> {
     let mut app = app::App::new();
+    let mut screen = Screen::new(frames::Writer::spawn(io::stdout()));
+    // A copy to the terminal's clipboard goes with the frames, so it neither waits for the terminal nor lands in a frame.
+    app.set_clipboard(clipboard::Clipboard::from_env(screen.out.bytes()));
     let depth = colordepth::Depth::detect();
     // NO_COLOR: platoon takes the colors out itself (`colordepth::strip`), so bold and underline survive.
     let no_color = colordepth::no_color();
@@ -416,11 +440,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     }
     let start = Instant::now();
     let mut last_refresh = Instant::now();
-    let mut screen = Screen::default();
     while !app.quit {
         if let Some((e, dirs)) = app.take_own_editor_request() {
-            open_own_editor(terminal, &mut app, &e, &dirs);
-            screen.forget();
+            open_own_editor(&mut screen, &mut app, &e, &dirs);
         }
         app.poll_stops();
         app.poll_editors();
@@ -457,14 +479,16 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         if matches!(app.mode, app::Mode::Attached(_) | app::Mode::EditNotes) {
             screen.dirty = true;
         }
-        let size = terminal.size()?;
-        if screen.shown.as_ref().is_none_or(|(b, _)| b.area.as_size() != size) {
+        // Asked of the terminal's device, never written to it: a terminal that reads nothing doesn't hold this up.
+        let (cols, rows) = ratatui::crossterm::terminal::size()?;
+        let size = ratatui::layout::Size::new(cols, rows);
+        if screen.shown.as_ref().is_none_or(|f| f.cells.area.as_size() != size) {
             screen.dirty = true;
         }
         app.sync_size(size.width, size.height);
         if screen.dirty {
             screen.dirty = false;
-            screen.show(terminal, |f| {
+            screen.show(size, |f| {
                 ui::draw(f, &app);
                 if no_color {
                     colordepth::strip(f.buffer_mut());
@@ -474,46 +498,65 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
             })?;
         }
         if event::poll(Duration::from_millis(50))? {
-            // Whatever came in (a key, the mouse, a paste, a new size) may change what is on the screen.
-            screen.dirty = true;
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
-                Event::Mouse(m) => app.on_mouse(m),
-                Event::Paste(text) => app.on_paste(&text),
-                _ => {}
-            }
+            on_event(&mut app, &mut screen, event::read()?);
         }
     }
     // Stops still running for the archive key get a few seconds to finish, so their records are written.
     app.finish_stops();
+    // The last frame is written before the terminal is put back.
+    screen.out.finish()?;
     Ok(app.hosts.len())
+}
+
+/// Hand what came in from the terminal to the app.
+fn on_event(app: &mut app::App, screen: &mut Screen, event: Event) {
+    // Whatever came in (a key, the mouse, a paste, a new size) may change what is on the screen.
+    screen.dirty = true;
+    match event {
+        Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
+        Event::Mouse(m) => app.on_mouse(m),
+        Event::Paste(text) => app.on_paste(&text),
+        // The window is back in front: every cell is drawn again, whatever the terminal skipped or lost while it was
+        // behind another one. (Never handed to a session: it is platoon's, not something the user typed.)
+        Event::FocusGained => screen.forget(),
+        _ => {}
+    }
 }
 
 /// What is on the terminal, so a frame is only sent to it when it differs. The loop marks the screen `dirty` when
 /// something may have changed (an event, a refresh, a notice, a spinner's tick, a session's output); the frame is then
-/// drawn off screen first and sent only if it is not the one already showing. An idle platoon writes nothing at all.
-#[derive(Default)]
+/// drawn off screen first and handed to the writer only if it is not the one already showing. An idle platoon writes
+/// nothing at all, and a terminal that reads nothing never holds the loop up (`frames::Writer`).
 struct Screen {
     /// Something may have changed since the last frame: draw one (the first frame is always drawn).
     dirty: bool,
-    /// The frame showing: its cells, and where the cursor is if it shows. None: unknown (draw in full).
-    shown: Option<(ratatui::buffer::Buffer, Option<ratatui::layout::Position>)>,
+    /// The frame showing (handed to the writer last). None: unknown (draw in full).
+    shown: Option<frames::Frame>,
     /// The notice the footer showed in that frame.
     notice: Option<String>,
     /// Where frames are drawn before they are compared.
     off: Option<ratatui::Terminal<ratatui::backend::TestBackend>>,
+    /// The terminal's writer.
+    out: frames::Writer,
 }
 
 impl Screen {
-    /// Forget what is showing (another program had the terminal): the next frame is drawn in full.
+    fn new(out: frames::Writer) -> Self {
+        Self { dirty: true, shown: None, notice: None, off: None, out }
+    }
+
+    /// Forget what is showing (another program had the terminal, or its window was behind another one): the next frame
+    /// is drawn in full, every cell.
     fn forget(&mut self) {
         self.shown = None;
         self.dirty = true;
+        self.out.repaint();
     }
 
-    /// Draw a frame with `render`, off screen, and send it to `terminal` if it is not what is showing already.
-    fn show(&mut self, terminal: &mut ratatui::DefaultTerminal, render: impl Fn(&mut ratatui::Frame)) -> io::Result<()> {
-        let size = terminal.size()?;
+    /// Draw a frame of `size` with `render`, off screen, and hand it to the writer if it is not what is showing already.
+    /// An error: the writer could not write to the terminal (it has gone).
+    fn show(&mut self, size: ratatui::layout::Size, render: impl Fn(&mut ratatui::Frame)) -> io::Result<()> {
+        self.out.check()?;
         let off = match &mut self.off {
             Some(t) if t.backend().buffer().area.as_size() == size => t,
             slot => {
@@ -523,23 +566,11 @@ impl Screen {
         };
         let Ok(_) = off.draw(|f| render(f));
         let backend = off.backend();
-        let frame = (backend.buffer().clone(), backend.cursor_visible().then(|| backend.cursor_position()));
+        let frame = frames::Frame { cells: backend.buffer().clone(), cursor: backend.cursor_visible().then(|| backend.cursor_position()) };
         if self.shown.as_ref() == Some(&frame) {
             return Ok(());
         }
-        // The real terminal gets the same frame; ratatui sends only the cells that differ from what it showed last.
-        let (buffer, cursor) = &frame;
-        terminal.draw(|f| {
-            if f.area() == buffer.area {
-                f.buffer_mut().clone_from(buffer);
-                if let Some(p) = cursor {
-                    f.set_cursor_position(*p);
-                }
-            } else {
-                // The terminal changed size in between: draw this one directly (the next is compared again).
-                render(f);
-            }
-        })?;
+        self.out.send(frame.clone());
         self.shown = Some(frame);
         Ok(())
     }
@@ -549,32 +580,33 @@ impl Screen {
 /// first folder, wait for it to close, and take the terminal back: platoon's screen goes (raw mode off, the alternate
 /// screen left) so the editor draws on the real terminal, then comes back drawn in full, where the user was. Nothing
 /// of platoon reads the keyboard or draws in between (this loop is waiting).
-fn open_own_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, e: &fileeditors::FileEditor, dirs: &[String]) {
+fn open_own_editor(screen: &mut Screen, app: &mut app::App, e: &fileeditors::FileEditor, dirs: &[String]) {
     let env = |k: &str| std::env::var(k).ok();
     let Some(first) = dirs.first() else { return };
     let launch = match fileeditors::terminal_launch(e, first, &env) {
         Ok(l) => l,
         Err(err) => return app.editor_closed(Err(err.to_string())),
     };
-    let result = hand_over(terminal, app, &launch, std::slice::from_ref(first));
+    let result = hand_over(screen, app, &launch, std::slice::from_ref(first));
     app.editor_closed(result);
 }
 
 /// Leave platoon's screen, run the editor in the foreground until it closes, and take the screen back, drawn in full.
 /// Meanwhile `dirs` are marked as open, so no platoon window removes a worktree from under it.
-fn hand_over(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, launch: &editor::Launch, dirs: &[String]) -> Result<(), String> {
+fn hand_over(screen: &mut Screen, app: &mut app::App, launch: &editor::Launch, dirs: &[String]) -> Result<(), String> {
     // Other platoon windows must not remove a worktree the editor has open (`worktree_glue`).
     let mark = editor::mark_open(&app.cache, std::process::id(), dirs).ok();
-    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    // The writer finishes the frame it is writing and then leaves the terminal alone until the editor has closed.
+    screen.out.pause();
+    stop_asking_the_terminal();
     ratatui::restore();
     let ran = editor::run(launch);
     let _ = enable_raw_mode();
-    let _ = execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), EnableMouseCapture, EnableBracketedPaste);
-    // Everything is drawn again: an empty frame first makes ratatui's idea of the screen blank (as it now is), so the
-    // next frame is drawn in full. (Not `terminal.clear()`: it asks the terminal where the cursor is, and a terminal
-    // that doesn't answer holds everything up.) The cursor is hidden again too.
-    let _ = terminal.draw(|_| {});
-    let _ = terminal.hide_cursor();
+    let _ = execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All));
+    ask_the_terminal();
+    // Everything is drawn again (the frame drawn on the cleared screen, every cell; the cursor hidden again).
+    screen.out.resume();
+    screen.forget();
     if let Some(m) = mark {
         editor::unmark(&m);
     }
@@ -3886,6 +3918,94 @@ mod tests {
         });
         assert_eq!(app.active_notice(), Some("Session ended"));
         assert!(connections.load(std::sync::atomic::Ordering::Relaxed) < 5, "it connected again and again");
+    }
+
+    /// A terminal for `Screen`'s writer that keeps everything it is sent.
+    #[derive(Clone, Default)]
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl io::Write for Recorded {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Recorded {
+        /// What was sent since the last time, once something was and nothing more comes for a moment.
+        fn take(&self) -> Vec<u8> {
+            wait_until("a frame", || !self.0.lock().unwrap().is_empty());
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+
+        fn nothing_sent(&self) -> bool {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.0.lock().unwrap().is_empty()
+        }
+    }
+
+    /// The screen a terminal of `size` shows after `bytes`, starting blank.
+    fn shown_by(bytes: &[u8], size: ratatui::layout::Size) -> String {
+        let mut p = vt100::Parser::new(size.height, size.width, 0);
+        p.process(bytes);
+        p.screen().contents()
+    }
+
+    #[test]
+    fn coming_back_to_the_window_draws_every_cell_again_and_otherwise_nothing_is_sent_twice() {
+        let w = World::new("focus");
+        let mut app = w.app();
+        let term = Recorded::default();
+        let mut screen = Screen::new(frames::Writer::spawn(term.clone()));
+        let size = ratatui::layout::Size::new(100, 20);
+        screen.show(size, |f| ui::draw(f, &app)).unwrap();
+        let first = term.take();
+        assert!(shown_by(&first, size).contains("Sessions"), "{}", shown_by(&first, size));
+        // The same frame again, or the window going behind another one: nothing is sent.
+        screen.show(size, |f| ui::draw(f, &app)).unwrap();
+        on_event(&mut app, &mut screen, Event::FocusLost);
+        screen.show(size, |f| ui::draw(f, &app)).unwrap();
+        assert!(term.nothing_sent());
+        // Back in front: the next frame is every cell, on its own a whole screen.
+        on_event(&mut app, &mut screen, Event::FocusGained);
+        assert!(screen.dirty);
+        screen.show(size, |f| ui::draw(f, &app)).unwrap();
+        let again = term.take();
+        assert!(String::from_utf8_lossy(&again).contains("\x1b[2J"), "the screen is cleared first");
+        assert_eq!(shown_by(&again, size), shown_by(&first, size));
+        // Then differences again.
+        screen.show(size, |f| ui::draw(f, &app)).unwrap();
+        assert!(term.nothing_sent());
+    }
+
+    #[test]
+    fn the_window_gaining_or_losing_focus_is_never_typed_into_an_open_session() {
+        let w = World::new("focus-attached");
+        let sock = w.base.join("host.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (typed, input) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = crate::host::read_frame(&mut stream); // the window's size
+            crate::host::write_frame(&mut stream, crate::host::F_OUTPUT, b"a session").unwrap();
+            while let Ok((kind, payload)) = crate::host::read_frame(&mut stream) {
+                if kind == crate::host::F_INPUT && typed.send(payload).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut app = attached_to(&w, 4242, &sock);
+        let mut screen = Screen::new(frames::Writer::spawn(io::sink()));
+        on_event(&mut app, &mut screen, Event::FocusGained);
+        on_event(&mut app, &mut screen, Event::FocusLost);
+        on_event(&mut app, &mut screen, Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)));
+        // The key is the first thing the session is sent.
+        assert_eq!(input.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), b"x");
+        assert!(matches!(app.mode, Mode::Attached(4242)), "still in the session");
     }
 
     #[test]

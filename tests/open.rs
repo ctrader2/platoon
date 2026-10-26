@@ -292,6 +292,94 @@ fn platoon_connects_an_open_session_again_by_itself_when_the_host_cuts_it_off() 
     until("host to exit", || !alive(pid));
 }
 
+/// The line `flood-2-on`, a second later five seconds of random text, then the line `flood-over-42`: typed into a shell
+/// session, it has the window draw a new screen, every cell of it different, all the while.
+const LONG_FLOOD: &str = "echo flood-$((1+1))-on; sleep 1; end=$(($(date +%s)+5)); while [ $(date +%s) -lt $end ]; do head -c 4000 /dev/urandom | base64; done; echo flood-over-$((6*7))";
+
+/// A world with one conversation, "tidy the widget", whose session is a shell in a host of the test's: (its pid, the
+/// world).
+fn world_with_a_session(name: &str) -> (u32, World) {
+    let w = World::new(name);
+    let (pid, _) = start_host(&w.cache, "sh");
+    let dir = w.claude.join("projects").join("-work");
+    fs::create_dir_all(&dir).unwrap();
+    let line = format!(
+        r#"{{"type":"user","cwd":"{}","timestamp":"2026-09-19T05:00:00.000Z","message":{{"role":"user","content":"tidy the widget"}}}}"#,
+        w.work.display()
+    );
+    fs::write(dir.join("aaaa-0001.jsonl"), line + "\n").unwrap();
+    w.register(pid, "aaaa-0001", 1);
+    (pid, w)
+}
+
+#[test]
+fn platoon_keeps_working_while_its_terminal_reads_nothing_and_shows_the_latest_screen_when_it_reads_again() {
+    let (pid, w) = world_with_a_session("app-stall");
+    let reap = Reap(pid);
+    let mut t = Term::spawn(&[], &w.env(NO_REAL_CLAUDE.1), &w.work, 30, 110);
+    t.wait_for("tidy the widget");
+    assert!(t.raw().windows(8).any(|b| b == b"\x1b[?1004h"), "platoon asks to hear when its window gains focus");
+    t.send(b"\r");
+    t.send(b"echo first-$((6*7))\r");
+    t.wait_for("first-42");
+
+    // The session writes on and on, and the terminal stops reading (its window went behind another one): platoon's
+    // screens soon fill what the terminal holds, and writing one more would wait.
+    t.send(format!("{LONG_FLOOD}\r").as_bytes());
+    t.wait_for("flood-2-on");
+    t.stop_reading();
+    thread::sleep(Duration::from_secs(2));
+    // What is typed meanwhile still reaches the session (it runs once the flood is over).
+    let typed = w.work.join("typed-while-not-read");
+    t.send(format!("touch {}; echo typed-$((2+3))\r", typed.display()).as_bytes());
+    until("what was typed while the terminal read nothing to reach the session", || typed.exists());
+
+    // Reading again, the terminal shows the session as it is now.
+    t.read_again();
+    t.wait_for_all(&["flood-over-42", "typed-5"]);
+    // The window coming back to the front is not typed into the session.
+    t.send(b"\x1b[I");
+    t.send(b"echo back-$((3+4))\r");
+    t.wait_for("back-7");
+    let shown = t.stable();
+    assert!(!shown.contains("[I") && !shown.contains("Session ended"), "{shown}");
+    // Quitting gives the terminal back as it was: no word of focus any more.
+    t.send(&[0]); // Ctrl+Space
+    t.wait_for("tidy the widget");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+    assert!(t.raw().windows(8).any(|b| b == b"\x1b[?1004l"), "platoon stops asking about focus as it quits");
+    drop(reap);
+    until("host to exit", || !alive(pid));
+}
+
+#[test]
+fn platoon_open_shows_the_latest_screen_once_its_terminal_reads_again() {
+    let w = World::new("open-stall");
+    let mut t = Term::spawn(&["open"], &w.env(&w.shell()), &w.work, 24, 80);
+    t.send(b"echo first-$((6*7))\r");
+    t.wait_for("first-42");
+    let (pid, _) = find_host(&w.cache).expect("the session's host");
+    let reap = Reap(pid);
+
+    // The terminal reads nothing for a while the session writes on: the window can't take it, and its host cuts it off.
+    t.send(format!("{LONG_FLOOD}\r").as_bytes());
+    t.wait_for("flood-2-on");
+    t.stop_reading();
+    thread::sleep(Duration::from_secs(2));
+    t.read_again();
+
+    // Reading again, it connects again by itself and shows the session as it is now.
+    t.wait_for("flood-over-42");
+    t.send(b"echo back-$((3+4))\r");
+    t.wait_for("back-7");
+    assert!(!t.text().contains("session ended"), "{}", t.text());
+    t.send(&[0]); // Ctrl+Space
+    assert_eq!(t.wait_exit(), 0);
+    drop(reap);
+    until("host to exit", || !alive(pid));
+}
+
 #[test]
 fn platoon_open_resumes_a_saved_session_nothing_is_running_in_its_own_directory() {
     let w = World::new("resume");

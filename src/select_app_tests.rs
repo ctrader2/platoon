@@ -47,7 +47,7 @@ fn rig_with(text: &str, target: Target, tweak: impl FnOnce(&mut Fake)) -> Rig {
     app.mode = Mode::Attached(4242);
     let (mut fake, rec) = Fake::new();
     tweak(&mut fake);
-    app.set_clipboard_for_test(Clipboard::new(target, Box::new(fake)));
+    app.set_clipboard(Clipboard::new(target, Box::new(fake)));
     let mut r = Rig { _w: w, app, host, rec, term: Terminal::new(TestBackend::new(80, 24)).unwrap() };
     r.draw();
     r
@@ -404,7 +404,7 @@ fn a_session_that_is_paused_cannot_be_selected() {
     app.client = Some(client);
     app.mode = Mode::Attached(pid);
     let (fake, rec) = Fake::new();
-    app.set_clipboard_for_test(Clipboard::new(Target::System, Box::new(fake)));
+    app.set_clipboard(Clipboard::new(Target::System, Box::new(fake)));
     assert!(app.attached_paused(), "the fixture is paused");
     let ev = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
     app.on_mouse(ev(MouseEventKind::Down(MouseButton::Left), 2, 1));

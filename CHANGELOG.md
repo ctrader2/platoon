@@ -6,6 +6,12 @@ here.
 
 ## [Unreleased]
 
+### Fixed
+
+- platoon no longer freezes while its terminal window is behind another window (seen in Ghostty): spinners stood still,
+  the list stopped updating, keys did nothing and a reply in an open session didn't show until you scrolled. It now keeps
+  going in the background, and draws the whole screen again when you come back to the window.
+
 ## [1.0.0] - 2026-10-25
 
 The first public release. platoon is a terminal app for Claude Code and Codex, on Linux and macOS: have either one, or
