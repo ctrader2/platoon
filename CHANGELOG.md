@@ -21,6 +21,19 @@ here.
 
 - Selecting text in a session by dragging now scrolls when you drag past the top or bottom edge and hold there, so a
   selection can be longer than the screen; letting go copies all of it. Before, the drag stopped at the edge.
+- A session you started by typing a skill (`/land the parser fix`) now gets a smart name, and its row shows what you
+  typed. One started with a skill and no words, where you then only answered Claude's questions, is named from the
+  skill and Claude's reply. Claude Code's own commands (`/model`, `/plugin`, `/add-dir`) still count as nothing.
+  platoon reads your conversations again once after the update to find them.
+- `platoon setup`'s first naming pass names only the sessions on the Sessions tab's Active list. On a fresh install
+  nothing is archived yet, so it named every session you ever had, at once. Sessions unused for the auto-archive age
+  now join the archived ones in its question, skipped unless you say otherwise, and platoon itself no longer names them
+  in the moments after it starts, before auto-archive has had its turn.
+- The plan usage at the top right shows the real figures. The newest report used to win, and a session that sat idle
+  (a task's, whose status line keeps reporting) kept sending an old snapshot: the 5-hour window flipped between a
+  figure and 0%, and the weekly one could read 7% while your other sessions said 16%. Each window now shows the
+  highest figure any session reports for the window running now (usage only grows within a window), and 0% only when no
+  session has a 5-hour window running. Codex's figures, read from several conversations, follow the same rule.
 
 ## [1.0.1] - 2026-10-25
 
