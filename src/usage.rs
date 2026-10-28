@@ -155,11 +155,16 @@ pub struct Snapshot {
 /// `five_hour` out of its reports altogether (it does not send 0) while still sending `seven_day`,
 /// until the first answer of the new window. So a report with no 5-hour figure but a weekly one
 /// that is still running says "on a plan, nothing used in this 5-hour window yet", and counts as a
-/// 5-hour figure of 0%. It competes by `ts` with every report that carried a 5-hour figure, even
-/// one that has since expired: only when it is the newest does the 5-hour window read 0%, so an
-/// older empty report never hides a newer real figure. Its `resets_at` is 0: unknown, since the
-/// window starts with the next answer. When no report carries either figure (API-key logins), the
-/// plan stays None: a genuinely unknown figure still reads `n/a`.
+/// 5-hour figure of 0%. But a session reports what its own last answer said: one that has been idle
+/// since before the reset (a task's session, whose status line re-runs every few seconds) keeps
+/// saying "not started" while another session is using the new window. So a 5-hour figure that is
+/// still running, from any session, means the window has started, and it beats every "not
+/// started" report, however new. Only when no session holds a running 5-hour figure does "not
+/// started" compete, by `ts`, with the reports whose figure has since expired: only when it is the
+/// newest does the 5-hour window read 0%, so an older empty report never hides a newer real figure.
+/// Its `resets_at` is 0: unknown, since the window starts with the next answer. When no report
+/// carries either figure (API-key logins), the plan stays None: a genuinely unknown figure still
+/// reads `n/a`.
 ///
 /// The weekly window gets no such rule: every 5-hour window lies inside a weekly one, so a report
 /// with a 5-hour figure but no weekly one is missing data, not "nothing used yet".
@@ -203,8 +208,8 @@ pub fn load(dir: &Path, now: u64) -> Snapshot {
             five_unstarted = five_unstarted.max(Some(ts));
         }
     }
-    // A tie goes to the real figure.
-    if five_unstarted.is_some_and(|t| five_newest.is_none_or(|n| t > n)) {
+    // A running figure has started the window; otherwise a tie goes to the real (expired) figure.
+    if five.is_none() && five_unstarted.is_some_and(|t| five_newest.is_none_or(|n| t > n)) {
         five = Some((five_unstarted.unwrap_or(0), Window { pct: 0, resets_at: 0 }));
     }
     let plan = match (five, seven) {
@@ -314,6 +319,30 @@ mod tests {
         // A newer empty report (after that window reset) does read 0%.
         status(&dir, "empty", 5_001, None, Some((3, 9_000)));
         assert_eq!(five(&dir, 5_002), Some((0, 0)));
+    }
+
+    #[test]
+    fn an_idle_session_saying_not_started_never_hides_a_running_window_from_another() {
+        // What the user saw: the meter flapping between 31% and 0%. The user's own session reported a running window
+        // (31%, resetting at `reset`). A task's session, idle since before the last reset, re-ran its status line every
+        // 2 s and each time left the 5-hour figure out: "not started", and always the newest report.
+        let dir = tmp("flap");
+        let (reset, week) = (20_000, 500_000);
+        status(&dir, "live", 15_000, Some((31, reset)), Some((40, week)));
+        for ts in [15_002, 15_004, 15_006] {
+            status(&dir, "task", ts, None, Some((40, week)));
+            assert_eq!(five(&dir, ts + 1), Some((31, reset)), "a running window has started, whatever is newer");
+            // The live session reports again in between: the same figure, never a flap to 0%.
+            status(&dir, "live", ts + 1, Some((31, reset)), Some((40, week)));
+            assert_eq!(five(&dir, ts + 1), Some((31, reset)));
+        }
+        // Once that window is over and nothing holds a running one, "not started" is 0% again.
+        status(&dir, "task", reset + 5, None, Some((40, week)));
+        assert_eq!(five(&dir, reset + 6), Some((0, 0)));
+        // And a session that answers in the new window shows its figure, whatever reports come after it.
+        status(&dir, "live", reset + 10, Some((2, reset + 18_000)), Some((41, week)));
+        status(&dir, "task", reset + 12, None, Some((41, week)));
+        assert_eq!(five(&dir, reset + 13), Some((2, reset + 18_000)));
     }
 
     #[test]

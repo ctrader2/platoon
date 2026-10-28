@@ -113,7 +113,10 @@ All of this is enforced in one place before any call starts:
   (`Claude 5h 47% 7d 21%  │  Codex 30d 12%`), then only each plan's fullest window, the one that stops you first
   (`Claude 47%  Codex 12%`). Before there is a figure it says so: `Claude  waiting for a session` (no Claude Code session
   has reported it yet), ``Claude  off · run `platoon setup` `` (the status line isn't set up), `Codex  no figure yet`, or
-  just `–` where there is less room.
+  just `–` where there is less room. Claude's 5-hour window reads 0% when it has not started yet (no answer since it
+  last started over), but only while no Claude Code session has a figure for a 5-hour window still running: a session
+  that has sat idle since before the window started over says "not started" until it answers again, and that never
+  hides what your other sessions report.
 - **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls
   on that program for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed
   out or over the plan limit); the other program's calls go on. A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the

@@ -21,6 +21,9 @@ here.
 
 - Selecting text in a session by dragging now scrolls when you drag past the top or bottom edge and hold there, so a
   selection can be longer than the screen; letting go copies all of it. Before, the drag stopped at the edge.
+- The plan usage at the top right no longer flips between a figure and 0%. A session idle since before the 5-hour
+  window started over (a task's, whose status line keeps reporting) said "not started" and could hide the figure your
+  other sessions reported.
 
 ## [1.0.1] - 2026-10-25
 
