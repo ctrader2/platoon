@@ -362,9 +362,7 @@ fn a_task_with_no_folder_asks_for_one_before_its_squad() {
     t.wait_for_all(&["Not started · 1", "No folder yet · s starts it"]);
     t.send(b"s");
     t.wait_for_all(&["The folder task #1 works in", "enter pick a squad"]);
-    for c in lab.shop.to_string_lossy().chars() {
-        t.send(c.to_string().as_bytes());
-    }
+    t.send(lab.shop.to_string_lossy().as_bytes());
     t.wait_for_unwrapped(&format!("❯ {}", lab.shop.to_string_lossy()));
     t.send(b"\r");
     t.wait_for_all(&["Start #1 with a squad", "▎ Feature"]);
