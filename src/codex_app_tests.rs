@@ -293,7 +293,7 @@ fn h_hands_a_codex_conversation_on_to_a_new_codex_session_with_the_document_as_i
     let l = &app.launched[0];
     assert_eq!((l.agent, l.dir.as_str()), (Agent::Codex, folder.to_string_lossy().as_ref()));
     assert_eq!(l.args, ["--no-daemon".to_string(), doc.trim().to_string()]);
-    assert_eq!(l.env, [("PLATOON_PROJECT".to_string(), project), ("PLATOON_OFFER_TASKS".to_string(), "1".to_string())]);
+    assert_eq!(l.env, [("PLATOON_PROJECT".to_string(), project)]);
     assert!(app.active_notice().is_some_and(|n| n.contains("Started a new session in the project \"Web shop\"")));
 }
 
@@ -441,14 +441,14 @@ fn with_both_installed_n_asks_which_agent_with_the_last_choice_picked_and_rememb
     assert_eq!(agent_name_cell(&term, &app, 1).bg, t.bg);
     assert_eq!(cell_of(&term, "The one you choose").fg, crate::ui::hint_fg(&t));
 
-    // Codex, by the keys: started, with the offer, and remembered.
+    // Codex, by the keys: started and remembered.
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.launched.len(), 1);
     let l = &app.launched[0];
     assert_eq!((l.agent, l.dir.as_str(), l.args.as_slice()), (Agent::Codex, work.to_str().unwrap(), &["--no-daemon".to_string()][..]));
-    assert_eq!(l.env, [("PLATOON_OFFER_TASKS".to_string(), "1".to_string())]);
+    assert!(l.env.is_empty(), "{:?}", l.env);
     assert_eq!(settings::load(&w.config).0.new_session_agent.as_deref(), Some("codex"));
 
     // Next time Codex is picked in advance and starred: enter is the one extra key.
@@ -473,13 +473,12 @@ fn with_both_installed_n_asks_which_agent_with_the_last_choice_picked_and_rememb
     app.on_mouse(click);
     assert_eq!(app.launched.iter().map(|l| l.agent).collect::<Vec<_>>(), [Agent::Codex, Agent::Codex]);
 
-    // Claude Code chosen: remembered in its turn, and started as before (no first message, the offer's hook).
+    // Claude Code chosen: remembered in its turn, and started as before: no first message, nothing added.
     new_session_in(&mut app, &work);
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
     let l = app.launched.last().unwrap();
-    assert_eq!((l.agent, l.args.len(), l.args[0].as_str()), (Agent::Claude, 2, "--settings"));
-    assert!(l.args[1].contains(" hook offer-tasks"), "{:?}", l.args);
+    assert_eq!((l.agent, l.args.len(), l.env.len()), (Agent::Claude, 0, 0), "{:?} {:?}", l.args, l.env);
     assert_eq!(settings::load(&w.config).0.new_session_agent.as_deref(), Some("claude"));
 }
 
@@ -507,7 +506,7 @@ fn with_one_agent_installed_n_starts_it_without_asking() {
     let mut app = w.app();
     new_session_in(&mut app, &work);
     assert!(matches!(app.mode, Mode::List), "no question");
-    assert_eq!(app.launched.iter().map(|l| (l.agent, l.args[0].as_str())).collect::<Vec<_>>(), [(Agent::Claude, "--settings")]);
+    assert_eq!(app.launched.iter().map(|l| (l.agent, l.args.len())).collect::<Vec<_>>(), [(Agent::Claude, 0)]);
     // Codex only.
     let w = world("codex-new-codex-only");
     fs::create_dir_all(&work).unwrap();

@@ -164,7 +164,7 @@ fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_docu
     let sent = fs::read_to_string(fake.join("calls/1.stdin")).unwrap();
     assert!(sent.contains("Read notes.txt and tell me the colour.") && sent.contains("Codex's last reply: CHECKED"), "{sent}");
     t.send(b"\x13");
-    t.wait_for_all(&["fake-codex args:--no-daemon # Session hand-off: work", "fake-codex env project:pweb offer:1"]);
+    t.wait_for_all(&["fake-codex args:--no-daemon # Session hand-off: work", "fake-codex env project:pweb offer:none"]);
     let args = fs::read_to_string(w.base.join("codex-args")).unwrap();
     assert!(
         args.starts_with("--no-daemon\n# Session hand-off: work\n\nThis is context for this session."),
@@ -202,7 +202,7 @@ fn n_asks_which_agent_and_a_new_codex_session_has_its_row_before_its_first_messa
     t.send(b"\r");
     t.wait_for_all(&["Start in Claude Code or Codex?", "Claude Code", "The one you choose is picked here next time.", "enter start"]);
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&[&format!("fake-codex args:--no-daemon cwd:{}", w.work.display()), "fake-codex env project:none offer:1"]);
+    t.wait_for_all(&[&format!("fake-codex args:--no-daemon cwd:{}", w.work.display()), "fake-codex env project:none offer:none"]);
     assert_eq!(fs::read_to_string(w.base.join("codex-args")).unwrap(), "--no-daemon\n");
     let (pid, sock) = find_host(&w.cache).expect("a host runs it");
     let info: serde_json::Value = serde_json::from_str(&fs::read_to_string(sock.with_extension("json")).unwrap()).unwrap();
@@ -238,7 +238,6 @@ fn run_with(w: &World, extra: &[(&str, String)], args: &[&str], input: &str) -> 
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .env_remove("PLATOON_PROJECT")
-        .env_remove("PLATOON_OFFER_TASKS")
         .envs(extra.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -393,13 +392,6 @@ fn codexs_hooks_hand_a_projects_notes_to_its_sessions_and_mark_the_notes_due_aft
     assert!(context.contains("\"Web\"") && context.contains("The shop's notes."), "{context}");
     assert!(!context.contains("task add"), "{context}");
 
-    // One platoon started (`PLATOON_OFFER_TASKS=1`, which reaches Codex's hooks from the process platoon started) is
-    // told nothing about making tasks at the start: that is a hook before its first edit (`tests/offer.rs`). The notes
-    // were given already, so nothing at all.
-    let offer = [("PLATOON_OFFER_TASKS", "1".to_string())];
-    let (code, out, _) = run_with(&w, &offer, &["hook", "session-start", "--agent", "codex"], &sample("SessionStart"));
-    assert_eq!((code, out.as_str()), (0, ""));
-
     // A prompt: nothing until the notes change, then the new version; never refused (Codex keeps one window itself).
     let (code, out, _) = run(&w, &["hook", "guard", "--agent", "codex"], &sample("UserPromptSubmit"));
     assert_eq!((code, out.as_str()), (0, ""));
@@ -489,7 +481,7 @@ fn with_codex_switched_off_its_notes_hooks_end_at_once_saying_nothing_and_claude
         (["hook", "stop", "--agent", "codex"], sample("Stop-first")),
     ] {
         let started = std::time::Instant::now();
-        let (code, out, err) = run_with(&w, &[("PLATOON_OFFER_TASKS", "1".to_string())], &args, &input);
+        let (code, out, err) = run(&w, &args, &input);
         assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""), "{args:?}");
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "{args:?} took {:?}", started.elapsed());
     }

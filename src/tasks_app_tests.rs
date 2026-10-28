@@ -4,7 +4,6 @@
 //! `c` asking before it cancels, Active and Archived (`a` both ways, a Done task not merged staying), and a task's
 //! session on neither of the Sessions tab's lists.
 
-use crate::agents::Start;
 use crate::app::{App, Confirm, Mode};
 use crate::testkit::World;
 use crate::tickets::{Need, NewTicket, State, Tickets};
@@ -526,43 +525,32 @@ fn an_old_done_task_stays_on_active_while_its_work_is_not_merged_and_a_can_archi
 }
 
 #[test]
-fn sessions_platoon_starts_offer_to_make_tasks_but_a_tasks_own_session_does_not() {
-    let (w, mut app, project, folder) = lab("tasks-offer", &[("Write the guide", "docs", State::NotStarted)]);
-    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None, &[]).unwrap();
-    w.transcript("task-sess", &folder, "Task #1: Write the guide", 1);
-    app.reload_for_test();
-    assert!(app.offers_tasks(Start::New(None)), "a new session");
-    assert!(app.offers_tasks(Start::New(Some("a prompt to start with"))), "a new session from a hand-off");
-    assert!(app.offers_tasks(Start::Resume("user-1")), "a resumed one");
-    assert!(!app.offers_tasks(Start::Resume("task-sess")), "a task's own session");
-    assert!(!app.offers_tasks(Start::Attach("abcd1234")), "claude attach");
-}
-
-#[test]
-fn the_offer_is_a_setting_on_the_sessions_tab_and_off_no_session_offers() {
-    let w = World::new("tasks-offer-setting");
-    let mut app = w.app();
+fn sessions_platoon_starts_carry_no_offer_and_the_settings_screen_has_none() {
+    let (w, mut app, _, folder) = lab("tasks-no-offer", &[("Write the guide", "docs", State::NotStarted)]);
+    // The settings screen's Sessions tab: no offer setting (the offer is the /to-tickets skill now).
+    key(&mut app, KeyCode::Char('1'));
     key(&mut app, KeyCode::Char('s'));
-    let (tab, at) = crate::settings::find_item(crate::settings::OFFER_TASKS).unwrap();
-    while app.settings_tab != tab {
+    for _ in 0..crate::settings::TABS.len() {
+        if app.settings_tab == crate::settings::TAB_SESSIONS {
+            break;
+        }
         key(&mut app, KeyCode::Tab);
     }
-    key(&mut app, KeyCode::Home);
-    assert_eq!(app.setting, at);
+    assert_eq!(app.settings_tab, crate::settings::TAB_SESSIONS);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = draw(&mut term, &app);
-    for want in ["Making tasks", "Offer tasks before starting work", "Ask once", "Names and summaries", "Sessions per call"] {
-        assert!(shown.contains(want), "{want:?} missing:\n{shown}");
+    assert!(shown.contains("Sessions per call"), "{shown}");
+    for gone in ["Offer tasks", "Making tasks", "Ask once"] {
+        assert!(!shown.contains(gone), "{gone:?}:\n{shown}");
     }
-    assert!(shown.contains("it asks you once") && shown.contains("Never in a task's own session"), "the explanation:\n{shown}");
-    let line = shown.lines().position(|l| l.contains("Offer tasks before starting work")).unwrap();
-    assert!(shown.lines().nth(line - 1).unwrap().contains("Making tasks"), "the heading is above it:\n{shown}");
-    assert!(app.offers_tasks(Start::New(None)));
-    key(&mut app, KeyCode::Left);
-    assert!(!crate::settings::load(&w.config).0.offer_tasks, "saved at once");
-    let shown = draw(&mut term, &app);
-    assert!(shown.lines().any(|l| l.contains("Offer tasks before starting work") && l.contains("Off")), "{shown}");
-    assert!(!app.offers_tasks(Start::New(None)) && !app.offers_tasks(Start::Resume("user-1")), "off: no session offers");
+    key(&mut app, KeyCode::Esc);
+    // A session started by platoon gets the agent's own arguments and no offer: no `--settings`, no variable.
+    w.transcript("user-1", &folder, "Plan the docs", 1);
+    app.reload_for_test();
+    key(&mut app, KeyCode::Enter);
+    let l = app.launched.last().expect("enter on its row resumes it");
+    assert_eq!(l.args, ["--resume".to_string(), "user-1".to_string()]);
+    assert!(l.env.iter().all(|(k, _)| k != "PLATOON_OFFER_TASKS"), "{:?}", l.env);
 }
 
 /// Write the check's answer (and whether it runs now) on task `n`.

@@ -200,9 +200,10 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
 /// Start a detached host running `program args` (a session of `agent`) in `dir` and wait until it is ready to connect
 /// to.
 /// The returned `Child` should be polled with `try_wait` so it is reaped when the host exits.
-/// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT`,
-/// `PLATOON_OFFER_TASKS` and `PLATOON_TASK` are only ever what `env` says: ones platoon itself inherited (say, started from inside a
-/// project's session) are not passed on.
+/// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT` and
+/// `PLATOON_TASK` are only ever what `env` says: ones platoon itself inherited (say, started from inside a project's
+/// session) are not passed on, and neither is `PLATOON_OFFER_TASKS`, which only platoon 1.0 set (for its offer to make
+/// tasks) and nothing reads now.
 /// The host keeps its files in `dirs.cache`, and is told so when that is not the one its environment names.
 #[allow(clippy::too_many_arguments)]
 pub fn launch(
@@ -220,7 +221,7 @@ pub fn launch(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
     cmd.env_remove("PLATOON_PROJECT");
-    cmd.env_remove(crate::offerhook::OFFER_ENV);
+    cmd.env_remove("PLATOON_OFFER_TASKS");
     cmd.env_remove(crate::agents::TASK_ENV);
     // A unit test's folders are never the real ones (and a test must not look the real ones up).
     #[cfg(not(test))]

@@ -54,7 +54,6 @@ mod notes;
 mod notes_app_tests;
 mod notesrun;
 mod notesupdate;
-mod offerhook;
 mod open;
 #[cfg(test)]
 mod perf;
@@ -76,6 +75,7 @@ mod select_app_tests;
 mod sessionhook;
 mod settings;
 mod setup;
+mod skill;
 mod smart;
 #[cfg(test)]
 mod smart_app_tests;
@@ -158,8 +158,16 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook(hook_agent())),
-        // Given with `--settings` to the Claude Code sessions platoon starts (Codex's offer runs in `hook task-before`).
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("offer-tasks") => std::process::exit(offerhook::run(hook_agent())),
+        // Kept as a silent no-op: Claude Code sessions an older platoon started (1.0.x) carry a `--settings` hook that runs
+        // `hook offer-tasks` before their first edit, and must not see it fail after an upgrade. The offer to make tasks is
+        // the /to-tickets skill now (`skill.rs`).
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("offer-tasks") => {
+            use std::io::IsTerminal;
+            if !io::stdin().is_terminal() {
+                let _ = io::Read::read_to_end(&mut io::Read::take(io::stdin(), 1 << 20), &mut Vec::new());
+            }
+            std::process::exit(0)
+        }
         // Claude Code's are given only to a task's session, with `--settings` (never installed in the user's own
         // settings); Codex's are in its hooks file for every session and act only in a task's (`PLATOON_TASK`).
         Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
@@ -257,21 +265,23 @@ fn version_line() -> String {
     format!("platoon {}", versions::running())
 }
 
-const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task step | themes | tokens |
-               uninstall | --version]
+const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task squads | task step |
+               themes | tokens | uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. The back key (Ctrl+Space unless
                   keys.json says otherwise) detaches; it keeps running
   open --project <name>   start a new session here, in that project
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
-                  stops two copies of one session from overwriting each other, and two hooks
-                  that hand a project's notes to its sessions and keep them up to date; and,
-                  when Codex is installed, the notes and task hooks to Codex's hooks.json
+                  stops two copies of one session from overwriting each other, two hooks
+                  that hand a project's notes to its sessions and keep them up to date, and
+                  the /to-tickets skill; and, when Codex is installed, the notes and task
+                  hooks to Codex's hooks.json
   task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
                   make a task and print its number (#N); with no --folder it works in the
                   current folder; --squad suggests the squad that starts it
   task list [--project <name>] [--json]   the tasks, open ones first
+  task squads     the squads a task can start with: each one's id and what it is for
   task step <n> started|done|skipped [\"<one line>\"]   inside a task's session: mark a step of its
                   squad (skipped needs a reason)
   themes          list the color themes: the built-in ones and your own
@@ -284,7 +294,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook task-plan, hook task-question,
                   hook task-notify, hook task-tool, hook task-prompt, hook task-stop, hook task-start,
-                  hook task-before, hook offer-tasks, notes-update   internal: run by Claude Code (and by Codex, with
+                  hook task-before, notes-update   internal: run by Claude Code (and by Codex, with
                   --agent codex: hook guard, hook session-start, hook stop and the task hooks),
                   or by platoon itself";
 
@@ -356,6 +366,11 @@ fn setup() -> io::Result<()> {
     match claude {
         Ok(mut report) => {
             report.off.clone_from(&providers.off);
+            // The /to-tickets skill, where Claude Code is: not part of the start-up gate, so it never blocks platoon.
+            if providers.claude.is_some() {
+                let exe = setup::this_program().map(|(exe, _)| exe);
+                report.skill = Some(exe.map_or_else(skill::Installed::Failed, |exe| skill::install(&root, &exe)));
+            }
             // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
             if let Some(agents::CodexAt { program, root: codex }) = &providers.codex {
                 let mut c = setup::run_codex(codex);
@@ -630,8 +645,10 @@ mod tests {
     #[test]
     fn the_usage_text_names_tasks_and_the_task_hooks() {
         assert!(USAGE.contains("task add | task list"), "{USAGE}");
-        // No `platoon squads` any more; `task add --squad` names one.
-        assert!(!USAGE.contains("ticket") && !USAGE.contains("squads") && !USAGE.contains("to-tickets"), "{USAGE}");
+        // No `platoon squads` or `platoon ticket` any more: `task squads` lists them, `task add --squad` names one.
+        assert!(!USAGE.contains("platoon squads") && !USAGE.contains("ticket ") && !USAGE.contains("| squads"), "{USAGE}");
+        assert!(USAGE.contains("task squads") && USAGE.contains("the /to-tickets skill"), "{USAGE}");
+        assert!(!USAGE.contains("offer-tasks"), "kept only so older sessions don't fail: {USAGE}");
         assert!(USAGE.contains("[--squad <id>]"), "{USAGE}");
         assert!(USAGE.contains("  task add [--project") && USAGE.contains("  task list [--project"));
         for h in crate::taskrun::HOOKS {

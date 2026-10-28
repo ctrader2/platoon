@@ -121,13 +121,11 @@ where Claude Code is installed, and Codex's first model on a computer with only 
 
 ### Sessions
 
-Under **Making tasks**, whether a session asks before it starts working; under **Names and summaries**, what naming and
-summarizing your conversations reads, and how often. Under the entries:
+What naming and summarizing your conversations reads, and how often. Under the entries:
 `Archived: N conversations, about X tokens to index (an estimate)`.
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
-| Offer tasks before starting work | Just before a session platoon started begins the work (an edit, an agent, a worktree), it asks you once whether to turn the work into tasks for a squad, or do it right there; never in a task's own session (see [The session offers to make them](tasks-and-squads.md#the-session-offers-to-make-them)). Off: no session asks, and `t` still makes tasks from a conversation. A session already running stops asking at once; switched back on, a session asks once it is started or resumed again. platoon makes no call of its own for it: the session itself asks. | Ask once (default), Off |
 | Sessions per call | Names and summaries are made for several sessions at once, in one request to Claude. This is how many go in each request. More per request uses less of your plan in total, because the instructions are sent once for all of them. | 5, 10, 20, 30 (default), 50, 100 |
 | Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
 | Wait for quiet before refreshing | Before making a session's name and summary again, platoon waits until nothing new has been added to it for this long. That way a conversation you're still in isn't summarized again after every reply. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
@@ -183,7 +181,7 @@ shows the exact path). platoon doesn't create it until you change something, and
  "ai_pause_percent": 80, "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
  "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "", "files_editor_ask": false, "notes_quiet_minutes": 3,
- "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true, "offer_tasks": true}
+ "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true}
 ```
 
 This one has no `ai_model` or `notes_model`: no model has been picked, so the defaults for this computer apply.
@@ -208,8 +206,8 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `update_check` is `true` or `false`; anything else there means the default (`true`).
-- `offer_tasks` is `true` (the default) or `false`: **Offer tasks before starting work** on the Sessions tab; anything
-  else there means `true`.
+- `offer_tasks`, which platoon 1.0 wrote for its offer to make tasks, does nothing now and stays in the file as it is
+  (the offer is the [`/to-tickets`](tasks-and-squads.md#to-tickets-in-a-session) skill).
 - `tokens_enabled` is the master switch for the smart features (`false` unless you said yes), and `token_features` has
   one switch per feature (`names`, `find`, `project_notes`, `project_description`). `tokens_asked` is `true` once
   `platoon setup` has asked whether platoon may use your plan, so it doesn't ask again.

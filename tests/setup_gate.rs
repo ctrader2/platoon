@@ -87,7 +87,7 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tickets skill: {shown}");
     assert!(
         shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"),
         "{shown}"
@@ -97,8 +97,8 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
-    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tickets skill: {shown}");
+    assert_eq!(shown.matches("already done").count(), 5, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
 }
@@ -123,16 +123,13 @@ fn setup_makes_claude_codes_folder_when_it_is_not_there_yet() {
     assert!(screen.contains("No sessions yet") && !screen.contains("one-time setup"), "{screen}");
 }
 
-/// setup installs no skill and takes no arguments: anything after it is refused with the usage, and nothing is
-/// written.
+/// setup takes no arguments: anything after it is refused with the usage, and nothing is written. (The skill it
+/// writes: `tests/skill.rs`.)
 #[test]
-fn setup_installs_no_skill_and_refuses_arguments() {
+fn setup_refuses_arguments() {
     let (claude, cache) = dirs("args");
     let out = platoon(&claude, &cache, &["setup"]);
     assert!(out.status.success());
-    let shown = text(&out.stdout);
-    assert!(!shown.contains("skill") && !shown.contains("to-tickets"), "{shown}");
-    assert!(!claude.join("skills").exists(), "nothing written there");
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
     for gone in [&["setup", "--remove", "to-tickets"][..], &["setup", "--add", "to-tickets"], &["setup", "--nope"]] {
         let out = platoon(&claude, &cache, gone);
@@ -228,7 +225,7 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
     assert!(screen.contains("No sessions yet"), "the missing notes hook must not block starting:\n{screen}");
     let out = platoon(&claude, &cache, &["setup"]);
     let shown = text(&out.stdout);
-    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 4, "three steps and the skill: {shown}");
     assert!(shown.contains("Project notes") && shown.contains("added"), "{shown}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();

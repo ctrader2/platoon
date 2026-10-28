@@ -366,7 +366,7 @@ impl App {
             plan_first: squad.plan_first,
             helper_models: catalog.of_agent(agent).map(|m| m.id.clone()).filter(|_| agent == Agent::Codex).collect(),
             squad_files: Vec::new(),
-            exe: crate::offerhook::this_platoon(),
+            exe: crate::taskrun::this_platoon(),
             steps: steps.len(),
         };
         // Every squad as it would run here: a step that follows another squad follows what this computer runs.
@@ -434,7 +434,7 @@ impl App {
         }
         let agent = self.task_agent(&squad)?;
         let resume = resume && t.session_id().is_some();
-        let exe = crate::offerhook::this_platoon();
+        let exe = crate::taskrun::this_platoon();
         let checker = crate::agents::model_display_name(&taskrun::verdict_model(&self.config, project, &t, &self.catalog()));
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));
         let launch = TaskLaunch {

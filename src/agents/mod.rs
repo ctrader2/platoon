@@ -99,16 +99,6 @@ impl Agent {
         }
     }
 
-    /// The arguments for `start` of a session that offers making tasks (`offerhook.rs`), whose hook runs the platoon
-    /// program `exe`. Claude Code's hook is given to that session alone (`claude::offer_args`); Codex's is in its hooks
-    /// file for every session and acts on the session's environment, so its arguments are `args`'.
-    pub fn offering_args(self, start: Start, exe: &str) -> Vec<String> {
-        match self {
-            Agent::Claude => claude::offer_args(start, exe),
-            Agent::Codex => codex::start_args(start),
-        }
-    }
-
     /// Do a host's arguments show a background session (`Start::Attach`)?
     pub fn attaches(self, args: &[String]) -> bool {
         match self {
@@ -403,9 +393,6 @@ pub enum HookKind {
     PermissionWait,
     /// The agent has finished its turn.
     Stop,
-    /// The agent is about to start work: launch an agent, edit a file, make a worktree (`offerhook.rs`). Any other
-    /// tool is nothing to this hook.
-    BeforeWork,
 }
 
 /// A tool whose use moves a task along.
@@ -447,11 +434,6 @@ pub enum HookEvent {
     /// The agent waits for the user's permission, and says what for when it does.
     PermissionWait(Option<String>),
     Stop(TurnEnd),
-    /// The agent is about to start work. `files` are the files it changes, as the tool names them (absolute, or
-    /// relative to the session's folder); none for a step that isn't about files (an agent launched, a worktree made).
-    StartsWork {
-        files: Vec<String>,
-    },
 }
 
 /// How a turn ended.

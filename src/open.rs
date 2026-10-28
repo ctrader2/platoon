@@ -72,9 +72,8 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     let Some(arg) = arg else {
         let agent = new_session_agent()?;
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        let mut env = Vec::new();
-        let args = session_args(agent, Start::New(None), true, &mut env);
-        return host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols)
+        let args = agent.args(Start::New(None));
+        return host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd.to_string_lossy(), &args, &[], rows, cols)
             .map(|(h, _)| h);
     };
     // A saved conversation is Claude Code's unless it is Codex's.
@@ -148,21 +147,9 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     }
     // A session of a project keeps carrying the project, so the notes hook can tell.
     let projects = Projects::open(&crate::archive::config_dir());
-    let mut env: Vec<(&str, &str)> = projects.project_id_of(&id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-    // A session that is not a task's own offers making tasks.
-    let offers = crate::tickets::find_session(&crate::archive::config_dir(), &id).is_none();
-    let args = session_args(agent, Start::Resume(&id), offers, &mut env);
+    let env: Vec<(&str, &str)> = projects.project_id_of(&id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    let args = agent.args(Start::Resume(&id));
     host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &args, &env, rows, cols).map(|(h, _)| h)
-}
-
-/// `agent`'s arguments for `start`, adding the offer's variable to `env` for a session that offers making tasks
-/// (`offerhook.rs`): `offers` (it is no task's own) while the setting is on (Sessions, "Offer tasks before starting work").
-fn session_args(agent: Agent, start: Start, offers: bool, env: &mut Vec<(&str, &str)>) -> Vec<String> {
-    if !offers || !crate::settings::load(&crate::archive::config_dir()).0.offer_tasks {
-        return agent.args(start);
-    }
-    env.push((crate::offerhook::OFFER_ENV, "1"));
-    agent.offering_args(start, &crate::offerhook::this_platoon())
 }
 
 /// Why `platoon open` leaves conversation `id` of `agent` alone while `agent` is switched off.
@@ -203,10 +190,8 @@ fn codex_host_for(
         return Err(format!("session {id} was run in {cwd}, which no longer exists"));
     }
     let projects = Projects::open(&crate::archive::config_dir());
-    let mut env: Vec<(&str, &str)> = projects.project_id_of(id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-    // A session that is not a task's own offers making tasks, as a Claude Code one does.
-    let offers = crate::tickets::find_session(&crate::archive::config_dir(), id).is_none();
-    let args = session_args(agent, Start::Resume(id), offers, &mut env);
+    let env: Vec<(&str, &str)> = projects.project_id_of(id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    let args = agent.args(Start::Resume(id));
     host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &args, &env, rows, cols).map(|(h, _)| h)
 }
 
@@ -220,8 +205,8 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let at_ms = crate::usage::now().saturating_sub(2) * 1000;
     let agent = new_session_agent()?;
-    let mut env = vec![("PLATOON_PROJECT", p.id.as_str())];
-    let args = session_args(agent, Start::New(None), true, &mut env);
+    let env = vec![("PLATOON_PROJECT", p.id.as_str())];
+    let args = agent.args(Start::New(None));
     let (info, _) = host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols)?;
     // Placed in the project once its session id shows up (by any platoon window, or by the notes hook).
     projects::note_launch(&crate::usage::cache_dir(), info.claude_pid, &p.id, at_ms)

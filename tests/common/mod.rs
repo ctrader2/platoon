@@ -63,8 +63,8 @@ pub fn iso(ms: u64) -> String {
 }
 
 /// A stand-in `claude` in `dir` that is a plain interactive `sh`, whatever it is started with. (`sh` itself can't stand
-/// in for a session platoon starts: that is given the offer's hook, `--settings <json>`, which `sh` takes for an option
-/// it doesn't know.)
+/// in for every session platoon starts: a task's is given `--settings <json>`, which `sh` takes for an option it doesn't
+/// know.)
 pub fn shell_claude(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let p = dir.join("shell-claude.sh");
@@ -174,7 +174,8 @@ impl Term {
         for (k, v) in NO_REAL_CODEX {
             cmd.env(k, v); // ...nor the real Codex's folder or program
         }
-        // Run from inside a session platoon started, the tests would inherit what it was started with.
+        // Run from inside a session platoon started, the tests would inherit what it was started with (and from inside
+        // one platoon 1.0 started, its `PLATOON_OFFER_TASKS`).
         for k in ["PLATOON_PROJECT", "PLATOON_OFFER_TASKS", "PLATOON_TASK"] {
             cmd.env_remove(k);
         }

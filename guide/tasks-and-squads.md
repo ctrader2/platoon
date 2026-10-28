@@ -69,40 +69,33 @@ box; then [the check of the work](#the-check-of-the-work) judges each box itself
 
 ### Making tasks from a conversation
 
+There are two ways to turn a conversation into tasks: `t` on its row in platoon, and `/to-tickets` typed in the session
+itself. Either way the tasks are made as **Not started**, each with the squad that suits it suggested, and nothing starts
+until you press `s` on each.
+
 `t` on a session's row (a Claude Code conversation or a Codex one) asks the model for smart features, Claude's or
 Codex's (with the smart features on), to read the conversation and suggest tasks, each with the squad that suits it. They open in a popup: `↑` `↓` move, `e` edits one in your editor, `x` removes one, `enter` makes
-them all as **Not started**, `esc` makes nothing. Nothing starts until you press `s` on each.
+them all as **Not started**, `esc` makes nothing.
 
-### The session offers to make them
+### `/to-tickets` in a session
 
-A session platoon starts or resumes (not a task's own session) asks you once whether to hand the work on, **just
-before it starts working**: the first time it is about to launch an agent, edit a file in its folder, or make a
-worktree. Reading, searching and shell commands don't count, and neither does an edit outside the session's folder
-(Claude's memory and plans, or a notes folder linked into the repository that really lives elsewhere). platoon holds
-that one step back and has the session ask, with Claude Code's question tool: **Turn this into platoon tasks for a
-squad?**
+In a Claude Code session, type `/to-tickets` (optionally followed by what to turn into tasks: a plan file, or a part of
+the conversation). [`platoon setup`](install-and-setup.md#the-to-tickets-skill) installs this skill. The session:
 
-- **Make tasks**: it drafts the tasks, one for each piece of the work that can be done on its own, each with a **Done
-  when** list and the squad that suits it, shows them to you as a list and asks **Make these tasks?** before making
-  any. Then it makes each one with `platoon task add` (by platoon's full path, so it works without `platoon` on your
-  PATH), in the session's project and folder, says how many it made and that they are on the Tasks tab. It starts none
-  of them, and doesn't do their work itself.
-- **Do it here**: it says in a line that it won't ask again in this conversation, and that `t` on the session's row
-  makes tasks from it later ([Making tasks from a conversation](#making-tasks-from-a-conversation)), then carries on
-  with the step it was about to take.
+1. lists the squads there are (`platoon task squads`),
+2. drafts the tasks, one for each piece of the agreed work that can be done and checked on its own, each with a **Done
+   when** list, the squad that suits it and the folder it works in,
+3. shows them to you as a list and asks **Make these tasks?** (Make them, Make one task, Show me the text, Cancel, or
+   type a change) before making any,
+4. makes each one with `platoon task add`, by platoon's full path, and tells you their numbers and that they are on the
+   Tasks tab.
 
-It asks once per conversation, whatever you answer: everything after that goes through. **Offer tasks before starting
-work** in Settings, Sessions switches it off (or back on): off, no session asks, and `t` still works. A session that
-was already running when you switched it on asks once it is started or resumed again. Sessions you start with plain
-`claude` outside platoon are never asked. Claude Code's sessions get the question from a hook platoon gives the
-sessions it starts (see [What platoon changes](what-platoon-changes.md#sessions-platoon-starts)); there is nothing to
-set up.
+It starts none of them, and doesn't do their work itself. A task goes in the project whose sessions worked in its
+folder (or in no project); when sessions of more than one project worked there, the session asks you which.
 
-A Codex session platoon starts or resumes asks the same, before its first edit, through platoon's Codex hook (the one
-[`platoon setup`](install-and-setup.md#codex) adds for tasks), except that it asks at the end of its reply, in plain
-words, and you answer with your next message. Codex keeps its work inside the session's folder, and `platoon task add`
-writes in platoon's own folder, so Codex asks you to allow that command: allow it, and the tasks are made. Sessions you
-start with plain `codex` outside platoon are not asked.
+Claude may also suggest `/to-tickets` itself, once, in a line at the end of a reply, when the conversation has settled on
+concrete work with several steps. It never interrupts work to ask, and never makes tasks without you typing
+`/to-tickets` and approving the list.
 
 ## Starting a task
 

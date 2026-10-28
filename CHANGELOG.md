@@ -10,6 +10,12 @@ here.
 
 - On a project's screen, `←` and `→` now switch between the sessions and the notes on their own. They needed `ctrl` or
   `shift` before, and `ctrl` with an arrow is the Mac's own key for moving between desktops.
+- **Making tasks from a session is a skill again: type `/to-tickets`** in a Claude Code session to turn the work agreed
+  there into tasks for a squad; it drafts them, shows you the list and makes them only after you approve. `platoon
+  setup` installs it (run setup once after upgrading); a `/to-tickets` skill of your own is left alone, and setup says
+  so. It replaces the hook that held back a session's first edit to ask, which Claude Code showed as a hook error, and
+  with it the **Offer tasks before starting work** setting. `t` on a session's row works as before, and the new
+  `platoon task squads` lists the squads a task can start with.
 
 ### Fixed
 

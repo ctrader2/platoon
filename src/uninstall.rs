@@ -3,7 +3,7 @@
 //!
 //! What it does, in this order, so a "no" leaves everything as it was:
 //! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes) and in
-//!    Codex's `hooks.json` (`setup::take_out_codex`), the sessions platoon's hosts are running, the worktrees tasks
+//!    Codex's `hooks.json` (`setup::take_out_codex`), the `/to-tickets` skill (`skill::state`), the sessions platoon's hosts are running, the worktrees tasks
 //!    recorded, and the folders.
 //! 2. Ask: whether to stop the running sessions (no: stop here, nothing changed; `--stop-sessions` says yes), then
 //!    whether to delete the config folder (the user's projects, notes, tasks and settings: default keep; `--all`
@@ -14,7 +14,8 @@
 //!    (`setup::forget_codex_trust`, through Codex's app-server: Codex's other records stay, and when Codex can't be
 //!    asked they are left and said to be harmless) and take them out of `hooks.json`, have Codex forget its trust in
 //!    the folders of tasks' worktrees platoon had it trust (`codex_server::forget_folders`, only those the tasks
-//!    record), delete the cache folder, the config folder when asked, and older platoons' leftovers.
+//!    record), delete the `/to-tickets` skill when it is the copy platoon wrote (`skill::remove`; one of the user's
+//!    stays, and is said), delete the cache folder, the config folder when asked, and older platoons' leftovers.
 //! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
 //! Claude Code's and Codex's conversations are never touched.
@@ -267,6 +268,8 @@ pub struct Plan {
     /// The task worktrees' folders platoon had Codex trust and that its task records still name (`codex_trust_left`).
     codex_trust: Vec<String>,
     config_there: bool,
+    /// What is at the `/to-tickets` skill's place in Claude Code's folder.
+    skill: Result<crate::skill::State, String>,
 }
 
 /// The folders platoon had Codex trust for tasks' worktrees, as the tasks in `config` record them, while those records
@@ -320,6 +323,7 @@ pub fn look(places: &Places, git: &str) -> Plan {
         worktrees: kept_worktrees(&places.config, git),
         codex_trust: codex_trust_left(&places.config),
         config_there: places.config.exists(),
+        skill: crate::skill::state(&places.root),
     }
 }
 
@@ -543,6 +547,24 @@ pub fn run(
                 plan.codex_trust.join(", ")
             )),
         }
+    }
+
+    // The /to-tickets skill: only the copy platoon wrote and nobody changed.
+    match &plan.skill {
+        Ok(crate::skill::State::Missing) => {}
+        Ok(crate::skill::State::NotOurs) => kept.push(format!(
+            "the /to-tickets skill at {}: platoon didn't write it (or it was changed since), so it is yours and stays",
+            crate::skill::path(&places.root).display()
+        )),
+        Ok(crate::skill::State::Ours(_)) => match crate::skill::remove(&places.root) {
+            crate::skill::Removal::Removed(p) => removed.push(format!("the /to-tickets skill ({})", p.display())),
+            crate::skill::Removal::NotThere => {}
+            crate::skill::Removal::NotOurs(p) => {
+                kept.push(format!("the /to-tickets skill at {}: it changed while uninstalling, so it stays", p.display()))
+            }
+            crate::skill::Removal::Failed(why) => failed.push(why),
+        },
+        Err(why) => failed.push(format!("the /to-tickets skill was left alone: {why}")),
     }
 
     if let Some(e) = &plan.codex_error {

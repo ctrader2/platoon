@@ -6,6 +6,9 @@
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists. Codex's steps never
 //! block starting platoon. Codex runs a hook only once it is trusted: setup has Codex itself trust exactly the hooks it
 //! wrote (`trust_codex`), and uninstall has it forget them (`forget_codex_trust`).
+//!
+//! Where Claude Code is, setup also writes the `/to-tickets` skill (`skill.rs`, `SKILL_STEP`): reported like a step,
+//! never part of the start-up gate (`check`), so a platoon upgraded without running setup again still starts.
 
 use crate::agents::{Agent, codex, codex_server};
 use crate::{ai, settings};
@@ -43,6 +46,15 @@ pub const STEPS: [Step; 4] = [
         missing_note: "not set up yet: projects work, but platoon can't keep their notes up to date by itself",
     },
 ];
+
+/// The `/to-tickets` skill (`skill::install`), shown after `STEPS` in setup's report. Not in `check`: it never
+/// blocks starting platoon.
+pub const SKILL_STEP: Step = Step {
+    name: "/to-tickets",
+    what: "a skill: type /to-tickets in a session to turn the work agreed there into tasks",
+    blocking: false,
+    missing_note: "",
+};
 
 /// The steps for Codex, each one or more of its hooks (`CODEX_STEP_HOOKS`, in `codex::hooks` order). None of them
 /// blocks starting platoon.
@@ -114,6 +126,8 @@ pub struct Report {
     pub codex: Option<CodexReport>,
     /// The programs installed but switched off in platoon's settings: skipped, and said so.
     pub off: Vec<Agent>,
+    /// What became of the `/to-tickets` skill, when setup put it in (`skill::install`).
+    pub skill: Option<crate::skill::Installed>,
 }
 
 /// What setup did in Codex's `hooks.json`.
@@ -541,13 +555,22 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None, off: Vec::new() })
+    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None, off: Vec::new(), skill: None })
 }
 
 impl Report {
     /// Setup on a computer without Claude Code: its settings are left alone, and nothing of it blocks starting.
     pub fn without_claude() -> Report {
-        Report { claude: false, outcomes: Vec::new(), saved: None, backed_up: false, notes: Vec::new(), codex: None, off: Vec::new() }
+        Report {
+            claude: false,
+            outcomes: Vec::new(),
+            saved: None,
+            backed_up: false,
+            notes: Vec::new(),
+            codex: None,
+            off: Vec::new(),
+            skill: None,
+        }
     }
 }
 
@@ -561,7 +584,7 @@ Install one of them (or both) and sign in, then run platoon again:
   Codex: https://github.com/openai/codex";
 
 /// This platoon's full path, and as a hook command writes it (quoted when it holds a space).
-fn this_program() -> Result<(String, String), String> {
+pub fn this_program() -> Result<(String, String), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
     let quoted = if exe.contains(' ') { format!("'{exe}'") } else { exe.clone() };
     Ok((exe, quoted))
@@ -837,6 +860,9 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
             Outcome::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
         });
     }
+    if let Some(s) = &r.skill {
+        out.push(skill_row(s, color));
+    }
     out.push(String::new());
     if r.saved.is_some() {
         out.push(saved_line(&root.join("settings.json"), r.backed_up.then_some("settings.json.platoon-bak")));
@@ -846,7 +872,8 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         .codex
         .as_ref()
         .is_some_and(|c| c.saved.is_some() || matches!(&c.trust, Some(Trust::Asked(each)) if each.contains(&HookTrust::Now)));
-    if r.saved.is_none() && !codex_changed {
+    let skill_written = matches!(r.skill, Some(crate::skill::Installed::Added | crate::skill::Installed::Updated));
+    if r.saved.is_none() && !codex_changed && !skill_written {
         out.push("Nothing to change.".into());
     }
     if let Some(c) = &r.codex {
@@ -858,6 +885,27 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     out.extend(r.notes.iter().cloned());
     out.push("All set. Run `platoon`.".into());
     out.join("\n")
+}
+
+/// The skill's line in setup's report: what became of it, and, when a file platoon didn't write is in its place, that
+/// it was left alone and how to have platoon's instead.
+fn skill_row(s: &crate::skill::Installed, color: bool) -> String {
+    use crate::skill::Installed;
+    match s {
+        Installed::Added => row(Some(true), &SKILL_STEP, "added", color),
+        Installed::Updated => row(Some(true), &SKILL_STEP, "updated to this platoon's copy", color),
+        Installed::AlreadyDone => row(Some(true), &SKILL_STEP, "already done", color),
+        Installed::NotOurs(p) => row(
+            None,
+            &SKILL_STEP,
+            &format!(
+                "left alone: {} wasn't written by platoon (delete its folder and run `platoon setup` again for platoon's)",
+                p.display()
+            ),
+            color,
+        ),
+        Installed::Failed(why) => row(None, &SKILL_STEP, &format!("skipped: {why}"), color),
+    }
 }
 
 /// What setup says of a program switched off in platoon's settings: skipped, and what it added before is left in place.
@@ -1157,6 +1205,37 @@ mod tests {
     }
 
     #[test]
+    fn the_skill_is_a_line_of_the_report_and_never_part_of_the_gate() {
+        use crate::skill::Installed;
+        let root = tmp("skill-report");
+        let mut r = run(&root).unwrap();
+        r.skill = Some(Installed::Added);
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains("[✓] /to-tickets    a skill: type /to-tickets in a session"), "{shown}");
+        assert!(shown.lines().any(|l| l.trim() == "added"), "{shown}");
+        // Only the skill written: still a change.
+        let mut again = run(&root).unwrap();
+        assert!(again.saved.is_none());
+        again.skill = Some(Installed::Updated);
+        let shown = render_report(&again, &root, false);
+        assert!(shown.contains("updated to this platoon's copy") && !shown.contains("Nothing to change."), "{shown}");
+        again.skill = Some(Installed::AlreadyDone);
+        assert!(render_report(&again, &root, false).contains("Nothing to change."));
+        // Someone else's: one plain line, no cross.
+        let theirs = root.join("skills/to-tickets/SKILL.md");
+        again.skill = Some(Installed::NotOurs(theirs.clone()));
+        let shown = render_report(&again, &root, false);
+        let line = format!(
+            "left alone: {} wasn't written by platoon (delete its folder and run `platoon setup` again for platoon's)",
+            theirs.display()
+        );
+        assert!(shown.contains("[–] /to-tickets") && shown.contains(&line) && !shown.contains('✗'), "{shown}");
+        // The gate knows nothing of it: done is done, skill or not.
+        assert_eq!(check(&root).len(), STEPS.len());
+        assert!(ready(&check(&root)) && !render_blocked(&check(&root), false).contains("to-tickets"));
+    }
+
+    #[test]
     fn a_program_switched_off_is_skipped_and_the_report_says_why() {
         let r = Report { off: vec![Agent::Claude], ..Report::without_claude() };
         let shown = render_report(&r, Path::new("/nowhere"), false);
@@ -1409,6 +1488,7 @@ mod tests {
                 notes: vec![],
                 codex: Some(r),
                 off: Vec::new(),
+                skill: None,
             };
             let shown = render_report(&report, &codex, false);
             assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
@@ -1426,6 +1506,7 @@ mod tests {
             notes: vec![],
             codex: None,
             off: Vec::new(),
+            skill: None,
         };
         let shown = render_report(&claude_only, &root, false);
         assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
@@ -1594,6 +1675,7 @@ mod tests {
                 notes: vec![],
                 codex: Some(report),
                 off: Vec::new(),
+                skill: None,
             },
             &codex,
             false,
@@ -1623,6 +1705,7 @@ mod tests {
                 notes: vec![],
                 codex: Some(again),
                 off: Vec::new(),
+                skill: None,
             },
             &codex,
             false,

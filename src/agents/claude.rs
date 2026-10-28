@@ -153,25 +153,6 @@ pub fn start_args(start: Start) -> Vec<String> {
     }
 }
 
-/// The tools that start work in a session (`offerhook.rs`): launching an agent (`Task` is the `Agent` tool's older
-/// name), editing a file, making a worktree. A Claude Code matcher: exactly one of them.
-pub const WORK_TOOLS: &str = "Agent|Task|Edit|Write|MultiEdit|NotebookEdit|EnterWorktree";
-
-/// The `--settings` JSON of a session that offers making tasks: one `PreToolUse` hook on `WORK_TOOLS`, calling the
-/// platoon `exe`. Claude Code adds it to the user's own settings and hooks, for this session only.
-pub fn offer_settings_json(exe: &str) -> String {
-    let command = format!("{} hook offer-tasks", shell_word(exe));
-    json!({"hooks": {"PreToolUse": [{"matcher": WORK_TOOLS, "hooks": [{"type": "command", "command": command}]}]}}).to_string()
-}
-
-/// `start_args` with the offer's hook (`offer_settings_json`), before a first message so it can't be taken for one.
-pub fn offer_args(start: Start, exe: &str) -> Vec<String> {
-    let mut a = start_args(start);
-    let at = if matches!(start, Start::New(Some(_))) { a.len() - 1 } else { a.len() };
-    a.splice(at..at, ["--settings".to_string(), offer_settings_json(exe)]);
-    a
-}
-
 /// Do these arguments show a background session (`claude attach <id>`)?
 pub fn attaches(args: &[String]) -> bool {
     args.first().is_some_and(|a| a == "attach")
@@ -216,16 +197,6 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
         }),
         HookKind::PermissionWait if is_permission_notice(&v) => HookEvent::PermissionWait(text("message").map(String::from)),
         HookKind::PermissionWait => return None,
-        HookKind::BeforeWork => {
-            let path = |k: &str| tool_input.get(k).and_then(Value::as_str).filter(|p| !p.is_empty()).map(String::from);
-            let files = match text("tool_name").unwrap_or_default() {
-                "Edit" | "Write" | "MultiEdit" => path("file_path").into_iter().collect(),
-                "NotebookEdit" => path("notebook_path").into_iter().collect(),
-                "Agent" | "Task" | "EnterWorktree" => Vec::new(),
-                _ => return None,
-            };
-            HookEvent::StartsWork { files }
-        }
         HookKind::Stop => HookEvent::Stop(TurnEnd {
             planning: text("permission_mode") == Some("plan"),
             last_message: text("last_assistant_message").map(String::from),

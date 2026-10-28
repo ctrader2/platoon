@@ -20,8 +20,7 @@
 //!   (Codex): Needs you, with the question.
 //! - `task-before`, `PreToolUse` on shell commands, file edits and the question tool (Codex): a command that pushes or
 //!   publishes (`askmatch.rs`, Claude Code's `ask` rules) is refused until the user says yes in the session, and file
-//!   edits are refused while a plan waits for the user. In a session that is no task's but platoon started, it is the
-//!   offer to make tasks instead (`offerhook.rs`).
+//!   edits are refused while a plan waits for the user.
 //! - `task-notify`, `Notification` (Claude Code) or `PermissionRequest` (Codex): a permission prompt makes a Working
 //!   task Needs you.
 //! - `task-tool`, `PostToolUse` on every tool: the answer came (the plan approved, the question answered, the
@@ -379,9 +378,7 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
             let reason = stop(&end, at, &project, &mut store, &t)?;
             return Some(agent.hook_answer(&HookReply::SendBack(reason)).stdout);
         }
-        HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. }
-        | HookEvent::SessionStart { .. }
-        | HookEvent::StartsWork { .. } => {}
+        HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
     }
     None
 }
@@ -715,14 +712,18 @@ pub fn status_line(input: &str, config: &Path, usage: &str, width: usize, now: u
     Some(crate::steps::status_line(&line, width))
 }
 
+/// This platoon by its full path, as a session runs it (`task step`, the hooks): it works without platoon on the PATH.
+pub fn this_platoon() -> String {
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into())
+}
+
 /// `platoon hook <name>` (of `agent`): always 0, with what the hook says on stdout. It never fails the session. A
 /// Codex task hook in a session that is no task's (most of them: these hooks are every Codex session's) ends at once,
-/// without reading anything, except `task-before` in a session platoon started: its edit may be the start of the work,
-/// which platoon offers to make tasks of (`offerhook.rs`).
+/// without reading anything.
 pub fn run_hook(name: &str, agent: Agent) -> i32 {
     let task = std::env::var(crate::agents::TASK_ENV).ok().filter(|t| !t.is_empty());
     if agent == Agent::Codex && task.is_none() {
-        return if name == "task-before" { crate::offerhook::run(agent) } else { 0 };
+        return 0;
     }
     let said = std::panic::catch_unwind(|| {
         let mut input = String::new();
@@ -735,7 +736,7 @@ pub fn run_hook(name: &str, agent: Agent) -> i32 {
             providers: crate::agents::Providers::installed_here(),
             check_timeout: verdict::TIMEOUT,
             task: task.clone(),
-            exe: crate::offerhook::this_platoon(),
+            exe: this_platoon(),
         };
         hook(name, agent, &input, &at)
     })

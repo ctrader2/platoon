@@ -4,10 +4,11 @@
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh -s -- --all
 #
-# 1. When a platoon is found, `platoon uninstall` takes platoon's status line and hooks out of Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
+# 1. When a platoon is found, `platoon uninstall` takes platoon's status line, hooks and /to-tickets skill out of Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
 #    asks before stopping the sessions it runs (a "no" there stops everything, with nothing changed).
 #    When none is found (or one too old to have `uninstall`), this script asks the same questions and deletes the same
-#    folders itself, and says how to take the entries out of Claude Code's settings by hand.
+#    folders itself (and the /to-tickets skill when it is platoon's unchanged copy), and says how to take the entries
+#    out of Claude Code's settings by hand.
 # 2. Then it removes the program the way it was installed: Homebrew, cargo, or the install script (its receipt in
 #    ~/.config/platoon-tui says where it put platoon). Anything else: it says where the program is.
 #
@@ -235,6 +236,27 @@ without_platoon() {
     return 0
 }
 
+# The /to-tickets skill platoon setup wrote: only while its last line is setup's and carries the cksum of the lines
+# above it (src/skill.rs writes that line: change both together). Anything else there is the user's and stays.
+remove_skill() {
+    f="$CLAUDE_ROOT/skills/to-tickets/SKILL.md"
+    if [ -L "$f" ]; then
+        kept "the /to-tickets skill at $f: platoon didn't write it, so it is yours and stays"
+        return 0
+    fi
+    [ -f "$f" ] || return 0
+    want=$(tail -n 1 "$f" | sed -n 's/^<!-- platoon setup wrote this file and keeps it up to date;.* cksum \([0-9][0-9]*\) -->$/\1/p')
+    got=$(sed '$d' "$f" | cksum | awk '{print $1}')
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+        kept "the /to-tickets skill at $f: platoon didn't write it (or it was changed since), so it is yours and stays"
+    elif rm -f "$f"; then
+        rmdir "$CLAUDE_ROOT/skills/to-tickets" 2>/dev/null
+        removed "the /to-tickets skill ($f)"
+    else
+        failed "couldn't delete $f"
+    fi
+}
+
 remove_folders() { # after the program
     remove_dir "$CACHE" "platoon's cache folder"
     if [ -d "$CONFIG" ]; then
@@ -425,6 +447,7 @@ main() {
         fi
         open_tty
         without_platoon || return 1
+        remove_skill
         remove_program
         remove_folders
         kept "your conversations: they are Claude Code's, and \`claude --resume\` opens any of them"

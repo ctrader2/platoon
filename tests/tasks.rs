@@ -172,7 +172,6 @@ impl Lab {
             .envs(common::NO_REAL_CODEX)
             .env("PLATOON_TASK", "1:pweb")
             .env_remove("PLATOON_PROJECT")
-            .env_remove("PLATOON_OFFER_TASKS")
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -205,10 +204,7 @@ impl Drop for Lab {
 #[test]
 fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them_along() {
     let lab = Lab::new("tasks-flow");
-    // platoon itself started from a session told to offer making tasks: a task's session is never told.
-    let mut env = lab.env();
-    env.push(("PLATOON_OFFER_TASKS", "1".into()));
-    let mut t = Term::spawn(&[], &env, &lab.shop, 40, 150);
+    let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
     t.wait_for_all(&["The order email is HTML only", "t draft tasks"]);
 
     // t: the draft, each task with the squad that suits it.
@@ -562,7 +558,7 @@ fn a_tasks_session_marks_its_steps_with_platoon_task_step_and_its_status_line_sh
     let run = |args: &[&str], task: Option<&str>, stdin: &str| {
         let mut c = Command::new(BIN);
         c.args(args).envs(lab.env()).envs(common::NO_REAL_CODEX).env("PLATOON_NO_UPDATE_CHECK", "1");
-        for k in ["PLATOON_TASK", "PLATOON_PROJECT", "PLATOON_OFFER_TASKS", "COLUMNS"] {
+        for k in ["PLATOON_TASK", "PLATOON_PROJECT", "COLUMNS"] {
             c.env_remove(k);
         }
         if let Some(t) = task {

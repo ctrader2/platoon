@@ -175,9 +175,6 @@ pub struct Settings {
     pub use_claude_code: bool,
     /// Use Codex, the same way.
     pub use_codex: bool,
-    /// A session platoon starts or resumes asks once, just before it starts working, whether to turn the work into
-    /// tasks (`offerhook.rs`). On unless the user switched it off.
-    pub offer_tasks: bool,
 }
 
 impl Default for Settings {
@@ -217,7 +214,6 @@ impl Default for Settings {
             new_session_agent: None,
             use_claude_code: true,
             use_codex: true,
-            offer_tasks: true,
         }
     }
 }
@@ -384,7 +380,6 @@ fn parse(text: &str) -> Option<Settings> {
             new_session_agent: o.get("new_session_agent").and_then(Value::as_str).map(str::to_string),
             use_claude_code: o.get("use_claude_code").and_then(Value::as_bool).unwrap_or(d.use_claude_code),
             use_codex: o.get("use_codex").and_then(Value::as_bool).unwrap_or(d.use_codex),
-            offer_tasks: o.get("offer_tasks").and_then(Value::as_bool).unwrap_or(d.offer_tasks),
         }
         .clamped(),
     )
@@ -474,7 +469,6 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("update_check".into(), json!(s.update_check));
     object.insert("use_claude_code".into(), json!(s.use_claude_code));
     object.insert("use_codex".into(), json!(s.use_codex));
-    object.insert("offer_tasks".into(), json!(s.offer_tasks));
     // Written only once the user has chosen (`n`'s question): until then nothing is remembered.
     if let Some(a) = &s.new_session_agent {
         object.insert("new_session_agent".into(), json!(a));
@@ -569,9 +563,6 @@ impl ModelFor {
 /// instructions with it (measured on Codex 0.163: a one-word answer cost 13,287 tokens). The guide says the same
 /// (`guide/tokens.md`, "Calls on Codex").
 pub const CODEX_COST: &str = "A call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question.";
-
-/// The offer's setting's name on the settings screen (Sessions).
-pub const OFFER_TASKS: &str = "Offer tasks before starting work";
 
 /// The two program switches' names on the settings screen.
 pub const USE_CLAUDE_CODE: &str = "Use Claude Code";
@@ -721,7 +712,7 @@ fn tabs() -> Vec<Tab> {
         Tab { title: "General", items: general_items(), headings: &[(0, "Programs"), (2, "Everything else")] },
         Tab { title: "Search", items: search_items(), headings: &[] },
         Tab { title: "Smart features", items: smart_items(), headings: &[] },
-        Tab { title: "Sessions", items: sessions_items(), headings: &[(0, "Making tasks"), (1, "Names and summaries")] },
+        Tab { title: "Sessions", items: sessions_items(), headings: &[] },
         Tab { title: "Projects", items: projects_items(), headings: &[] },
         Tab { title: "Editors", items: editors_items(), headings: &[(0, "Editing platoon's text"), (1, "Editing files")] },
     ]
@@ -1012,18 +1003,6 @@ fn smart_items() -> Vec<Item> {
 /// What naming and summarizing the conversations reads, and how often.
 fn sessions_items() -> Vec<Item> {
     vec![
-        Item {
-            name: OFFER_TASKS,
-            explain: "Just before a session platoon started begins the work (an edit, an agent, a worktree), it asks you once \
-                      whether to turn the work into tasks for a squad, or do it right there. Never in a task's own session. Off: \
-                      it never asks; t on a session's row still makes tasks from it.",
-            kind: Kind::Steps,
-            choices: &[0, 1],
-            get: |s| u64::from(s.offer_tasks),
-            set: |s, v| s.offer_tasks = v != 0,
-            label: |v| if v == 0 { "Off".into() } else { "Ask once".into() },
-            off: Some(0),
-        },
         Item {
             name: "Sessions per call",
             explain: "Names and summaries are made for several sessions at once, in one request to Claude. This is how many go in each request. More per request uses less of your plan in total, because the instructions are sent once for all of them.",
@@ -1390,8 +1369,8 @@ mod tests {
         ask.assign(&mut s, 1);
         assert!(s.files_editor_ask);
         assert!(
-            TABS.iter().enumerate().all(|(i, t)| i == TAB_EDITORS || i == 0 || i == TAB_SESSIONS || t.headings.is_empty()),
-            "only this tab, General and Sessions have groups"
+            TABS.iter().enumerate().all(|(i, t)| i == TAB_EDITORS || i == 0 || t.headings.is_empty()),
+            "only this tab and General have groups"
         );
     }
 
@@ -1442,7 +1421,6 @@ mod tests {
                 "update_check",
                 "use_claude_code",
                 "use_codex",
-                "offer_tasks",
                 "token_features",
                 "theme"
             ],
@@ -1711,7 +1689,6 @@ mod tests {
         assert_eq!(
             names("Sessions"),
             [
-                OFFER_TASKS,
                 "Sessions per call",
                 "Refresh a summary after",
                 "Wait for quiet before refreshing",
@@ -1768,8 +1745,8 @@ mod tests {
         let all: Vec<&str> = all_items().map(|i| i.name).collect();
         let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
         assert_eq!(all.len(), unique.len());
-        assert_eq!(find_item("Share for archived"), Some((TAB_SESSIONS, 7)));
-        assert_eq!(find_item(OFFER_TASKS), Some((TAB_SESSIONS, 0)));
+        assert_eq!(find_item("Share for archived"), Some((TAB_SESSIONS, 6)));
+        assert_eq!(find_item("Offer tasks before starting work"), None, "the offer is the /to-tickets skill now");
         assert_eq!(find_item("no such thing"), None);
     }
 
@@ -2099,7 +2076,6 @@ mod tests {
                 "500K tokens",
                 "80%",
                 "",
-                "Ask once",
                 "30 sessions",
                 "5 messages",
                 "1 minute",
@@ -2221,24 +2197,15 @@ mod tests {
     }
 
     #[test]
-    fn offering_tasks_is_on_by_default_switched_off_on_sessions_and_saved() {
+    fn an_offer_tasks_key_an_older_platoon_wrote_is_kept_and_harmless() {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-offer-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
-        assert!(Settings::default().offer_tasks);
-        let (tab, at) = find_item(OFFER_TASKS).expect("on the settings screen");
-        assert_eq!((tab, TABS[tab].heading(at)), (TAB_SESSIONS, Some("Making tasks")));
-        assert_eq!(TABS[tab].heading(at + 1), Some("Names and summaries"));
-        let item = &TABS[tab].items[at];
-        assert_eq!(item.choices.iter().map(|&c| (item.label)(c)).collect::<Vec<_>>(), ["Off", "Ask once"]);
-        assert_eq!(item.off, Some(0));
-        let mut s = Settings::default();
-        item.assign(&mut s, 0);
+        fs::write(path_in(&d), r#"{"offer_tasks": false, "update_check": false}"#).unwrap();
+        let (s, corrupt) = load(&d);
+        assert!(!corrupt && !s.update_check);
         save(&d, &s).unwrap();
-        assert!(!load(&d).0.offer_tasks);
         let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
-        assert_eq!(v["offer_tasks"], false);
-        fs::write(path_in(&d), r#"{"offer_tasks":"no"}"#).unwrap();
-        assert!(load(&d).0.offer_tasks, "only a real true/false counts");
+        assert_eq!(v["offer_tasks"], false, "a key platoon no longer knows stays as it was");
     }
 }

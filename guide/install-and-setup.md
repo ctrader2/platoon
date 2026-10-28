@@ -55,6 +55,7 @@ it, and its folder if needed.
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](projects.md) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](projects.md) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions |
 | Notes updates | Lets platoon [keep a project's notes up to date](projects.md#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional |
+| /to-tickets | A Claude Code skill: type `/to-tickets` in a session to [turn the work agreed there into tasks](tasks-and-squads.md#to-tickets-in-a-session). Written to `skills/to-tickets/SKILL.md` in Claude Code's folder. Optional too |
 
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in
@@ -71,7 +72,7 @@ they reach Claude Code's, and a [task](tasks-and-squads.md#tasks-on-codex) can r
 | Project notes | Hands a project's notes to its Codex sessions when they start (Codex starts them with your first message) |
 | Changed notes | Passes notes that changed since to a running Codex session, with your next message |
 | Notes updates | Lets platoon keep a project's notes up to date after its Codex sessions stop |
-| Tasks | Six hooks that let a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you. In any Codex session that isn't a task's they end at once and do nothing, except that in a session platoon started the one before an edit has it [offer to make tasks](tasks-and-squads.md#the-session-offers-to-make-them) first, once |
+| Tasks | Six hooks that let a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you. In any Codex session that isn't a task's they end at once and do nothing |
 
 Each is a fixed command, the same for every session (`<platoon> hook session-start --agent codex`, `hook guard --agent
 codex`, `hook stop --agent codex`, and `hook task-start`, `task-before`, `task-notify`, `task-tool`, `task-prompt`,
@@ -122,11 +123,20 @@ run `platoon setup` once more to add it.
 If you run setup from a build folder (a path with `/target/` in it), it warns you: the hooks would point at a binary
 that moves. Install platoon first, then run `platoon setup` again.
 
-### The old `/to-tickets` skill
+### The `/to-tickets` skill
 
-Earlier platoons also installed a Claude Code skill, `/to-tickets` (`skills/to-tickets/SKILL.md` in Claude Code's
-folder). platoon now drafts tasks from a conversation itself ([`t` on a session](tasks-and-squads.md#making-tasks-from-a-conversation)),
-and neither setup nor the uninstall touches that skill any more: delete the folder if you have it and don't want it.
+Setup writes the [`/to-tickets`](tasks-and-squads.md#to-tickets-in-a-session) skill into Claude Code's folder
+(`skills/to-tickets/SKILL.md`), naming platoon by its full path so the skill works whether or not `platoon` is on your
+path. The file's last line says platoon wrote it, with a checksum of the rest. Running setup again updates platoon's
+copy when a newer platoon ships a newer text (or platoon moved), and says "already done" otherwise.
+
+A `/to-tickets` skill platoon didn't write (your own, one an older platoon installed, or platoon's copy once you edit
+it) is never overwritten: setup leaves it as it is and says so in one line. To have platoon's instead, delete that
+folder and run `platoon setup` again. The skill is not needed to start platoon, so an upgraded platoon starts even
+before you run setup again.
+
+Codex has skills too, but keeps a person's in `~/.agents/skills` (a folder shared with other tools), not in Codex's own
+folder, so setup doesn't write one there yet. In a Codex session, `t` on its row makes tasks from it.
 
 ## When Claude Code, Codex or platoon is newer
 
@@ -201,6 +211,8 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
+   **The `/to-tickets` skill.** It deletes the copy setup wrote (and its folder), only while it is unchanged; a skill of
+   that name that platoon didn't write, or that you changed, stays, and the end says so.
    **Codex's hooks.** It takes the hooks setup added out of Codex's `hooks.json` the same way (backup first, as
    `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks included. Codex's records that
    those hooks are trusted go too, taken out through Codex itself as setup put them in (the records of any other
@@ -241,6 +253,7 @@ sessions are running the uninstall stops with nothing changed unless you add `--
 ### Without platoon
 
 If the `platoon` program is already gone (or is too old to have `uninstall`), the script still asks the same two
-questions, stops the sessions and deletes the folders. It can't safely edit Claude Code's settings without platoon, so
+questions, stops the sessions and deletes the folders, and the `/to-tickets` skill when it is platoon's unchanged copy
+(it checks the file's last line with `cksum`). It can't safely edit Claude Code's settings without platoon, so
 it tells you what to take out by hand, as described in
 [Removing platoon by hand](what-platoon-changes.md#removing-platoon-by-hand).

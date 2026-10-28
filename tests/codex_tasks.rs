@@ -50,8 +50,6 @@ impl Lab {
             .env("PLATOON_SKIP_SETUP_CHECK", "1")
             .env("PLATOON_NO_UPDATE_CHECK", "1")
             .env_remove("PLATOON_TASK")
-            // Run from inside a session platoon started, the test would inherit it: this is a session platoon didn't start.
-            .env_remove("PLATOON_OFFER_TASKS")
             .env_remove("PLATOON_PROJECT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

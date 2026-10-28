@@ -33,21 +33,16 @@ n=$(( $(ls "$FAKE_DIR/started" | wc -l) + 1 ))
 sid="new-000$n"
 [ "$1" = "--resume" ] && sid="$2"
 printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
-# The offer's hook (`--settings <json>`) shows as `+offer`.
+# Settings given for this session alone (`--settings <json>`, as platoon 1.0 gave the offer's hook) show as `+settings`.
 shown=
-settings=
+next=
 for a in "$@"; do
-  if [ "$settings" = next ]; then settings=$a; shown="$shown +offer"
-  elif [ "$a" = --settings ]; then settings=next
+  if [ "$next" = 1 ]; then next=; shown="$shown +settings"
+  elif [ "$a" = --settings ]; then next=1
   else shown="$shown $a"; fi
 done
 if [ -n "$FAKE_HOOK" ]; then
   printf '{"session_id":"%s","source":"startup","cwd":"%s","hook_event_name":"SessionStart"}' "$sid" "$(pwd)" | "$FAKE_HOOK" hook session-start > "$FAKE_DIR/hook-out-$n"
-  # As Claude Code runs the offer's hook before a first edit: the command its settings name.
-  if [ -n "$settings" ]; then
-    cmd=$(printf '%s' "$settings" | sed 's/.*"command":"\([^"]*\)".*/\1/')
-    printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"a.txt"}}' "$sid" "$(pwd)" | sh -c "$cmd" > "$FAKE_DIR/offer-out-$n"
-  fi
 fi
 echo "fake-claude args:${shown# } project:${PLATOON_PROJECT:-none} sid:$sid offer:${PLATOON_OFFER_TASKS:-none}"
 exec sh
@@ -306,7 +301,7 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
     t.wait_for_flat("WB Web 2 active");
     // Enter on the project's older session resumes it, carrying the project too.
     t.send(b"\x1b[B\r");
-    t.wait_for("args:--resume aaaa-0001 +offer project:pweb");
+    t.wait_for("args:--resume aaaa-0001 project:pweb");
     t.send(&[0]);
     t.wait_for_flat("WB Web 2 active");
     t.send(b"\x1b");
@@ -364,7 +359,7 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
     assert_eq!(t.wait_exit(), 1);
     // By name, ignoring case: a new session here, carrying the project.
     let mut t = Term::spawn(&["open", "--project", "web"], &env, &lab.work, 24, 90);
-    t.wait_for("args:+offer project:pweb sid:new-0001 offer:1"); // a new session, no resume, with the offer's hook
+    t.wait_for("args: project:pweb sid:new-0001 offer:none"); // a new session: no resume, nothing added
     // The hook (run by the stand-in with its own environment, as Claude runs hooks) put it in the project and gave
     // it the notes.
     until("the session to be placed", || lab.projects()["sessions"]["new-0001"] == "pweb");
@@ -377,45 +372,30 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
 }
 
 #[test]
-fn sessions_platoon_starts_offer_to_make_tasks_before_their_first_edit() {
-    let lab = Lab::new("proj-offer");
+fn sessions_platoon_starts_carry_no_offer_to_make_tasks() {
+    // platoon 1.0 gave each session it started a hook (`--settings`) and `PLATOON_OFFER_TASKS=1`; the offer is the
+    // /to-tickets skill now, so a session gets the agent's own arguments and nothing else.
+    let lab = Lab::new("proj-no-offer");
     lab.save("aaaa-0001", "fix the docker build", 5);
     lab.project(&["aaaa-0001"], None);
+    // platoon itself run from inside a session platoon 1.0 started: its variable isn't passed on either.
     let mut env = lab.env();
-    env.push(("FAKE_HOOK", BIN.to_string()));
+    env.push(("PLATOON_OFFER_TASKS", "1".into()));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
     t.wait_for("fix the docker build");
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for("╭ Sessions");
-    // A new session in the project: the variable is set and the offer's hook given, and that hook (run with the
-    // session's environment, as Claude runs hooks) holds back its first edit with how to make tasks: this platoon's
-    // full path, the project and the folder. The start says nothing of it (no notes here: nothing at all).
     t.send(b"n");
     t.wait_for("New session in Web");
     t.send(b"\r");
-    t.wait_for("args:+offer project:pweb sid:new-0001 offer:1");
-    until("the hook to have run", || lab.base.join("offer-out-1").exists());
-    assert_eq!(fs::read_to_string(lab.base.join("hook-out-1")).unwrap(), "");
-    let out = fs::read_to_string(lab.base.join("offer-out-1")).unwrap();
-    let v: Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
-    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{out}");
-    let why = v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
-    // (The folder as the session sees it: on macOS a temp folder may read through a link.)
-    for want in [
-        "\"Turn this into platoon tasks for a squad?\"",
-        &format!("{BIN} task add --project pweb --folder /"),
-        "/work --squad <squad>",
-        "- bug-fix: ",
-    ] {
-        assert!(why.contains(want), "{want:?} missing from:\n{why}");
-    }
+    t.wait_for("args: project:pweb sid:new-0001 offer:none");
     t.send(&[0]);
     t.wait_for_flat("WB Web 2 active");
-    // A resumed one offers too.
     t.send(b"\x1b[B\r");
-    t.wait_for("args:--resume aaaa-0001 +offer project:pweb sid:aaaa-0001 offer:1");
+    t.wait_for("args:--resume aaaa-0001 project:pweb sid:aaaa-0001 offer:none");
+    assert!(!t.stable().contains("+settings"));
     t.send(&[0]);
     t.wait_for_flat("WB Web 2 active");
     t.send(b"\x1b");
@@ -436,7 +416,6 @@ fn hook(lab: &Lab, input: &str, project: Option<&str>) -> (i32, String) {
         .env("PLATOON_CACHE_DIR", &lab.cache)
         .env("PLATOON_CONFIG_DIR", &lab.config)
         .env_remove("PLATOON_PROJECT")
-        .env_remove("PLATOON_OFFER_TASKS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

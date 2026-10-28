@@ -210,28 +210,8 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             last_message: text("last_assistant_message").map(String::from),
             subagents_working: false,
         }),
-        // Codex's work starts with its edit tool (`BEFORE_TOOLS`); its shell commands are not counted.
-        HookKind::BeforeWork => match text("tool_name").unwrap_or_default() {
-            "apply_patch" | "Write" | "Edit" => {
-                HookEvent::StartsWork { files: patch_files(tool_input.get("command").and_then(Value::as_str).unwrap_or_default()) }
-            }
-            _ => return None,
-        },
     };
     Some(HookInput { session, cwd, event })
-}
-
-/// The files an `apply_patch` patch changes: each `*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move
-/// to:` line's path, as written (relative to the session's folder, or absolute).
-pub fn patch_files(patch: &str) -> Vec<String> {
-    const HEADS: [&str; 4] = ["*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:"];
-    patch
-        .lines()
-        .filter_map(|l| HEADS.iter().find_map(|h| l.strip_prefix(h)))
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(String::from)
-        .collect()
 }
 
 /// What a tool's input says for platoon: the question asked, or the command (a shell line; an argument vector is

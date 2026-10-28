@@ -1164,14 +1164,17 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     }
 }
 
-const USAGE: &str = "usage: platoon task add [--project <name or id>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
+pub const USAGE: &str =
+    "usage: platoon task add [--project <name or id>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
        platoon task list [--project <name or id>] [--json]
+       platoon task squads
        platoon task step <n> started | done \"<one line>\" | skipped \"<one line why>\"
   add    make a task and print its number (#N). The text comes from --body-file, else from what is piped in,
          else the template. Without --folder the task works in the current folder. With no --project, the task
          goes in the project whose sessions worked in the current folder, or in no project (\"No project\").
          --squad suggests the squad that starts it (an id from the Squads tab)
   list   the tasks, open ones first, then the Done and Cancelled ones
+  squads the squads a task can start with, one per line: its id, then what it is for
   step   inside a task's session: mark step <n> of its squad started, done or skipped (with why)";
 
 /// Where the command line looks when no project is named: the sessions' folders (the index platoon keeps in its
@@ -1217,6 +1220,10 @@ pub fn cli(
                 1
             }
         },
+        Some("squads") if args.len() == 1 => {
+            let _ = write!(out, "{}", squads_list(config));
+            0
+        }
         Some("list") => match cli_list(&args[1..], config) {
             Ok(text) => {
                 let _ = write!(out, "{text}");
@@ -1232,6 +1239,11 @@ pub fn cli(
             2
         }
     }
+}
+
+/// `task squads`: each squad a task can start with (`squads::all`, the usable ones), as `<id>: <description>`.
+fn squads_list(config: &Path) -> String {
+    crate::squads::all(config).iter().filter(|s| s.usable()).map(|s| format!("{}: {}\n", s.id, s.description.trim())).collect()
 }
 
 /// The value after a flag.
@@ -1800,6 +1812,21 @@ mod tests {
         let (code, out, err) = run(&d, &["add", "--project", "Web shop", "--title", "x", "--squad", "nope"], "", true);
         assert!(code == 1 && out.is_empty() && err.contains("no squad \"nope\"") && err.contains("feature, "), "{err}");
         assert!(Tickets::open(&d, &id).get(4).is_none(), "nothing made");
+    }
+
+    #[test]
+    fn task_squads_lists_each_usable_squad_with_what_it_is_for() {
+        let d = dir("squads-list");
+        fs::create_dir_all(d.join("squads")).unwrap();
+        fs::write(d.join("squads/triage.md"), "---\nname: Triage\ndescription: Sort the new issues.\nmodel: sonnet\n---\n1. Read them.\n")
+            .unwrap();
+        let (code, out, err) = run(&d, &["squads"], "", true);
+        assert_eq!((code, err.as_str()), (0, ""));
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.contains(&"triage: Sort the new issues."), "{out}");
+        assert!(lines.iter().any(|l| l.starts_with("feature: ")) && lines.iter().any(|l| l.starts_with("bug-fix: ")), "{out}");
+        assert_eq!(lines.len(), crate::squads::all(&d).iter().filter(|s| s.usable()).count());
+        assert_eq!(run(&d, &["squads", "--json"], "", true).0, 2, "it takes nothing after it");
     }
 
     #[test]

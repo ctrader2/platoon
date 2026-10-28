@@ -61,12 +61,15 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
-    // Where sessions are listed, while the setting is on: the offer to make tasks (`offerhook.rs`).
-    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() && app.settings().get().offer_tasks {
+    // Where sessions are listed: the two ways to make tasks from a conversation (`/to-tickets` is Claude Code's).
+    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
+        let skill = if app.providers().claude.is_some() {
+            "In a Claude Code session, type /to-tickets to turn the work agreed there into tasks for a squad (platoon setup adds it). "
+        } else {
+            ""
+        };
         out.push(Entry::Note(format!(
-            "A session platoon starts or resumes asks you once, just before it starts the work: \"{}\" Make tasks drafts them with you and puts them on the Tasks tab, not started; Do it here carries on. Switch it off in the settings: \"{}\".",
-            crate::offerhook::QUESTION,
-            crate::settings::OFFER_TASKS
+            "{skill}t on a session's row drafts tasks from its conversation; either way they go on the Tasks tab, not started."
         )));
     }
     if app.open_project().is_some() {
