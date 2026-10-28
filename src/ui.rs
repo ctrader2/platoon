@@ -1548,8 +1548,14 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     // The description spans the columns that say what the session is (NAME to MODEL) and ends where STATUS starts,
     // its last cell blank like every column's, so STATUS, CONTEXT and LAST stand clear under their titles.
     let desc_w = c.status_at().min(area.width as usize).saturating_sub(3);
-    // While tasks are drafted from it, the line says so (platoon keeps going meanwhile).
-    let (desc, desc_fg) = if app.drafting_from() == Some(s.id.as_str()) { (DRAFTING, t.busy) } else { (s.description.as_str(), t.dim) };
+    // While tasks are drafted from it, the line says so (platoon keeps going meanwhile). The picked row of a session
+    // that has been quiet for the idle-stop time and is still running says why (`App::kept_of`).
+    let kept = if selected { app.kept_of(s) } else { None };
+    let (desc, desc_fg) = match &kept {
+        _ if app.drafting_from() == Some(s.id.as_str()) => (DRAFTING, t.busy),
+        Some(why) => (why.as_str(), subtext),
+        None => (s.description.as_str(), t.dim),
+    };
     let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(desc, desc_w.saturating_sub(1)), base.fg(desc_fg))];
 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);

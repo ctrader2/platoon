@@ -1,8 +1,7 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
 //! clean-ups, the color theme, the four limits of the word search, and everything
-//! about the features that use the user's Claude tokens (see `ai.rs`). Whether idle stop counts MCP servers is
-//! kept here too (`idle_stop_ignores_mcp`) but has no entry on the screen: it is set by hand in the file. The
-//! settings screen edits them through `save`, and `TABS` describes what it shows.
+//! about the features that use the user's Claude tokens (see `ai.rs`). The settings screen edits them through `save`,
+//! and `TABS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
 //! just means the defaults, values that make no sense are clamped, writes are atomic, and a file that
@@ -99,8 +98,6 @@ pub struct Settings {
     pub idle_stop_minutes: u64,
     /// Archive a conversation with no running process and no activity for this many days.
     pub auto_archive_days: u64,
-    /// Idle stop doesn't count MCP servers as something running under the session. Off: any process does.
-    pub idle_stop_ignores_mcp: bool,
     /// The id of the color theme, exactly as the file says. It may be one this version doesn't know (a newer
     /// version's, or a user theme): that shows as the default theme (the registry finds none) but is kept
     /// on disk until the user picks another.
@@ -182,7 +179,6 @@ impl Default for Settings {
         Self {
             idle_stop_minutes: 120,
             auto_archive_days: 2,
-            idle_stop_ignores_mcp: true,
             theme: DEFAULT_ID.into(),
             search_prompt_chars: DEFAULT_PROMPT_CHARS,
             search_snippet_chars: DEFAULT_SNIPPET_CHARS,
@@ -328,14 +324,11 @@ fn parse(text: &str) -> Option<Settings> {
         Some(v) => v.as_u64().or_else(|| v.as_f64().filter(|f| f.is_finite() && *f >= 0.0).map(|f| f as u64)).unwrap_or(default),
         None => default,
     };
-    // Only a real true/false counts: anything else (a number, text) is not a choice, so the default stays.
-    let ignores_mcp = o.get("idle_stop_ignores_mcp").and_then(Value::as_bool).unwrap_or(d.idle_stop_ignores_mcp);
     let theme = o.get("theme").and_then(Value::as_str).map_or(d.theme.clone(), |id| built_in_pack_id(id).to_string());
     Some(
         Settings {
             idle_stop_minutes: number("idle_stop_minutes", d.idle_stop_minutes),
             auto_archive_days: number("auto_archive_days", d.auto_archive_days),
-            idle_stop_ignores_mcp: ignores_mcp,
             theme,
             search_prompt_chars: number("search_prompt_chars", d.search_prompt_chars),
             search_snippet_chars: number("search_snippet_chars", d.search_snippet_chars),
@@ -435,7 +428,6 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.entry("version").or_insert(json!(1));
     object.insert("idle_stop_minutes".into(), json!(s.idle_stop_minutes));
     object.insert("auto_archive_days".into(), json!(s.auto_archive_days));
-    object.insert("idle_stop_ignores_mcp".into(), json!(s.idle_stop_ignores_mcp));
     object.insert("search_prompt_chars".into(), json!(s.search_prompt_chars));
     object.insert("search_snippet_chars".into(), json!(s.search_snippet_chars));
     object.insert("search_results".into(), json!(s.search_results));
@@ -1394,7 +1386,6 @@ mod tests {
                 "nested",
                 "version",
                 "auto_archive_days",
-                "idle_stop_ignores_mcp",
                 "search_prompt_chars",
                 "search_snippet_chars",
                 "search_results",
@@ -1478,40 +1469,18 @@ mod tests {
     }
 
     #[test]
-    fn ignoring_mcp_servers_is_on_by_default_and_only_a_real_boolean_changes_it() {
-        let d = dir("mcp-flag");
-        assert!(Settings::default().idle_stop_ignores_mcp);
-        assert!(load(&d).0.idle_stop_ignores_mcp, "no file");
-        write(&d, "{}");
-        assert!(load(&d).0.idle_stop_ignores_mcp, "key missing");
-        write(&d, r#"{"idle_stop_ignores_mcp": false}"#);
-        assert_eq!(load(&d), (Settings { idle_stop_ignores_mcp: false, ..Settings::default() }, false));
-        write(&d, r#"{"idle_stop_ignores_mcp": true, "idle_stop_minutes": 30}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 30, ..Settings::default() });
-        // Wrong type: not a choice, so the default stays (and the rest of the file is still read).
-        for odd in ["0", "1", "\"false\"", "\"no\"", "null", "[]", "{}", "-1", "0.0"] {
-            write(&d, &format!(r#"{{"idle_stop_ignores_mcp": {odd}, "auto_archive_days": 9}}"#));
-            assert_eq!(load(&d), (Settings { auto_archive_days: 9, ..Settings::default() }, false), "{odd}");
-        }
-        for bad in ["{ nope", "[true]", ""] {
-            write(&d, bad);
-            assert_eq!(load(&d), (Settings::default(), true), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn the_mcp_choice_is_saved_as_a_boolean_and_other_keys_survive() {
-        let d = dir("mcp-save");
-        write(&d, r#"{"mine":[1,{"x":null}],"idle_stop_ignores_mcp":true}"#);
-        save(&d, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
+    fn the_retired_mcp_choice_left_in_a_file_does_nothing_and_is_kept() {
+        // Idle stop no longer looks at MCP servers at all; a file from before still names the choice.
+        let d = dir("mcp-retired");
+        write(&d, r#"{"idle_stop_ignores_mcp": false, "idle_stop_minutes": 30}"#);
+        assert_eq!(load(&d), (Settings { idle_stop_minutes: 30, ..Settings::default() }, false));
+        save(&d, &Settings { idle_stop_minutes: 60, ..Settings::default() }).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
-        assert_eq!(v["idle_stop_ignores_mcp"], json!(false), "a JSON boolean, not a number");
-        assert_eq!(v["mine"], json!([1, {"x": null}]));
-        assert!(!load(&d).0.idle_stop_ignores_mcp);
-        let mut s = SettingsStore::open(&d);
-        assert!(!s.get().idle_stop_ignores_mcp);
-        save(&d, &Settings::default()).unwrap();
-        assert!(s.refresh() && s.get().idle_stop_ignores_mcp, "a running host sees the change");
+        assert_eq!(
+            (v["idle_stop_ignores_mcp"].clone(), v["idle_stop_minutes"].clone()),
+            (json!(false), json!(60)),
+            "kept as any unknown key is"
+        );
     }
 
     #[test]

@@ -324,6 +324,8 @@ fn an_idle_codex_conversation_is_resumed_and_one_its_host_just_started_is_joined
         args: Agent::Codex.args(crate::agents::Start::Resume(FINISHED)),
         sock: w.base.join("none.sock"),
         task: None,
+        version: None,
+        kept: None,
     });
     assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(4_000_123)));
 }
@@ -531,6 +533,8 @@ fn new_codex_host(w: &World, pid: u32, dir: &std::path::Path) -> crate::host::Ho
         dir: dir.to_string_lossy().into_owned(),
         args: Agent::Codex.args(crate::agents::Start::New(None)),
         task: None,
+        version: None,
+        kept: None,
         sock: w.base.join(format!("{pid}.sock")),
     }
 }
@@ -672,6 +676,8 @@ fn each_stage_of_a_new_codex_session_is_one_row_with_the_hosts_folder() {
         host_pid: 1,
         dir: "/home/u/shop".into(),
         task: None,
+        version: None,
+        kept: None,
         args: Agent::Codex.args(crate::agents::Start::New(None)),
         sock: "/nonexistent/s.sock".into(),
     };

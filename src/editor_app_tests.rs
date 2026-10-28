@@ -187,6 +187,8 @@ impl Lab {
             args: vec!["--resume".into(), "sess-1".into()],
             sock: PathBuf::new(),
             task: None,
+            version: None,
+            kept: None,
         };
         self.app.refresh_with(vec![host], false);
     }

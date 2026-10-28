@@ -174,6 +174,8 @@ fn a_task_on_a_codex_model_starts_in_codex_in_its_trusted_worktree_with_the_task
         args: args.clone(),
         sock: l.w.base.join("none.sock"),
         task: Some(tag.clone()),
+        version: None,
+        kept: None,
     });
     assert_eq!(l.app.task_host(&l.project, &t).map(|h| h.claude_pid), Some(4_000_000));
     assert!(l.app.task_running(&l.project, &t));

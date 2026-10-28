@@ -274,6 +274,8 @@ fn a_running_task_of_a_program_switched_off_stays_on_the_tasks_tab_marked_and_is
         args: Agent::Codex.args(crate::agents::Start::Resume("sess")),
         sock,
         task: Some(tickets::task_tag(&project, 1)),
+        version: None,
+        kept: None,
     };
     app.refresh_with(vec![host], false);
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();

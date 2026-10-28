@@ -172,7 +172,10 @@ saved by Claude Code like any other.
 ## Processes
 
 - Each session started in platoon runs under a small background host, which keeps running when platoon closes. A host
-  stops its own session after it has sat unused for the time in the settings (2 hours unless you change it).
+  stops its own session after it has sat unused for the time in the settings (2 hours unless you change it), unless a
+  command Claude or Codex started is still going. A host started by an older platoon keeps that platoon's rules, so
+  platoon applies its own to such a session from outside and stops it (the session's own program, and only when it is
+  still that host's).
 - On its own, platoon only stops sessions it runs. Ending any other copy of a conversation (archiving one that runs in a
   terminal platoon didn't start, or opening one platoon can't share) asks you first. A Codex conversation open in a Codex
   window platoon didn't start (or in Codex's background server) is never stopped at all: platoon says where it is.
@@ -205,11 +208,9 @@ Anthropic and `codex` to OpenAI, as they always do, and so do the calls of the f
 ## It reads Claude Code's and Codex's own files
 
 To list your conversations, platoon reads Claude Code's files: the transcripts under `~/.claude/projects`, the registry of
-running sessions in `~/.claude/sessions`, and your MCP servers in `~/.claude.json` (for idle stop it matches their
-commands to running processes). When Codex is installed it reads Codex's too, in `~/.codex` (or `$CODEX_HOME`): the saved
+running sessions in `~/.claude/sessions`. When Codex is installed it reads Codex's too, in `~/.codex` (or `$CODEX_HOME`): the saved
 sessions under `sessions/`, the names in `session_index.jsonl`, which conversations are open (who holds the lock files in
-`thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`), and, for idle
-stop, the MCP servers in `config.toml`. It never writes Codex's conversations, and never edits `config.toml` itself
+`thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`). It never writes Codex's conversations, and never edits `config.toml` itself
 (Codex writes the trust records for platoon's hooks, see [above](#in-codexs-hooks)). These files are
 not a documented interface, so **a Claude Code or Codex update can break platoon**. It was last checked with Claude
 Code 2.1.310 and Codex 0.164.0. When your Claude Code or Codex is newer than that, platoon says so once (it runs

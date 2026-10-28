@@ -64,6 +64,8 @@ fn hosted(pid: u32) -> HostInfo {
         args: Vec::new(),
         sock: Default::default(),
         task: None,
+        version: None,
+        kept: None,
     }
 }
 

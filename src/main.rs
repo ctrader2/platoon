@@ -35,6 +35,9 @@ mod handoff;
 #[cfg(test)]
 mod handoff_app_tests;
 mod host;
+mod idle;
+#[cfg(test)]
+mod idle_app_tests;
 mod index;
 mod instructions;
 mod keys;
@@ -739,6 +742,8 @@ mod tests {
             args: Vec::new(),
             sock: Default::default(),
             task: None,
+            version: None,
+            kept: None,
         }
     }
 

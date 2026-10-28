@@ -9,6 +9,7 @@ use std::{
     hash::{Hash, Hasher},
     path::Path,
     process::Command,
+    time::Duration,
 };
 
 /// One row of the process table.
@@ -22,6 +23,9 @@ pub struct Row {
     /// process (Linux: clock ticks after boot; elsewhere a hash of `ps`'s start time). 0 = unknown. A pid that
     /// was reused by a new process has a different one, which is how "still the same process" is checked.
     pub start: u64,
+    /// How long it has been running, when the system said (Linux: its start against the time since boot; macOS: `ps`'s
+    /// elapsed time).
+    pub age: Option<Duration>,
 }
 
 /// "pid (comm) S ppid ...": comm may contain spaces or parens, so split after the last ')'.
@@ -31,7 +35,41 @@ fn parse_stat(pid: u32, stat: &str) -> Option<Row> {
     let ppid = rest.next()?.parse().ok()?;
     // Field 22 of the line (fields 3 and 4, state and ppid, are already taken).
     let start = rest.nth(17).and_then(|t| t.parse().ok()).unwrap_or(0);
-    Some(Row { pid, ppid, zombie: state.starts_with('Z'), start })
+    Some(Row { pid, ppid, zombie: state.starts_with('Z'), start, age: None })
+}
+
+/// How long a process whose start (clock ticks after boot, `Row.start` on Linux) is `start` has been running, given the
+/// time since boot (`/proc/uptime`'s first figure) and the clock's ticks per second. None when either can't be read, or
+/// they disagree (a start after now): an age is only ever what was measured.
+fn age_of(start: u64, uptime: Option<f64>, hz: u64) -> Option<Duration> {
+    let up = uptime.filter(|u| u.is_finite())?;
+    if start == 0 || hz == 0 {
+        return None;
+    }
+    let secs = up - start as f64 / hz as f64;
+    (secs >= 0.0).then(|| Duration::from_secs_f64(secs))
+}
+
+/// `/proc/uptime`'s first figure: seconds since boot.
+fn uptime() -> Option<f64> {
+    fs::read_to_string("/proc/uptime").ok()?.split_whitespace().next()?.parse().ok()
+}
+
+/// `ps`'s elapsed time, `[[dd-]hh:]mm:ss`.
+fn parse_etime(text: &str) -> Option<Duration> {
+    let (days, rest) = match text.split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, text),
+    };
+    let mut secs = 0u64;
+    let parts: Vec<&str> = rest.split(':').collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
+    }
+    for p in parts {
+        secs = secs * 60 + p.parse::<u64>().ok()?;
+    }
+    Some(Duration::from_secs(days * 86_400 + secs))
 }
 
 pub fn ppid(pid: u32) -> Option<u32> {
@@ -45,17 +83,19 @@ pub fn ppid(pid: u32) -> Option<u32> {
 /// Every process on the machine, or None if the table can't be read at all.
 pub fn table() -> Option<Vec<Row>> {
     if Path::new("/proc/self/stat").exists() {
+        let (up, hz) = (uptime(), u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).unwrap_or(0));
         let mut rows = Vec::new();
         for e in fs::read_dir("/proc").ok()?.flatten() {
             let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
             // A process that exits while we look simply isn't listed.
-            if let Some(row) = fs::read_to_string(e.path().join("stat")).ok().and_then(|s| parse_stat(pid, &s)) {
+            if let Some(mut row) = fs::read_to_string(e.path().join("stat")).ok().and_then(|s| parse_stat(pid, &s)) {
+                row.age = age_of(row.start, up, hz);
                 rows.push(row);
             }
         }
         return Some(rows);
     }
-    let out = Command::new("ps").args(["-A", "-o", "pid=,ppid=,stat=,lstart="]).output().ok().filter(|o| o.status.success())?;
+    let out = Command::new("ps").args(["-A", "-o", "pid=,ppid=,stat=,etime=,lstart="]).output().ok().filter(|o| o.status.success())?;
     Some(parse_ps(&String::from_utf8_lossy(&out.stdout)))
 }
 
@@ -64,6 +104,7 @@ fn parse_ps(text: &str) -> Vec<Row> {
         .filter_map(|l| {
             let mut f = l.split_whitespace();
             let (pid, ppid, stat) = (f.next()?.parse().ok()?, f.next()?.parse().ok()?, f.next()?);
+            let age = f.next().and_then(parse_etime);
             // The start time is several words ("Sat Sep 19 11:44:41 2026"); only equality matters.
             let when = f.collect::<Vec<_>>().join(" ");
             let start = if when.is_empty() {
@@ -73,7 +114,7 @@ fn parse_ps(text: &str) -> Vec<Row> {
                 when.hash(&mut h);
                 h.finish() | 1
             };
-            Some(Row { pid, ppid, zombie: stat.starts_with('Z'), start })
+            Some(Row { pid, ppid, zombie: stat.starts_with('Z'), start, age })
         })
         .collect()
 }
@@ -105,6 +146,21 @@ pub fn descendants(rows: &[Row], root: u32) -> Option<Vec<u32>> {
 /// The command line of `pid` as separate arguments, or None if it can't be read (gone, or not ours). Where
 /// only `ps` can say (macOS) the arguments come back as one string, since `ps` doesn't keep them apart.
 pub fn cmdline(pid: u32) -> Option<Vec<String>> {
+    if let Some(args) = cmdline_quick(pid) {
+        return Some(args);
+    }
+    if Path::new("/proc/self/stat").exists() {
+        return None; // Linux, and this process is gone
+    }
+    // The kernel wouldn't say (another user's process, say): `ps` can still show the line, as one string.
+    let out = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok().filter(|o| o.status.success())?;
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!line.is_empty()).then(|| vec![line])
+}
+
+/// `cmdline` without ever starting `ps`, for reading many processes at once: None also where only `ps` could say
+/// (another user's process on macOS).
+pub fn cmdline_quick(pid: u32) -> Option<Vec<String>> {
     if let Ok(raw) = fs::read(format!("/proc/{pid}/cmdline")) {
         let args: Vec<String> = raw.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
         let args = match args.split_last() {
@@ -113,17 +169,10 @@ pub fn cmdline(pid: u32) -> Option<Vec<String>> {
         };
         return (!args.is_empty()).then_some(args);
     }
-    if Path::new("/proc/self/stat").exists() {
-        return None; // Linux, and this process is gone
-    }
     #[cfg(target_os = "macos")]
-    if let Some(args) = procargs(pid) {
-        return Some(args);
-    }
-    // The kernel wouldn't say (another user's process, say): `ps` can still show the line, as one string.
-    let out = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok().filter(|o| o.status.success())?;
-    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!line.is_empty()).then(|| vec![line])
+    return procargs(pid);
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 /// macOS: the arguments of `pid`, kept apart, from the kernel (`sysctl` `KERN_PROCARGS2`, what `ps` itself reads).
@@ -365,7 +414,7 @@ mod tests {
     }
 
     fn row(pid: u32, ppid: u32, zombie: bool) -> Row {
-        Row { pid, ppid, zombie, start: 0 }
+        Row { pid, ppid, zombie, start: 0, age: None }
     }
 
     #[test]
@@ -373,7 +422,7 @@ mod tests {
         assert_eq!(parse_stat(7, "7 (my (weird) name) S 42 7 7 0 -1"), Some(row(7, 42, false)));
         // Field 22 is the start time, here 987654.
         let full = "7 (a b) S 42 7 7 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 987654 1000 100 18446744073709551615";
-        assert_eq!(parse_stat(7, full), Some(Row { pid: 7, ppid: 42, zombie: false, start: 987654 }));
+        assert_eq!(parse_stat(7, full), Some(Row { pid: 7, ppid: 42, zombie: false, start: 987654, age: None }));
         assert_eq!(parse_stat(8, "8 (sh) Z 1 8 8 0 -1"), Some(row(8, 1, true)));
         assert_eq!(parse_stat(9, "garbage"), None);
     }
@@ -382,10 +431,28 @@ mod tests {
     fn ps_output_parses() {
         assert_eq!(parse_ps("  1     0 Ss\n 20     1 Z+\nbad line\n"), vec![row(1, 0, false), row(20, 1, true)]);
         let rows = parse_ps(
-            "  5     1 S    Sat Sep 19 11:44:41 2026\n  6     1 S    Sat Sep 19 11:44:42 2026\n  7     1 S    Sat Sep 19 11:44:41 2026\n",
+            "  5     1 S       01:02 Sat Sep 19 11:44:41 2026\n  6     1 S    1-02:03:04 Sat Sep 19 11:44:42 2026\n  7     1 S  00:00 Sat Sep 19 11:44:41 2026\n",
         );
         assert!(rows.iter().all(|r| r.start != 0));
         assert_eq!((rows[0].start == rows[2].start, rows[0].start == rows[1].start), (true, false), "same start time = same reading");
+        let ages: Vec<Option<u64>> = rows.iter().map(|r| r.age.map(|a| a.as_secs())).collect();
+        assert_eq!(ages, [Some(62), Some(86_400 + 7384), Some(0)]);
+    }
+
+    #[test]
+    fn a_process_s_age_is_read_from_its_start_and_the_time_since_boot() {
+        assert_eq!(parse_etime("05:07"), Some(Duration::from_secs(307)));
+        assert_eq!(parse_etime("2:05:07"), Some(Duration::from_secs(7507)));
+        assert_eq!(parse_etime("3-00:00:01"), Some(Duration::from_secs(3 * 86_400 + 1)));
+        for bad in ["", "7", "a:b", "1:2:3:4", "x-01:02"] {
+            assert_eq!(parse_etime(bad), None, "{bad:?}");
+        }
+        // Started 10 s after boot (100 ticks a second), 70.5 s since boot: running 60.5 s.
+        assert_eq!(age_of(1000, Some(70.5), 100), Some(Duration::from_secs_f64(60.5)));
+        assert_eq!(age_of(0, Some(70.5), 100), None, "no start time");
+        assert_eq!(age_of(1000, None, 100), None);
+        assert_eq!(age_of(1000, Some(70.5), 0), None);
+        assert_eq!(age_of(9000, Some(70.5), 100), None, "a start after now is no age at all");
     }
 
     #[test]
@@ -455,6 +522,7 @@ mod tests {
         let _ = child.wait();
         assert_eq!(args, Some(vec!["sleep".to_string(), "631".to_string()]));
         assert!(mine.start != 0 && mine.start == again.start, "{mine:?} {again:?}");
+        assert!(mine.age.is_some_and(|a| a < Duration::from_secs(600)), "just started: {mine:?}");
         assert_eq!(mine.ppid, std::process::id());
     }
 }

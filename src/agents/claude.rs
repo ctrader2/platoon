@@ -35,21 +35,6 @@ pub fn claude_root() -> PathBuf {
         .unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"))
 }
 
-/// Claude Code's user config file, which holds (among other things) the MCP servers added with
-/// `claude mcp add`: `.claude.json` inside `CLAUDE_CONFIG_DIR` when that is set, else `~/.claude.json`
-/// (next to `~/.claude`, not inside it).
-pub fn claude_json_path() -> PathBuf {
-    crate::usage::forbid_real_dir("claude_json_path");
-    claude_json_in(std::env::var_os("CLAUDE_CONFIG_DIR"), &std::env::var("HOME").unwrap_or_default())
-}
-
-fn claude_json_in(config_dir: Option<std::ffi::OsString>, home: &str) -> PathBuf {
-    match config_dir {
-        Some(dir) => PathBuf::from(dir).join(".claude.json"),
-        None => Path::new(home).join(".claude.json"),
-    }
-}
-
 /// The background job an interactive registry entry handed its conversation to (`parkedJobId`, seen in Claude Code
 /// 2.1.283), if it did. The one place that knows the key: `live_from`, `registry_status` and the guard ask here.
 pub fn parked_job(v: &Value) -> Option<String> {
@@ -524,6 +509,16 @@ pub fn registry_status(root: &Path, pid: u32) -> Option<String> {
         return Some("parked".into());
     }
     v["status"].as_str().map(String::from)
+}
+
+/// Since when Claude Code's registry has said process `pid` is idle (`statusUpdatedAt`, ms since the epoch): None unless
+/// its status is `idle` (see `registry_status`) and it says when that was.
+pub fn idle_since(root: &Path, pid: u32) -> Option<u64> {
+    if registry_status(root, pid)?.as_str() != "idle" {
+        return None;
+    }
+    let v: Value = serde_json::from_str(&fs::read_to_string(root.join("sessions").join(format!("{pid}.json"))).ok()?).ok()?;
+    v.get("statusUpdatedAt")?.as_u64()
 }
 
 fn live_from(v: &Value) -> Option<Live> {
@@ -1147,12 +1142,6 @@ fn truncate(s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
-        assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
-        assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
-    }
 
     #[test]
     fn a_sessions_helpers_are_read_from_its_subagents_meta_files_and_odd_ones_are_left_out_or_read_as_not_said() {

@@ -28,9 +28,8 @@ The other group, **Everything else**:
 | Archive sessions after | A session nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Check for a newer platoon | Once a day at most, platoon asks GitHub for the number of its latest version and says once when a newer one is out (see [One network request](what-platoon-changes.md#one-network-request-no-telemetry)). Off: platoon makes no network request at all. Applies from the next start. | Once a day (default), Off |
 
-Idle stop ignores MCP servers by default. To have them count, so that a session with any program running under it, MCP
-servers included, is never stopped, set `"idle_stop_ignores_mcp": false` in [`settings.json`](#the-settings-file)
-(see [Automatic clean-up](sessions.md#automatic-clean-up)); there is no entry for it on the screen.
+A session with a command still going that Claude or Codex started (a dev server, say) is never stopped; its MCP servers
+don't count (see [Automatic clean-up](sessions.md#automatic-clean-up)).
 
 #### Switching a program off
 
@@ -175,7 +174,7 @@ The settings live in `~/.config/platoon/settings.json` (`$PLATOON_CONFIG_DIR`, o
 shows the exact path). platoon doesn't create it until you change something, and you can edit it by hand too:
 
 ```json
-{"version": 1, "idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
+{"version": 1, "idle_stop_minutes": 120, "auto_archive_days": 2, "theme": "catppuccin-mocha",
  "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000,
  "tokens_enabled": false, "tokens_asked": true, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000,
  "ai_pause_percent": 80, "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
@@ -190,7 +189,8 @@ A value that isn't one of the steps (say `90` minutes) is shown as it is and lef
 it moves to the nearest step. Off is the same as `0` in the file. The limits:
 
 - `idle_stop_minutes` up to 7 days, `auto_archive_days` up to 365 days.
-- `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default (`true`).
+- `search_archived` is `true` or `false`; anything else there means the default (`true`). An `idle_stop_ignores_mcp`
+  left from an older platoon does nothing.
 - The search numbers: 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters.
 - `theme` is one of the [theme](themes.md) ids (`user:...` for one of your own).
 - The token numbers: 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never

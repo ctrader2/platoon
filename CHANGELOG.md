@@ -16,6 +16,12 @@ here.
   so. It replaces the hook that held back a session's first edit to ask, which Claude Code showed as a hook error, and
   with it the **Offer tasks before starting work** setting. `t` on a session's row works as before, and the new
   `platoon task squads` lists the squads a task can start with.
+- Idle stop now asks one question about what runs under a session: is a command Claude or Codex started still going
+  (a dev server, a watcher)? If so the session is kept; its MCP servers, hooks and other helpers never keep it, however
+  they are set up. platoon no longer reads your MCP configuration for this, and the `idle_stop_ignores_mcp` setting is
+  gone (left in `settings.json`, it does nothing).
+- A running session that has been quiet for the idle-stop time but is kept says why on its row when you pick it, for
+  example `Kept running: a command Claude started is still going (npm run dev)`.
 
 ### Fixed
 
@@ -34,6 +40,11 @@ here.
   figure and 0%, and the weekly one could read 7% while your other sessions said 16%. Each window now shows the
   highest figure any session reports for the window running now (usage only grows within a window), and 0% only when no
   session has a 5-hour window running. Codex's figures, read from several conversations, follow the same rule.
+- Idle stop never stopped a session whose MCP server is started by a script (a wrapper that sets things up and then
+  runs the real server): the server didn't match its configuration, so it counted as work and kept the session forever.
+- Sessions that an older platoon started now follow the new idle-stop rules too: platoon checks them once a minute and
+  stops the idle ones, so an update reaches sessions that were already running. Each session's background host now
+  records the platoon version that started it.
 
 ## [1.0.1] - 2026-10-25
 

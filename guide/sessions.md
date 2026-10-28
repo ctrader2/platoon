@@ -240,36 +240,36 @@ Two things happen on their own, so you don't have to think about them. Nothing i
 
 | What | When | What you see |
 | --- | --- | --- |
-| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
+| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours, and no command it started is still going | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
 | A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 sessions idle for 2+ days. Find them in Archived.`) that stays until you press a key; the first time you run platoon, many old conversations can be archived at once |
 
 Details worth knowing:
 
-- A session is only stopped when Claude Code itself says it is idle. If anything is running under it (a dev server, a
-  background job) it is left alone, because stopping the session would end those too. Sessions started in a plain terminal,
-  and anything with a window open on it, are never stopped.
-- For a Codex session, idle is what Codex's saved session says (its last reply has finished), and its MCP servers are
-  the ones in Codex's `config.toml` (`[mcp_servers.<name>]`, read only; one switched off with `enabled = false`, or reached
-  by `url`, has no process). Anything else under it keeps it running, as for Claude.
-- The exception is MCP servers: the helper programs Claude starts with every session (the ones you added with
-  `claude mcp add`, put in a project's `.mcp.json`, or that come with a Claude Code plugin). Almost every real session has
-  some, and they are closed when the session stops and started again when you open it, so by default they don't count as
-  "something running". platoon works out which processes are MCP servers from your Claude Code configuration
-  (`~/.claude.json`, or the one inside `$CLAUDE_CONFIG_DIR`; `.mcp.json` in the session's folder and its parent folders;
-  enabled Claude Code plugins), re-reading it at every check. A process only counts as one if Claude started it directly
-  and its command matches a configured server (and everything a launcher such as `npx` or `docker run` starts under it is
-  treated the same way). A dev server or job Claude started from a Bash tool is deeper than that, so it still keeps the
-  session alive, and so does anything platoon is not sure about, or can't read the configuration to check. Some MCP
-  servers don't exit when Claude does: after a stop, platoon asks the ones it saw before to exit too, and never any other
-  process.
+- A session is only stopped when Claude Code itself says it is idle. If a command Claude started is still going (a dev
+  server, a watcher, a background job), the session is left alone, because stopping it would end that command too.
+  Sessions started in a plain terminal, and anything with a window open on it, are never stopped.
+- What counts is a command Claude started: Claude runs each one in a shell of its own, and anything left running in such a
+  shell keeps the session. Nothing else does: the MCP servers Claude starts with every session (however they are set up:
+  `claude mcp add`, a project's `.mcp.json`, a plugin, a script that starts the server), its hooks and its other helpers
+  are closed when the session stops and started again when you open it. platoon doesn't read your MCP configuration for
+  this. If platoon can't see what runs under a session, it leaves the session alone. Some MCP servers don't exit when
+  Claude does: after a stop, platoon asks the ones it saw before to exit too, and never any other process.
+- For a Codex session, idle is what Codex's saved session says (its last reply has finished), and a command Codex started
+  (it runs each one in a shell of its own too) keeps it running, as for Claude.
+- The row of a running session that has been quiet that long but is still running says why when you pick it: `Kept
+  running: a command Claude started is still going (npm run dev)`, `a window is open on it`, `Claude Code doesn't say it's
+  idle`. Only the command's name and its first word or two are shown, never all of it.
+- A session that an older platoon started (it keeps running after you update platoon) still follows the older rules on its
+  own. platoon checks such sessions itself once a minute, by these rules, and stops the ones that have been idle for the
+  time in the settings (as Claude Code's or Codex's own records say), with no window open on them and no command of
+  theirs still going.
 - Auto-archive never touches a conversation that has a process running, the one you are looking at, or a task's session
   (a finished task moves to the Tasks tab's Archived list by itself instead: see
   [the Tasks tab](tasks-and-squads.md#the-tasks-tab)). Opening or
   restoring a conversation counts as activity, so restoring an old one sticks: it is not archived again until it has sat
   unused for the full time.
 - Restoring is the same as always: the Archived tab, `a` (or `enter` to restore and open).
-- Both times are on the [settings screen](settings-and-keys.md#general): press `s`. Whether MCP servers count is only in
-  [`settings.json`](settings-and-keys.md#the-settings-file) (`"idle_stop_ignores_mcp": false` makes them count).
+- Both times are on the [settings screen](settings-and-keys.md#general): press `s`.
 
 ## Big histories
 

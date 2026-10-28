@@ -113,6 +113,8 @@ fn a_running_idle_session_says_idle_with_a_filled_mark_and_one_nothing_runs_says
         args: vec!["--resume".into(), "saved".into()],
         sock: w.base.join("sock"),
         task: None,
+        version: None,
+        kept: None,
     });
     let lines = draw(&mut term, &app);
     let saved = lines.iter().find(|l| l.contains("/srv/beta")).unwrap();

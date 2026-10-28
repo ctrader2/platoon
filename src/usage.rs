@@ -28,7 +28,7 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// The user's real folders (`cache_dir`, `archive::config_dir`, `claude::claude_root`, `claude::claude_json_path`,
+/// The user's real folders (`cache_dir`, `archive::config_dir`, `claude::claude_root`,
 /// `codex::codex_root`) are for the running program only. A unit test that reaches one is a bug that would read, write or clean up the
 /// real thing (the live sessions' sockets are in `<cache>/hosts`), so in a unit test it panics, whatever the
 /// environment says. Code a test runs takes its folders as arguments instead.

@@ -44,6 +44,7 @@ use std::{
 mod board_glue;
 mod editor_glue;
 mod handoff_glue;
+mod idle_glue;
 mod merged_glue;
 mod newsession_glue;
 mod notes_glue;
@@ -592,6 +593,9 @@ pub struct App {
     pub sw: spent_glue::WorkState,
     /// Which Done tasks' branches are not merged yet (`app/merged_glue.rs`).
     merged: merged_glue::MergeState,
+    /// Sessions whose host an older platoon started: the rules applied from outside, and why each is kept
+    /// (`app/idle_glue.rs`).
+    idle: idle_glue::IdleState,
     /// Tasks' worktrees after the work: removing them, and bringing them back to continue a session.
     pub wt: worktree_glue::WtState,
     /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup.
@@ -922,6 +926,7 @@ impl App {
             sqt: SquadsTab::default(),
             sw: spent_glue::WorkState::default(),
             merged: merged_glue::MergeState::default(),
+            idle: idle_glue::IdleState::default(),
             wt: worktree_glue::WtState::default(),
             td: taskdraft_glue::DraftState::default(),
             ed: editor_glue::EdState::new(),
@@ -1600,6 +1605,7 @@ impl App {
         self.poll_squad_starts();
         self.poll_squad_work();
         self.poll_merged();
+        self.poll_older_hosts();
         self.poll_worktrees();
         self.drive_smart();
         self.usage = match snap.plan {

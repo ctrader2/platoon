@@ -341,6 +341,8 @@ fn a_session_a_tasks_host_runs_is_a_tasks_before_its_id_is_known() {
         args: Vec::new(),
         sock: "/nonexistent/platoon-unit-test.sock".into(),
         task: task.map(String::from),
+        version: None,
+        kept: None,
     };
     app.hosts.push(host(None));
     assert!(!app.is_task_session(&app.sessions[i]), "an ordinary host");

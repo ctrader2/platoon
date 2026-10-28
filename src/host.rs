@@ -9,11 +9,14 @@
 //!   `<pid>.sock`  the socket clients connect to
 //!
 //! A host also stops its own session when nobody has used it for a while (see `Watchdog`), so forgotten
-//! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
+//! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history. Its file names the
+//! platoon version that started it, so a newer platoon can tell a host that keeps older rules (`idle::check_older`), and
+//! says why a quiet session is kept (`kept`), for the session's row.
 
 use crate::agents::{Agent, Start};
 use crate::archive::config_dir;
-use crate::mcp::{self, Blocker, Tracked};
+use crate::idle::{self, Kept};
+use crate::mcp::{self, Tracked};
 use crate::procs;
 use crate::procs::pid_alive;
 use crate::settings::SettingsStore;
@@ -139,6 +142,10 @@ pub struct HostInfo {
     /// The task whose session this is, as its environment names it (`agents::TASK_ENV`, `tickets::task_tag`): how a
     /// Codex task's session is found before (and after) Codex says its id.
     pub task: Option<String>,
+    /// The platoon version that started the host, as its file says (None: a platoon from before hosts said it).
+    pub version: Option<String>,
+    /// Why the host keeps a session that has been quiet for the idle-stop time, as its file says (None: it doesn't).
+    pub kept: Option<Kept>,
 }
 
 impl HostInfo {
@@ -192,6 +199,8 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
             args,
             sock,
             task: v["task"].as_str().filter(|t| !t.is_empty()).map(String::from),
+            version: v.get("version").and_then(Value::as_str).map(String::from),
+            kept: v.get("kept").and_then(Kept::from_json),
         });
     }
     out
@@ -336,6 +345,8 @@ pub fn run(args: &[String]) -> i32 {
         size: Mutex::new((rows, cols)),
         next_id: AtomicU64::new(1),
         quiet_since: Mutex::new(Instant::now()),
+        active_at: Mutex::new(Instant::now()),
+        info: Mutex::new(None),
     });
 
     {
@@ -349,18 +360,21 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // Publish only once the socket is listening, so a discovered host is always connectable.
-    let mut info = json!({ "agent": agent.id(), "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
+    let mut info = json!({
+        "agent": agent.id(), "version": crate::versions::running(), "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest
+    });
     if let (Ok(task), Some(o)) = (std::env::var(crate::agents::TASK_ENV), info.as_object_mut()) {
         o.insert("task".into(), json!(task));
     }
-    let tmp = hdir.join(format!(".{claude_pid}.tmp"));
-    if fs::write(&tmp, info.to_string()).and_then(|_| fs::rename(&tmp, &info_path)).is_err() {
+    let file = InfoFile { value: info, path: info_path.clone(), tmp: hdir.join(format!(".{claude_pid}.tmp")) };
+    if file.write().is_err() {
         return fail("couldn't write host info".into());
     }
+    *lock(&shared.info) = Some(file);
 
     {
         let shared = shared.clone();
-        let dog = Watchdog::new(agent, claude_pid, me, &dir, &rest);
+        let dog = Watchdog::new(agent, claude_pid, me, &rest);
         thread::spawn(move || watch(&shared, dog));
     }
 
@@ -370,7 +384,9 @@ pub fn run(args: &[String]) -> i32 {
         if n == 0 {
             break;
         }
-        *lock(&shared.quiet_since) = Instant::now();
+        let now = Instant::now();
+        *lock(&shared.quiet_since) = now;
+        *lock(&shared.active_at) = now;
         let mut p = lock(&shared.parser);
         p.process(&buf[..n]);
         // A window that can't take this in time is cut off, never left waiting: see `cut_off`.
@@ -383,7 +399,12 @@ pub fn run(args: &[String]) -> i32 {
         });
     }
     let _ = child.wait();
-    let _ = fs::remove_file(&info_path);
+    {
+        // Under the lock, so the idle check can't write the file again once it is gone.
+        let mut file = lock(&shared.info);
+        *file = None;
+        let _ = fs::remove_file(&info_path);
+    }
     let _ = fs::remove_file(&sock_path);
     // Don't exit in the middle of cleaning up after an idle stop (see `watch`).
     if let Some(cleanup) = lock(&shared.cleanup).take() {
@@ -413,20 +434,55 @@ struct Shared {
     /// The latest of: the last output from claude, the last window leaving, the last time claude was
     /// seen doing anything but idling. The idle-stop clock runs from here.
     quiet_since: Mutex<Instant>,
+    /// The latest of: the last output from claude, the last window leaving. What "quiet" means for saying why a
+    /// session is kept (`quiet_since` also moves while the agent isn't idle).
+    active_at: Mutex<Instant>,
     /// After an idle stop: the thread that ends MCP servers which outlive claude. The host waits for it.
     cleanup: Mutex<Option<thread::JoinHandle<()>>>,
+    /// The host's file (`<pid>.json`), while it is there.
+    info: Mutex<Option<InfoFile>>,
 }
 
-/// What the idle check decided, and if it is "not yet", the first reason why. Only the reason for the
-/// decision is kept: nothing shows it, but it makes the rules testable one by one.
+/// The host's file, as written, so a change (why the session is kept) can be written again whole.
+struct InfoFile {
+    value: Value,
+    path: PathBuf,
+    tmp: PathBuf,
+}
+
+impl InfoFile {
+    /// Written whole and renamed into place, so a window never reads half of it.
+    fn write(&self) -> io::Result<()> {
+        fs::write(&self.tmp, self.value.to_string())?;
+        fs::rename(&self.tmp, &self.path)
+    }
+
+    /// Say why the session is kept (None: it isn't, or nothing worth saying), writing the file only when that changed.
+    fn set_kept(&mut self, kept: Option<&Kept>) {
+        let want = kept.map(Kept::to_json);
+        let Some(o) = self.value.as_object_mut() else { return };
+        if o.get("kept") == want.as_ref() {
+            return;
+        }
+        match want {
+            Some(k) => o.insert("kept".into(), k),
+            None => o.remove("kept"),
+        };
+        let _ = self.write();
+    }
+}
+
+/// What the idle check decided, and if it is "not yet", the first reason why. The reason is also what the session's
+/// row says about a quiet session that is kept (`Reason::kept`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Decision {
-    /// Stop the session. Holds the MCP servers (and what runs under them) to clean up if they outlive claude.
+    /// Stop the session. Holds what runs under claude that isn't a command it started (its MCP servers and what they
+    /// started), to clean up if it outlives claude.
     Stop(Vec<Tracked>),
     Keep(Reason),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Reason {
     /// Idle stop is switched off (0 minutes).
     IdleStopOff,
@@ -440,27 +496,35 @@ enum Reason {
     TaskAtWork,
     /// The process table couldn't be read, so what runs under claude is unknown.
     ProcessesUnknown,
-    /// "Never stop if any run" is chosen and this process runs under claude.
-    AnyProcessBlocks(u32),
-    /// A process that isn't a configured MCP server (or runs under one that isn't). `.0` is its pid.
-    OtherProcess(u32),
-    /// A direct child of claude whose command line couldn't be read: it might be anything.
-    UnsureProcess(u32),
-    /// As `OtherProcess`, and part of the MCP configuration couldn't be read, so no server could be recognised.
-    ConfigUnreadable(u32),
+    /// A command claude started is still running (`idle::under`); its short form, when it has one.
+    Command(Option<String>),
+}
+
+impl Reason {
+    /// What the session's row says about it, once it has been `quiet` (no output, no window leaving) for the idle-stop
+    /// time. None: nothing to say (still in its quiet time, or idle stop is off).
+    fn kept(&self, quiet: bool) -> Option<Kept> {
+        match self {
+            Reason::IdleStopOff | Reason::RecentOutput => None,
+            Reason::Viewer => quiet.then_some(Kept::Window),
+            Reason::NotIdle => quiet.then_some(Kept::NotIdle),
+            Reason::TaskAtWork => Some(Kept::TaskAtWork),
+            Reason::ProcessesUnknown => Some(Kept::Unknown),
+            Reason::Command(what) => Some(Kept::Command(what.clone())),
+        }
+    }
 }
 
 /// Decides when this host's session has been idle long enough to stop, and stops it.
 ///
 /// Idle means all of: no window attached for the whole threshold, claude's own registry entry saying
 /// `idle` the whole time (missing, unreadable or any other status is NOT idle, so uncertainty never
-/// stops anything), no output from claude for the threshold, and nothing running under claude except
-/// (by default) its MCP servers, see `mcp`.
+/// stops anything), no output from claude for the threshold, and no command claude started still running
+/// (`idle::under`: its MCP servers and other helpers don't count).
 /// Stopping is SIGTERM to claude, which shuts down cleanly; the host then exits like it always does.
 /// The conversation is untouched, and Enter resumes it.
 ///
-/// The threshold comes from `settings.json` (`idle_stop_minutes`, 0 = off) and is re-read as it changes, as
-/// is `idle_stop_ignores_mcp`.
+/// The threshold comes from `settings.json` (`idle_stop_minutes`, 0 = off) and is re-read as it changes.
 /// Tests can shrink time with `PLATOON_IDLE_SECS_PER_MINUTE=N`: a "minute" of the setting then lasts N
 /// seconds and the check runs every 200 ms instead of every 30 s.
 struct Watchdog {
@@ -472,8 +536,8 @@ struct Watchdog {
     settings: SettingsStore,
     secs_per_minute: u64,
     check_every: Duration,
-    /// Where the MCP configuration lives, for the session's agent and directory.
-    sources: mcp::Where,
+    /// How long a shell under claude must have run to count as a command it started: half a "minute" (see `idle`).
+    settle: Duration,
     leftover_grace: Duration,
     /// The session this host runs, when its arguments name it (a task's session, a resumed one): a task's session is
     /// found by it.
@@ -483,17 +547,18 @@ struct Watchdog {
 }
 
 impl Watchdog {
-    fn new(agent: Agent, claude_pid: u32, host_pid: u32, dir: &str, args: &[String]) -> Self {
+    fn new(agent: Agent, claude_pid: u32, host_pid: u32, args: &[String]) -> Self {
         let scaled = std::env::var("PLATOON_IDLE_SECS_PER_MINUTE").ok().and_then(|v| v.parse::<u64>().ok());
+        let secs_per_minute = scaled.unwrap_or(60);
         Self {
             agent,
             claude_pid,
             host_pid,
             root: agent.home(),
             settings: SettingsStore::open(&config_dir()),
-            secs_per_minute: scaled.unwrap_or(60),
+            secs_per_minute,
             check_every: if scaled.is_some() { Duration::from_millis(200) } else { IDLE_CHECK_EVERY },
-            sources: mcp::Where::from_env(agent, dir),
+            settle: Duration::from_secs(secs_per_minute) / 2,
             leftover_grace: if scaled.is_some() { Duration::from_secs(1) } else { LEFTOVER_GRACE },
             session: agent.session_of_args(args),
             config: config_dir(),
@@ -529,33 +594,27 @@ impl Watchdog {
         if self.session.as_deref().is_some_and(|s| crate::tickets::session_at_work(&self.config, s)) {
             return Decision::Keep(Reason::TaskAtWork);
         }
-        self.decide_processes(settings.idle_stop_ignores_mcp)
+        self.decide_processes()
     }
 
-    /// Stopping claude would kill whatever it started (a dev server, a shell, ...), so anything running under
-    /// it blocks the stop, unknown counts as running, and only MCP servers may be ignored.
-    fn decide_processes(&self, ignore_mcp: bool) -> Decision {
+    /// Stopping claude would end a command it started (a dev server, a watcher, ...), so one still running keeps the
+    /// session, and so does not knowing what runs under it. Everything else under it (its MCP servers, ...) is
+    /// recorded for the clean-up after the stop.
+    fn decide_processes(&self) -> Decision {
         let unknown = Decision::Keep(Reason::ProcessesUnknown);
         let Some(rows) = procs::table() else { return unknown };
-        let Some(all) = procs::descendants(&rows, self.claude_pid) else { return unknown };
-        let Some(&first) = all.iter().min() else { return Decision::Stop(Vec::new()) };
-        if !ignore_mcp {
-            return Decision::Keep(Reason::AnyProcessBlocks(first));
-        }
-        let cfg = self.sources.load();
-        let Some(split) = mcp::split(&rows, self.claude_pid, &cfg, &procs::cmdline) else { return unknown };
-        match split.blocker {
-            None => Decision::Stop(split.ignored),
-            Some(b) => Decision::Keep(blocker_reason(b, cfg.unreadable)),
+        let Some(under) = idle::under(self.agent, &rows, self.claude_pid, &procs::cmdline, self.settle) else { return unknown };
+        match under.command {
+            Some(c) => Decision::Keep(Reason::Command(c.what)),
+            None => Decision::Stop(under.leftovers),
         }
     }
-}
 
-fn blocker_reason(blocker: Blocker, config_unreadable: bool) -> Reason {
-    match blocker {
-        Blocker::Unsure(pid) => Reason::UnsureProcess(pid),
-        Blocker::Other(pid) if config_unreadable => Reason::ConfigUnreadable(pid),
-        Blocker::Other(pid) => Reason::OtherProcess(pid),
+    /// What the session's row is to say about the decision: why a session quiet since `active_at` is kept.
+    fn kept(&self, decision: &Decision, now: Instant, active_at: Instant) -> Option<Kept> {
+        let Decision::Keep(reason) = decision else { return None };
+        let threshold = self.settings.get().idle_stop_after(self.secs_per_minute)?;
+        reason.kept(now.saturating_duration_since(active_at) >= threshold)
     }
 }
 
@@ -564,7 +623,13 @@ fn watch(sh: &Shared, mut dog: Watchdog) {
         thread::sleep(dog.check_every);
         let viewers = lock(&sh.clients).len();
         let mut since = *lock(&sh.quiet_since);
-        let decision = dog.decide(Instant::now(), viewers, &mut since);
+        let now = Instant::now();
+        let decision = dog.decide(now, viewers, &mut since);
+        // Why a quiet session is kept, in the host's file for the session's row.
+        let kept = dog.kept(&decision, now, *lock(&sh.active_at));
+        if let Some(file) = lock(&sh.info).as_mut() {
+            file.set_kept(kept.as_ref());
+        }
         // Output or a window leaving during the decision means it is not idle after all.
         let stop = {
             let mut shared_since = lock(&sh.quiet_since);
@@ -670,7 +735,9 @@ fn serve_client(mut stream: UnixStream, sh: &Shared) {
     }
     // This window left: forget it, and let the terminal grow back if it was the smallest.
     lock(&sh.clients).retain(|c| c.id != id);
-    *lock(&sh.quiet_since) = Instant::now();
+    let now = Instant::now();
+    *lock(&sh.quiet_since) = now;
+    *lock(&sh.active_at) = now;
     fit_smallest_viewer(sh);
 }
 
@@ -736,13 +803,8 @@ mod tests {
                 settings: SettingsStore::open(&dir.join("config")),
                 secs_per_minute: 60,
                 check_every: IDLE_CHECK_EVERY,
-                sources: mcp::Where::Claude(mcp::Sources {
-                    root: dir.join("claude"),
-                    claude_json: dir.join("claude.json"),
-                    cwd: dir.join("work"),
-                    home: dir.join("home").to_string_lossy().into_owned(),
-                    vars: [("PATH".to_string(), std::env::var("PATH").unwrap_or_default())].into(),
-                }),
+                // Every shell counts at once, however young (see `a_hook_running_for_a_moment_does_not_prevent_a_stop`).
+                settle: Duration::ZERO,
                 leftover_grace: Duration::from_millis(300),
                 session: None,
                 config: dir.join("config"),
@@ -860,6 +922,8 @@ mod tests {
             args: args.iter().map(|a| a.to_string()).collect(),
             sock: PathBuf::new(),
             task: None,
+            version: None,
+            kept: None,
         };
         assert!(info(&["attach", "feedf00d"]).attaches_to("feedf00d"));
         assert!(!info(&["attach", "feedf00d"]).attaches_to("feedf00"));
@@ -868,24 +932,25 @@ mod tests {
     }
 
     #[test]
-    fn a_live_child_process_prevents_a_stop_and_a_finished_one_does_not() {
+    fn a_command_claude_started_prevents_a_stop_and_a_finished_one_does_not() {
         let mut rig = Rig::new("children", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
-        // `sleep` has no children, so watch a shell that starts a background job and then waits for input.
-        let mut shell = Command::new("sh").args(["-c", "sleep 60 & read x"]).stdin(Stdio::piped()).spawn().unwrap();
+        // `sleep` has no children, so watch a shell that starts a command in a shell of its own (as Claude Code's Bash
+        // tool does) in the background and then waits for input.
+        let mut shell = Command::new("sh").args(["-c", "sh -c 'sleep 60; true' & read x"]).stdin(Stdio::piped()).spawn().unwrap();
         rig.dog.claude_pid = shell.id();
         let v = json!({"pid": shell.id(), "status": "idle"});
         fs::write(rig.dir.join(format!("claude/sessions/{}.json", shell.id())), v.to_string()).unwrap();
 
         let kids = loop {
             match procs::live_descendants(shell.id()) {
-                Some(k) if !k.is_empty() => break k,
+                Some(k) if k.len() >= 2 => break k,
                 _ => thread::sleep(Duration::from_millis(20)), // the shell needs a moment to start its job
             }
         };
         let t0 = Instant::now();
-        let blocked = !rig.dog.should_stop(t0 + 10 * MIN, 0, &mut { t0 });
+        let blocked = rig.dog.decide(t0 + 10 * MIN, 0, &mut { t0 });
 
-        // The job ends (it is ours): now nothing runs under the shell, so it may be stopped.
+        // The command ends (it is ours): now nothing runs under the shell, so it may be stopped.
         for k in kids {
             unsafe { libc::kill(k as i32, libc::SIGKILL) };
         }
@@ -899,8 +964,8 @@ mod tests {
         }
         drop(shell.stdin.take()); // the shell's `read` ends and it exits
         let _ = shell.wait();
-        assert!(blocked, "claude has a child running: stopping it would kill that");
-        assert!(freed, "once the child is gone (a zombie doesn't count) the session may stop");
+        assert_eq!(blocked, Decision::Keep(Reason::Command(Some("sleep 60".into()))), "stopping claude would end it");
+        assert!(freed, "once the command is gone (a zombie doesn't count) the session may stop");
     }
 
     #[test]
@@ -1007,10 +1072,6 @@ mod tests {
     }
 
     impl Rig {
-        fn mcp(&self, servers: Value) {
-            fs::write(self.dir.join("claude.json"), json!({"mcpServers": servers}).to_string()).unwrap();
-        }
-
         /// The decision with everything else ready to stop: idle, long quiet, nobody attached.
         fn decide(&mut self) -> Decision {
             let t0 = Instant::now();
@@ -1029,10 +1090,10 @@ mod tests {
         }
     }
 
-    /// A Codex session platoon hosts: idle is what its rollout's last turn record says, its MCP servers are the ones in
-    /// Codex's `config.toml`, and anything unclear keeps it.
+    /// A Codex session platoon hosts: idle is what its rollout's last turn record says, and a command it started keeps
+    /// it as a command of Claude's does.
     #[test]
-    fn a_codex_session_stops_only_when_its_rollout_says_idle_and_only_config_tomls_servers_are_ignored() {
+    fn a_codex_session_stops_only_when_its_rollout_says_idle_and_no_command_of_its_runs() {
         let mut rig = Rig::new("codex", Settings::default());
         let codex = rig.dir.join("codex");
         let id = "01a1517c-414d-7902-93d1-efa74830493d";
@@ -1042,21 +1103,15 @@ mod tests {
         let turn =
             |kind: &str| json!({"timestamp": "2026-10-19T00:07:40.187Z", "type": "event_msg", "payload": {"type": kind}}).to_string();
         fs::write(&rollout, [turn("task_started"), turn("task_complete")].join("\n") + "\n").unwrap();
-        fs::write(codex.join("config.toml"), "[mcp_servers.docs]\ncommand = \"sleep\"\nargs = [\"621\"]\n").unwrap();
         rig.dog.agent = Agent::Codex;
         rig.dog.root = codex.clone();
         rig.dog.session = Agent::Codex.session_of_args(&Agent::Codex.args(Start::Resume(id)));
-        rig.dog.sources = mcp::Where::Codex(mcp::CodexSources {
-            config: codex.join("config.toml"),
-            home: rig.dir.join("home").to_string_lossy().into_owned(),
-            vars: [("PATH".to_string(), std::env::var("PATH").unwrap_or_default())].into(),
-        });
 
-        let s = Session::start(&mut rig, "sleep 621 & sleep 622 & read x", 2);
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(s.pid_with("sleep 622"))), "not one of Codex's servers");
+        let s = Session::start(&mut rig, "sleep 621 & sh -c 'sleep 622; true' & read x", 3);
+        assert_eq!(rig.decide(), Decision::Keep(Reason::Command(Some("sleep 622".into()))), "a command Codex started");
         drop(s);
         let s = Session::start(&mut rig, "sleep 621 & read x", 1);
-        assert_eq!(pids(&rig.decide()), [s.pid_with("sleep 621")], "the configured server alone doesn't keep it");
+        assert_eq!(pids(&rig.decide()), [s.pid_with("sleep 621")], "its MCP server alone doesn't keep it");
 
         // In the middle of a turn: not idle.
         fs::write(&rollout, [turn("task_complete"), turn("task_started")].join("\n") + "\n").unwrap();
@@ -1072,16 +1127,12 @@ mod tests {
         assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
         rig.dog.session = None;
         assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
-        rig.dog.session = Some(id.into());
-        // A config.toml that isn't TOML: no server can be recognised, so the server's process is work.
-        fs::write(codex.join("config.toml"), "[mcp_servers.docs\n").unwrap();
-        assert_eq!(rig.decide(), Decision::Keep(Reason::ConfigUnreadable(s.pid_with("sleep 621"))));
     }
 
     #[test]
-    fn mcp_servers_directly_under_claude_do_not_prevent_a_stop_and_are_recorded_for_clean_up() {
+    fn what_claude_runs_that_is_not_a_command_does_not_prevent_a_stop_and_is_recorded_for_clean_up() {
+        // MCP servers: platoon reads no configuration for them; they are simply not a command claude started.
         let mut rig = Rig::new("mcp-ignored", Settings::default());
-        rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}, "b": {"command": "sleep", "args": ["612"]}}));
         let s = Session::start(&mut rig, "sleep 611 & sleep 612 & read x", 2);
         let d = rig.decide();
         let mut want = vec![s.pid_with("sleep 611"), s.pid_with("sleep 612")];
@@ -1092,79 +1143,43 @@ mod tests {
     }
 
     #[test]
-    fn an_unrelated_child_prevents_the_stop_even_beside_an_mcp_server() {
+    fn a_command_prevents_the_stop_even_beside_mcp_servers() {
         let mut rig = Rig::new("mcp-other", Settings::default());
-        rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
-        let s = Session::start(&mut rig, "sleep 611 & sleep 612 & read x", 2);
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(s.pid_with("sleep 612"))));
+        let _s = Session::start(&mut rig, "sleep 611 & sh -c 'sleep 612; true' & read x", 3);
+        assert_eq!(rig.decide(), Decision::Keep(Reason::Command(Some("sleep 612".into()))));
         assert!(!rig.dog.should_stop(Instant::now() + 500 * MIN, 0, &mut Instant::now()));
     }
 
     #[test]
-    fn only_a_direct_child_is_an_mcp_server_the_same_command_deeper_down_is_work() {
-        let mut rig = Rig::new("mcp-deep", Settings::default());
-        rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
-        // claude -> sh (as a tool call would be) -> sleep 611, which is what the configured server looks like.
-        let s = Session::start(&mut rig, "sh -c 'sleep 611; true' & read x", 2);
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(s.pid_with("sh -c"))));
+    fn a_hook_running_for_a_moment_does_not_prevent_a_stop() {
+        let mut rig = Rig::new("hook", Settings::default());
+        rig.dog.settle = Duration::from_secs(600);
+        // A shell started just now, as a hook or the status line is: not counted yet, and not a leftover either.
+        let s = Session::start(&mut rig, "sleep 611 & sh -c 'sleep 613; true' & read x", 3);
+        assert_eq!(pids(&rig.decide()), [s.pid_with("sleep 611")]);
     }
 
     #[test]
-    fn a_wrapper_and_everything_it_started_are_ignored_together() {
-        let mut rig = Rig::new("mcp-wrapper", Settings::default());
-        rig.mcp(json!({"w": {"command": "sh", "args": ["-c", "sleep 613; true"]}}));
-        let s = Session::start(&mut rig, "sh -c 'sleep 613; true' & read x", 2);
-        assert_eq!(pids(&rig.decide()), {
-            let mut v = vec![s.pid_with("sh -c"), s.pid_with("sleep 613")];
-            v.sort();
-            v
-        });
-    }
-
-    #[test]
-    fn without_readable_configuration_every_child_still_blocks() {
-        let mut rig = Rig::new("mcp-noconfig", Settings::default());
-        let s = Session::start(&mut rig, "sleep 611 & read x", 1);
-        let kid = s.pid_with("sleep 611");
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)), "no configuration at all");
-        fs::write(rig.dir.join("claude.json"), "{ not json").unwrap();
-        assert_eq!(rig.decide(), Decision::Keep(Reason::ConfigUnreadable(kid)), "a configuration that can't be read");
-        rig.mcp(json!({"a": {"type": "http", "url": "https://x"}, "b": {"command": "sleep", "args": "611"}}));
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)), "nothing usable in it");
-    }
-
-    #[test]
-    fn the_configuration_is_read_again_at_every_check() {
-        let mut rig = Rig::new("mcp-reread", Settings::default());
-        let s = Session::start(&mut rig, "sleep 611 & read x", 1);
-        let kid = s.pid_with("sleep 611");
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)));
-        rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
-        assert_eq!(pids(&rig.decide()), [kid], "added while the host runs: counted from the next check");
-        rig.mcp(json!({}));
-        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)));
-    }
-
-    #[test]
-    fn choosing_to_count_mcp_servers_restores_blocking_and_a_change_applies_without_restarting() {
-        let mut rig = Rig::new("mcp-setting", Settings::default());
-        rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
-        let s = Session::start(&mut rig, "sleep 611 & read x", 1);
-        let kid = s.pid_with("sleep 611");
-        let config = rig.dir.join("config");
-        assert_eq!(pids(&rig.decide()), [kid]);
-        save(&config, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
-        assert_eq!(rig.decide(), Decision::Keep(Reason::AnyProcessBlocks(kid)), "the same server now counts");
-        save(&config, &Settings::default()).unwrap();
-        assert_eq!(pids(&rig.decide()), [kid], "and back");
-        // Turned off, a session with nothing under it is still stopped.
-        save(&config, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
-        let mut plain = Rig::new("mcp-setting-plain", Settings { idle_stop_ignores_mcp: false, ..Settings::default() });
-        plain.status("idle");
-        assert_eq!(plain.decide(), Decision::Stop(Vec::new()));
-        // A hand-edited file with a wrong type for the choice keeps ignoring MCP servers.
-        fs::write(config.join("settings.json"), r#"{"idle_stop_minutes":120,"idle_stop_ignores_mcp":"no"}"#).unwrap();
-        assert_eq!(pids(&rig.decide()), [kid]);
+    fn why_a_quiet_session_is_kept_is_said_once_it_has_been_quiet_for_the_threshold() {
+        let rig = Rig::new("kept", Settings::default());
+        let (t0, later) = (Instant::now(), Instant::now() + 500 * MIN);
+        let keep = |r: Reason| Decision::Keep(r);
+        assert_eq!(
+            rig.dog.kept(&keep(Reason::Command(Some("npm run dev".into()))), later, t0),
+            Some(Kept::Command(Some("npm run dev".into())))
+        );
+        assert_eq!(rig.dog.kept(&keep(Reason::Viewer), later, t0), Some(Kept::Window));
+        assert_eq!(rig.dog.kept(&keep(Reason::Viewer), later, later - MIN), None, "a window that is in use");
+        assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, t0), Some(Kept::NotIdle));
+        assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, later - MIN), None, "working away");
+        assert_eq!(rig.dog.kept(&keep(Reason::TaskAtWork), later, t0), Some(Kept::TaskAtWork));
+        assert_eq!(rig.dog.kept(&keep(Reason::ProcessesUnknown), later, t0), Some(Kept::Unknown));
+        assert_eq!(rig.dog.kept(&keep(Reason::RecentOutput), later, t0), None);
+        assert_eq!(rig.dog.kept(&Decision::Stop(Vec::new()), later, t0), None);
+        save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, ..Settings::default() }).unwrap();
+        let mut off = rig;
+        off.dog.settings.refresh();
+        assert_eq!(off.dog.kept(&keep(Reason::Command(None)), later, t0), None, "idle stop is off: nothing to explain");
     }
 
     #[test]
@@ -1189,11 +1204,6 @@ mod tests {
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::NotIdle), "not registered either, so not known idle");
         fs::write(rig.dir.join(format!("claude/sessions/{dead}.json")), json!({"pid": dead, "status": "idle"}).to_string()).unwrap();
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::ProcessesUnknown));
-        // Direct children whose command line can't be read, and unreadable configuration, map to their own reasons.
-        assert_eq!(blocker_reason(Blocker::Unsure(7), false), Reason::UnsureProcess(7));
-        assert_eq!(blocker_reason(Blocker::Unsure(7), true), Reason::UnsureProcess(7));
-        assert_eq!(blocker_reason(Blocker::Other(7), false), Reason::OtherProcess(7));
-        assert_eq!(blocker_reason(Blocker::Other(7), true), Reason::ConfigUnreadable(7));
     }
 
     // --- ending processes ----------------------------------------------------------------------------
@@ -1256,7 +1266,6 @@ mod tests {
             ("cache_dir", std::panic::catch_unwind(cache_dir).is_ok()),
             ("config_dir", std::panic::catch_unwind(config_dir).is_ok()),
             ("claude_root", std::panic::catch_unwind(claude_root).is_ok()),
-            ("claude_json_path", std::panic::catch_unwind(crate::agents::claude::claude_json_path).is_ok()),
             ("hosts_dir", std::panic::catch_unwind(hosts_dir).is_ok()),
             ("discover", std::panic::catch_unwind(discover).is_ok()),
             ("Dirs::from_env", std::panic::catch_unwind(Dirs::from_env).is_ok()),

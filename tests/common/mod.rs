@@ -158,6 +158,12 @@ pub struct Term {
 
 impl Term {
     pub fn spawn(args: &[&str], env: &[(&str, String)], cwd: &Path, rows: u16, cols: u16) -> Self {
+        // The real cache folder holds the user's running sessions' hosts, and a platoon stops the idle ones an older
+        // platoon started (`idle::check_older`): every platoon a test starts has a cache folder of its own.
+        assert!(
+            env.iter().any(|(k, v)| *k == "PLATOON_CACHE_DIR" && !v.is_empty()),
+            "a test's platoon must be given its own PLATOON_CACHE_DIR"
+        );
         let pair = native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
         let mut cmd = CommandBuilder::new(BIN);
         cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`

@@ -15,7 +15,6 @@
 //!   which runs many and is never signalled). A new conversation's lock is taken as soon as the session opens (after
 //!   Codex's own update and folder-trust questions), before any message and so before its rollout exists: such a
 //!   conversation is `Live::unsaved`, its folder the holder's own (`procs::cwd`).
-//! - `config.toml`: the MCP servers (`[mcp_servers.<name>]`), for idle stop. Read only: Codex rewrites it itself.
 //! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `hooks`).
 
 use super::{
@@ -1178,42 +1177,11 @@ mod lsof {
     }
 }
 
-// ---- MCP servers (for idle stop) ------------------------------------------------------------------------------------
-
-/// One MCP server Codex starts as a process of its own: its name, command and arguments.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct McpServer {
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-}
+// ---- configuration -------------------------------------------------------------------------------------------------
 
 /// Codex's configuration file.
 pub fn config_path(root: &Path) -> PathBuf {
     root.join("config.toml")
-}
-
-/// The MCP servers in Codex's `config.toml` (`[mcp_servers.<name>]`) that run as a local process: with a `command`,
-/// and not switched off (`enabled = false`). A server reached by `url` has no process. A malformed entry is skipped.
-/// Err when the text isn't TOML.
-pub fn mcp_servers(text: &str) -> Result<Vec<McpServer>, String> {
-    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.message().to_string())?;
-    let mut out = Vec::new();
-    for (name, entry) in table.get("mcp_servers").and_then(toml::Value::as_table).into_iter().flatten() {
-        let Some(e) = entry.as_table() else { continue };
-        if e.get("enabled").and_then(toml::Value::as_bool) == Some(false) {
-            continue;
-        }
-        let Some(command) = e.get("command").and_then(toml::Value::as_str).filter(|c| !c.trim().is_empty()) else { continue };
-        let args: Option<Vec<String>> = match e.get("args") {
-            None => Some(Vec::new()),
-            Some(toml::Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from)).collect(),
-            Some(_) => None,
-        };
-        let Some(args) = args else { continue };
-        out.push(McpServer { name: name.clone(), command: command.to_string(), args });
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -1570,40 +1538,6 @@ pub(crate) mod tests {
         // No writable git folder: it can't lift Codex's protection of a worktree's git data, platoon commits instead.
         assert!(!a.iter().any(|x| x.contains("writable_roots")), "{a:?}");
         assert_eq!(launch(false).env(), [("PLATOON_TASK", "5:p1".to_string())]);
-    }
-
-    #[test]
-    fn the_mcp_servers_that_run_a_process_are_read_from_config_toml() {
-        let text = r#"
-model = "gpt-6-luna"
-[mcp_servers.docs]
-command = "npx"
-args = ["-y", "docs-server"]
-[mcp_servers.docs.env]
-TOKEN = "x"
-[mcp_servers.remote]
-url = "https://example.invalid/mcp"
-[mcp_servers.off]
-command = "off-server"
-enabled = false
-[mcp_servers.odd]
-command = "odd"
-args = "not a list"
-[mcp_servers.plain]
-command = "plain-server"
-[projects."/work/repo"]
-trust_level = "trusted"
-"#;
-        let got = mcp_servers(text).unwrap();
-        assert_eq!(
-            got,
-            [
-                McpServer { name: "docs".into(), command: "npx".into(), args: vec!["-y".into(), "docs-server".into()] },
-                McpServer { name: "plain".into(), command: "plain-server".into(), args: vec![] },
-            ]
-        );
-        assert!(mcp_servers("model = ").is_err());
-        assert_eq!(mcp_servers("").unwrap(), []);
     }
 
     #[test]
