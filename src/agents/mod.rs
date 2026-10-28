@@ -138,11 +138,26 @@ impl Agent {
 
     /// Read one call of a hook platoon installed for `kind`: None when the input isn't one (not JSON, no session id),
     /// or is an event of that kind platoon has nothing to do with.
+    /// One that isn't one goes in the diagnostics log: the agent may have changed what its hooks are given.
     pub fn hook_input(self, kind: HookKind, input: &str) -> Option<HookInput> {
-        match self {
+        let read = match self {
             Agent::Claude => claude::hook_input(kind, input),
             Agent::Codex => codex::hook_input(kind, input),
+        };
+        if read.is_none() {
+            let v = serde_json::from_str::<serde_json::Value>(input).ok();
+            let why = match &v {
+                None if input.trim().is_empty() => Some("empty"),
+                None => Some("not-json"),
+                Some(v) if v.get("session_id").and_then(serde_json::Value::as_str).is_none() => Some("no-session-id"),
+                Some(_) => None,
+            };
+            if let Some(why) = why {
+                let at = [("agent", self.into()), ("kind", kind.word().into()), ("why", why.into()), ("bytes", input.len().into())];
+                crate::diag::error("hook", "input-not-understood", &at);
+            }
         }
+        read
     }
 
     /// What a hook's process says back for `reply`.
@@ -406,6 +421,20 @@ pub enum HookKind {
     PermissionWait,
     /// The agent has finished its turn.
     Stop,
+}
+
+impl HookKind {
+    /// A word for it, for the diagnostics log.
+    pub fn word(self) -> &'static str {
+        match self {
+            HookKind::SessionStart => "session-start",
+            HookKind::Prompt => "prompt",
+            HookKind::BeforeTool(_) | HookKind::BeforeAnyTool => "before-tool",
+            HookKind::AfterTool => "after-tool",
+            HookKind::PermissionWait => "permission-wait",
+            HookKind::Stop => "stop",
+        }
+    }
 }
 
 /// A tool whose use moves a task along.

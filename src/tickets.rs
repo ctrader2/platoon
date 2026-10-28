@@ -114,7 +114,7 @@ pub enum Need {
 }
 
 impl Need {
-    fn id(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
             Need::Plan => "plan",
             Need::Question(_) => "question",
@@ -170,7 +170,7 @@ pub enum State {
 }
 
 impl State {
-    fn id(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
             State::NotStarted => "not_started",
             State::Working => "working",
@@ -897,6 +897,7 @@ impl Tickets {
     fn update_at(&mut self, number: u32, keep_time: bool, f: impl FnOnce(&mut Ticket) -> bool) -> io::Result<bool> {
         const NOTHING: &str = "\u{0}nothing to change";
         let now = now_secs();
+        let mut moved: Option<(State, State)> = None;
         let r = self.change(|root, _| {
             let o = root
                 .get_mut(KEY)
@@ -905,8 +906,12 @@ impl Tickets {
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| format!("there is no task #{number} any more"))?;
             let mut t = ticket_from(&Value::Object(o.clone())).ok_or_else(|| format!("#{number} can't be read"))?;
+            let before = t.state.clone();
             if !f(&mut t) {
                 return Err(NOTHING.to_string());
+            }
+            if t.state != before {
+                moved = Some((before, t.state.clone()));
             }
             if !keep_time {
                 t.updated = now;
@@ -914,6 +919,14 @@ impl Tickets {
             ticket_into(&t, o);
             Ok(())
         });
+        if let (Ok(()), Some((from, to))) = (&r, &moved) {
+            let need = if let State::NeedsYou(n) = to { Some(n.id()) } else { None };
+            crate::diag::decision(
+                "task",
+                "state",
+                &[("task", number.into()), ("from", from.id().into()), ("to", to.id().into()), ("need", need.into())],
+            );
+        }
         match r {
             Ok(()) => Ok(true),
             Err(e) if e.to_string() == NOTHING => Ok(false),

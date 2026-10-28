@@ -18,6 +18,7 @@ mod contrast_app_tests;
 #[cfg(test)]
 mod density_app_tests;
 mod describe;
+mod diag;
 mod dirs;
 #[cfg(test)]
 mod draft_app_tests;
@@ -69,6 +70,7 @@ mod projects;
 #[cfg(test)]
 mod projects_app_tests;
 mod prompts;
+mod report;
 mod scan;
 #[cfg(test)]
 mod search_app_tests;
@@ -136,6 +138,7 @@ use std::{
 };
 
 fn main() -> io::Result<()> {
+    start_log(std::env::args().nth(1).as_deref());
     match std::env::args().nth(1).as_deref() {
         None => {}
         Some("--version" | "-V") => {
@@ -155,15 +158,19 @@ fn main() -> io::Result<()> {
             let providers = agents::Providers::here(&archive::config_dir());
             std::process::exit(ai::tokens_cli(&args, &usage::cache_dir(), &archive::config_dir(), &providers, &mut out, &mut err));
         }
+        Some("report") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(report::cli(&args, &mut io::stdout(), &mut io::stderr()));
+        }
         Some("open") => {
             require_setup();
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(open::run(&args));
         }
         // Claude Code's hooks name no agent; Codex's say `--agent codex`.
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard(hook_agent())),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run(hook_agent())),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook(hook_agent())),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => timed_hook("guard", guard::run_guard),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => timed_hook("session-start", sessionhook::run),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => timed_hook("stop", notesrun::run_hook),
         // Kept as a silent no-op: Claude Code sessions an older platoon started (1.0.x) carry a `--settings` hook that runs
         // `hook offer-tasks` before their first edit, and must not see it fail after an upgrade. The offer to make tasks is
         // the /to-tickets skill now (`skill.rs`).
@@ -176,8 +183,9 @@ fn main() -> io::Result<()> {
         }
         // Claude Code's are given only to a task's session, with `--settings` (never installed in the user's own
         // settings); Codex's are in its hooks file for every session and act only in a task's (`PLATOON_TASK`).
-        Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
-            std::process::exit(taskrun::run_hook(&std::env::args().nth(2).unwrap_or_default(), hook_agent()))
+        Some("hook") if task_hook().is_some() => {
+            let name = task_hook().unwrap_or_default();
+            timed_hook(name, |agent| taskrun::run_hook(name, agent))
         }
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -251,6 +259,45 @@ fn stop_asking_the_terminal() {
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
 }
 
+/// Start this process's diagnostics log (`diag.rs`), named after what it is, and have it record a panic. Not for what
+/// does nothing worth a line.
+fn start_log(command: Option<&str>) {
+    let kind = match command {
+        None => "app",
+        Some("host") => "host",
+        Some("hook") => "hook",
+        Some("statusline") => "statusline",
+        Some("notes-update") => "notes",
+        Some("setup") => "setup",
+        Some("open") => "open",
+        Some("task") => "task",
+        Some("tokens") => "tokens",
+        // Not `report`, which only reads, and `uninstall`, which deletes the cache the log is in.
+        Some(_) => return,
+    };
+    diag::init(kind, &usage::cache_dir(), &archive::config_dir());
+    diag::catch_panics();
+}
+
+/// Run hook `name` for the agent it is called for, note how long it took and how it ended, and exit with its code. The
+/// two that run around every tool call of a task's session are noted only when slow or failing, so they don't fill the
+/// log.
+fn timed_hook(name: &'static str, run: impl FnOnce(agents::Agent) -> i32) -> ! {
+    const EVERY_TOOL: [&str; 2] = ["task-before", "task-tool"];
+    let (agent, start) = (hook_agent(), Instant::now());
+    let code = run(agent);
+    let took = start.elapsed();
+    if !EVERY_TOOL.contains(&name) || code != 0 || took >= Duration::from_millis(250) {
+        diag::decision("hook", "ran", &[("hook", name.into()), ("agent", agent.into()), ("took", took.into()), ("exit", code.into())]);
+    }
+    std::process::exit(code)
+}
+
+/// The task hook `platoon hook <name>` names (`taskrun::HOOKS`), if it names one.
+fn task_hook() -> Option<&'static str> {
+    std::env::args().nth(2).and_then(|h| taskrun::HOOKS.iter().copied().find(|k| *k == h))
+}
+
 /// The agent a `platoon hook <kind> [--agent <id>]` is for.
 fn hook_agent() -> agents::Agent {
     agents::agent_arg(&std::env::args().skip(3).collect::<Vec<_>>())
@@ -272,7 +319,7 @@ fn version_line() -> String {
 }
 
 const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task squads | task step |
-               themes | tokens | uninstall | --version]
+               themes | tokens | report | uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. The back key (Ctrl+Space unless
@@ -293,6 +340,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   themes          list the color themes: the built-in ones and your own
   tokens [status | test]   show whether the smart features are on and how many tokens they used
                   today; `test` makes one tiny call on their model (Claude's or Codex's)
+  report [--hide-names] [--out <file> | --stdout]   write what a bug report needs into one plain-text
+                  file you can read first: versions, setup, settings, counts of your sessions and
+                  tasks, the sessions platoon runs, the usage figures and the diagnostics log; no
+                  conversation content and no secrets (--hide-names: no project or folder names)
   uninstall [--all] [--stop-sessions]   take platoon's settings and hooks out of Claude Code and
                   Codex (and Codex's trust in them) and delete its cache;
                   asks before deleting your projects, notes, tasks and settings (--all: without
@@ -393,9 +444,11 @@ fn setup() -> io::Result<()> {
             report.notes.extend(versions::setup_line(claude_program.as_deref(), versions::off_by_env()));
             let codex_program = providers.codex.as_ref().map(|c| c.program.as_str());
             report.notes.extend(versions::codex_setup_line(codex_program, versions::off_by_env()));
+            setup::log_report(&report);
             println!("{}", setup::render_report(&report, &root, use_color(false)));
         }
         Err(e) => {
+            diag::error("setup", "failed", &[]);
             eprintln!("platoon setup failed: {e}");
             std::process::exit(1);
         }
@@ -2164,7 +2217,11 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, P + 1);
-        assert_eq!(ITEMS.len(), 6, "the General tab: the two programs, the theme, two numbers and the check for a newer platoon");
+        assert_eq!(
+            ITEMS.len(),
+            7,
+            "the General tab: the two programs, the theme, two numbers, the check for a newer platoon and the diagnostics log"
+        );
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -2816,6 +2873,31 @@ mod tests {
         assert!(on_disk(&w).update_check, "already at the end");
         let buf = term.backend().buffer();
         assert_eq!(buf[(next.x + 1, next.y)].fg, app.theme.border, "the button that can't go further is muted");
+    }
+
+    #[test]
+    fn the_diagnostics_log_switch_is_drawn_steps_and_is_saved_like_the_other_switches() {
+        let w = World::new("set-diag-log");
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.setting, P + 4);
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("Keep a diagnostics log") && shown.contains("platoon report"), "{shown}");
+        assert!(!config_file(&w).exists() || !on_disk(&w).diagnostics_log, "off until switched on");
+        key(&mut app, KeyCode::Right);
+        assert!(on_disk(&w).diagnostics_log);
+        let shown = draw(&mut term, &app);
+        let row = shown.lines().find(|l| l.contains("Keep a diagnostics log")).unwrap_or_default();
+        assert!(row.split_whitespace().collect::<Vec<_>>().ends_with(&["‹", "On", "›", "│"]), "{shown}");
+        key(&mut app, KeyCode::Enter);
+        assert!(!on_disk(&w).diagnostics_log, "enter goes to the other choice");
+        draw(&mut term, &app);
+        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 4));
+        click(&mut app, value.x + 1, value.y);
+        assert!(on_disk(&w).diagnostics_log, "a click on the value too");
+        assert!(on_disk(&w).update_check && on_disk(&w).idle_stop_minutes == 120, "the other settings are untouched");
     }
 
     #[test]

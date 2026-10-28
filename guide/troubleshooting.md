@@ -1,6 +1,7 @@
 # Troubleshooting
 
-Short answers to things that can go wrong, with a link to where each is explained.
+Short answers to things that can go wrong, with a link to where each is explained. When none of them fits, see
+[Reporting a problem](#reporting-a-problem) at the end.
 
 ## Starting
 
@@ -140,3 +141,39 @@ the question is. See [How the task follows its session](tasks-and-squads.md#how-
 how its repo runs its tests and to name the command and the result in its last message. The check found no such
 line. Tell the session how to run them (`enter` opens it), or put it in the repo's `CLAUDE.md` so every session finds
 it. See [The check of the work](tasks-and-squads.md#the-check-of-the-work).
+
+## Reporting a problem
+
+**`platoon report`** gathers what someone fixing a bug needs into one plain-text file, says where it put it, and sends
+nothing anywhere: you read it, then attach it to a [bug report](https://github.com/ctrader2/platoon/issues/new/choose)
+or an email.
+
+```
+platoon report                 # writes platoon-report-<date>.txt in the current folder
+platoon report --hide-names    # the same, with every project and folder name replaced by project-1, folder-2, ...
+platoon report --stdout        # prints it instead (--out <file> writes it somewhere else)
+```
+
+**What is in it**: platoon's version and how it was installed, Claude Code's and Codex's versions, your system and
+terminal (its name and size); where each step of `platoon setup` stands; platoon's own settings; how many conversations,
+projects and tasks there are (counts, and each task's number, state, squad and worktree state); the sessions platoon
+runs, with their folders, how long they have run, whether they are idle, why one is kept, and the programs running
+under them by name; the plan usage figures each session reported and what the meter chose; what the smart features
+spent each day; and the last lines of the diagnostics log. Folders are shown from `~`, so your user name isn't in it.
+
+**What is never in it**: anything said in a conversation (prompts, replies, notes, task and squad text, summaries, the
+names you gave sessions); a program's arguments (they can hold tokens), environment variables' values, your `.env`
+files; anything from Claude Code's `~/.claude.json` or from Codex's `config.toml` and `auth.json`; and nothing from
+Claude Code's `settings.json` but whether platoon's own entries are in place. Project and folder names are in it unless
+you add `--hide-names`.
+
+**The diagnostics log** (`diagnostics.log` in platoon's cache folder) is what lets a report say why platoon did
+something, not just how things stand. platoon always writes down its errors there: a hook given something it couldn't
+read, a session that couldn't start, a crash (where it happened, not what it was working on), a failed call on your
+plan. Switch on **Keep a diagnostics log** (Settings, General) and it also writes down what it decides and why: a
+session stopped or kept and the reason, what the usage meter chose and from which reports, each call on your plan
+(which feature, which model, how long, how many tokens), each task moving from one state to another, each hook that
+ran and how long it took. Each line is a time, the part of platoon that wrote it, and a few words and numbers: session
+ids, program names, durations, counts. It never holds conversation content, commands or paths. It stays small: at 1 MB
+it starts over, keeping the one before as `diagnostics.log.1`. To report a problem that comes and goes, switch it on,
+wait for the problem to happen again, then run `platoon report`.

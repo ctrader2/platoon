@@ -214,6 +214,19 @@ pub fn wait_text(secs: u64) -> String {
 }
 
 impl Refusal {
+    /// A word for it, for the diagnostics log.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Refusal::MasterOff => "master-off",
+            Refusal::FeatureOff(_) => "feature-off",
+            Refusal::UnknownFeature(_) => "unknown-feature",
+            Refusal::BackedOff { .. } => "backed-off",
+            Refusal::OverBudget { .. } => "over-budget",
+            Refusal::PlanBusy { .. } => "plan-busy",
+            Refusal::NoModel(..) => "no-model",
+        }
+    }
+
     /// The reason in plain words, as a sentence.
     pub fn plain(&self) -> String {
         use crate::settings::thousands;
@@ -569,6 +582,15 @@ pub enum AiError {
 }
 
 impl AiError {
+    /// A word for it, for the diagnostics log.
+    pub fn word(&self) -> &'static str {
+        match self {
+            AiError::Refused(r) => r.word(),
+            AiError::Cancelled => "cancelled",
+            AiError::Failed { kind, .. } => kind.name(),
+        }
+    }
+
     pub fn plain(&self) -> String {
         match self {
             AiError::Refused(r) => r.plain(),
@@ -775,7 +797,35 @@ impl Runner {
         Ok(())
     }
 
+    /// Run the call, and note it in the diagnostics log: its feature, model and agent, how long it took, the tokens it
+    /// used, and how it ended (never what was asked or answered).
     pub fn run(&self, settings: &Settings, req: &Request) -> Result<Reply, AiError> {
+        let began = Instant::now();
+        let result = self.call(settings, req);
+        let (outcome, kind, agent, model, tokens) = match &result {
+            Ok(r) => ("ok", None, self.providers.catalog().agent_of(&r.model), crate::diag::ident(&r.model), Some(r.usage.total())),
+            Err(AiError::Refused(r)) => ("refused", Some(r.word()), None, crate::diag::Safe::Word("-"), None),
+            Err(AiError::Cancelled) => ("cancelled", None, None, crate::diag::Safe::Word("-"), None),
+            Err(AiError::Failed { agent, kind, .. }) => ("failed", Some(kind.name()), Some(*agent), crate::diag::Safe::Word("-"), None),
+        };
+        let fields = [
+            ("feature", crate::diag::Safe::Word(req.feature)),
+            ("outcome", outcome.into()),
+            ("why", kind.into()),
+            ("agent", agent.into()),
+            ("model", model),
+            ("took", began.elapsed().into()),
+            ("tokens", tokens.into()),
+        ];
+        if matches!(result, Err(AiError::Failed { .. })) {
+            crate::diag::error("ai", "call", &fields);
+        } else {
+            crate::diag::decision("ai", "call", &fields);
+        }
+        result
+    }
+
+    fn call(&self, settings: &Settings, req: &Request) -> Result<Reply, AiError> {
         let start = self.now();
         let gated = !part_of_a_task(req.feature);
         if gated {

@@ -172,6 +172,9 @@ pub struct Settings {
     pub use_claude_code: bool,
     /// Use Codex, the same way.
     pub use_codex: bool,
+    /// Keep a diagnostics log of what platoon decides and why (`diag.rs`), for `platoon report`. Off unless the user
+    /// switched it on; errors are written down either way.
+    pub diagnostics_log: bool,
 }
 
 impl Default for Settings {
@@ -210,6 +213,7 @@ impl Default for Settings {
             new_session_agent: None,
             use_claude_code: true,
             use_codex: true,
+            diagnostics_log: false,
         }
     }
 }
@@ -373,6 +377,7 @@ fn parse(text: &str) -> Option<Settings> {
             new_session_agent: o.get("new_session_agent").and_then(Value::as_str).map(str::to_string),
             use_claude_code: o.get("use_claude_code").and_then(Value::as_bool).unwrap_or(d.use_claude_code),
             use_codex: o.get("use_codex").and_then(Value::as_bool).unwrap_or(d.use_codex),
+            diagnostics_log: o.get("diagnostics_log").and_then(Value::as_bool).unwrap_or(d.diagnostics_log),
         }
         .clamped(),
     )
@@ -461,6 +466,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("update_check".into(), json!(s.update_check));
     object.insert("use_claude_code".into(), json!(s.use_claude_code));
     object.insert("use_codex".into(), json!(s.use_codex));
+    object.insert("diagnostics_log".into(), json!(s.diagnostics_log));
     // Written only once the user has chosen (`n`'s question): until then nothing is remembered.
     if let Some(a) = &s.new_session_agent {
         object.insert("new_session_agent".into(), json!(a));
@@ -559,6 +565,9 @@ pub const CODEX_COST: &str = "A call on Codex costs about 13,000 to 20,000 token
 /// The two program switches' names on the settings screen.
 pub const USE_CLAUDE_CODE: &str = "Use Claude Code";
 pub const USE_CODEX: &str = "Use Codex";
+
+/// The diagnostics log's switch on the settings screen.
+pub const DIAGNOSTICS_LOG: &str = "Keep a diagnostics log";
 
 /// The two model settings' names on the settings screen.
 pub const SMART_MODEL_NAME: &str = "Model for smart features";
@@ -847,6 +856,18 @@ fn general_items() -> Vec<Item> {
             get: |s| u64::from(s.update_check),
             set: |s, v| s.update_check = v != 0,
             label: |v| if v == 0 { "Off".into() } else { "Once a day".into() },
+            off: Some(0),
+        },
+        Item {
+            name: DIAGNOSTICS_LOG,
+            explain: "On: platoon writes down what it decides and why (a session kept running or stopped, what the usage \
+                      meter shows, each call on your plan) in a small file on this computer, for a bug report (platoon \
+                      report). Errors are written down either way. Never your conversations, and nothing is sent anywhere.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.diagnostics_log),
+            set: |s, v| s.diagnostics_log = v != 0,
+            label: on_off,
             off: Some(0),
         },
     ]
@@ -1412,6 +1433,7 @@ mod tests {
                 "update_check",
                 "use_claude_code",
                 "use_codex",
+                "diagnostics_log",
                 "token_features",
                 "theme"
             ],
@@ -1627,7 +1649,15 @@ mod tests {
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(
             names("General"),
-            ["Use Claude Code", "Use Codex", "Theme", "Stop idle sessions after", "Archive sessions after", "Check for a newer platoon"]
+            [
+                "Use Claude Code",
+                "Use Codex",
+                "Theme",
+                "Stop idle sessions after",
+                "Archive sessions after",
+                "Check for a newer platoon",
+                "Keep a diagnostics log"
+            ]
         );
         assert_eq!(
             names("Search"),
@@ -2163,6 +2193,31 @@ mod tests {
         // Only a real true/false counts.
         fs::write(path_in(&d), r#"{"update_check":"no"}"#).unwrap();
         assert!(load(&d).0.update_check);
+    }
+
+    #[test]
+    fn the_diagnostics_log_is_off_by_default_switched_on_general_and_saved() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-diag-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        assert!(!Settings::default().diagnostics_log);
+        let (tab, at) = find_item(DIAGNOSTICS_LOG).expect("on the settings screen");
+        assert_eq!((TABS[tab].title, at), ("General", TABS[tab].items.len() - 1), "the last entry of General");
+        let item = &TABS[tab].items[at];
+        assert_eq!(item.choices.iter().map(|&c| (item.label)(c)).collect::<Vec<_>>(), ["Off", "On"]);
+        assert_eq!(item.off, Some(0));
+        assert!(item.explain.contains("platoon report") && item.explain.contains("nothing is sent anywhere"), "{}", item.explain);
+        let mut s = Settings::default();
+        assert_eq!((item.label)(item.value(&s)), "Off");
+        item.assign(&mut s, 1);
+        assert!(s.diagnostics_log);
+        save(&d, &s).unwrap();
+        assert!(load(&d).0.diagnostics_log);
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!(v["diagnostics_log"], true);
+        // Only a real true/false counts.
+        fs::write(path_in(&d), r#"{"diagnostics_log":"yes"}"#).unwrap();
+        assert!(!load(&d).0.diagnostics_log);
     }
 
     #[test]

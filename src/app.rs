@@ -1723,6 +1723,11 @@ impl App {
             Ok(()) => {
                 for s in self.sessions.iter_mut().filter(|s| ids.contains(&s.id)) {
                     s.archived = true;
+                    crate::diag::decision(
+                        "archive",
+                        "auto-archived",
+                        &[("session", crate::diag::session(&s.id)), ("after_days", days.into())],
+                    );
                 }
                 let (n, plural) = (ids.len(), if ids.len() == 1 { "" } else { "s" });
                 let (them, day) = (if n == 1 { "it" } else { "them" }, if days == 1 { "day" } else { "days" });

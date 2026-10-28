@@ -113,6 +113,64 @@ pub enum Outcome {
     Skipped(String),
 }
 
+impl Outcome {
+    /// A word for it, for the diagnostics log.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Outcome::AlreadyDone => "already-done",
+            Outcome::Added => "added",
+            Outcome::Repaired => "repaired",
+            Outcome::Skipped(_) => "skipped",
+        }
+    }
+}
+
+impl State {
+    /// A word for it, for the diagnostics log and `platoon report`.
+    pub fn word(&self) -> &'static str {
+        match self {
+            State::Done => "done",
+            State::Missing => "missing",
+            State::Broken(_) => "broken",
+            State::Skipped(_) => "left-alone",
+        }
+    }
+}
+
+/// What setup did, in the diagnostics log: each step's outcome, by its name (never a path or a command).
+pub fn log_report(r: &Report) {
+    if r.claude {
+        for (step, o) in STEPS.iter().zip(&r.outcomes) {
+            crate::diag::decision("setup", "claude-step", &[("step", step.name.into()), ("outcome", o.word().into())]);
+        }
+    }
+    if let Some(k) = &r.skill {
+        let outcome = match k {
+            crate::skill::Installed::Added => "added",
+            crate::skill::Installed::Updated => "updated",
+            crate::skill::Installed::AlreadyDone => "already-done",
+            crate::skill::Installed::NotOurs(_) => "not-ours",
+            crate::skill::Installed::Failed(_) => "failed",
+        };
+        crate::diag::decision("setup", "skill", &[("outcome", outcome.into())]);
+    }
+    if let Some(c) = &r.codex {
+        for (step, o) in CODEX_STEPS.iter().zip(&c.outcomes) {
+            crate::diag::decision("setup", "codex-step", &[("step", step.name.into()), ("outcome", o.word().into())]);
+        }
+        if c.error.is_some() {
+            crate::diag::error("setup", "codex-hooks-file", &[("outcome", "left-alone".into())]);
+        }
+        let trust = match &c.trust {
+            None => "not-asked",
+            Some(Trust::Asked(v)) if v.iter().all(|t| *t != HookTrust::Not) => "trusted",
+            Some(Trust::Asked(_)) => "not-all-trusted",
+            Some(Trust::Failed(_)) => "codex-not-asked",
+        };
+        crate::diag::decision("setup", "codex-trust", &[("outcome", trust.into())]);
+    }
+}
+
 pub struct Report {
     /// Claude Code is installed, and these are its steps' outcomes (`STEPS` order).
     pub claude: bool,
@@ -657,6 +715,37 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
         Ok(backed_up) => CodexReport { outcomes, saved: Some(path), backed_up, error: None, trust: None },
         Err(e) => fail(e),
     }
+}
+
+/// Where each of Codex's steps stands in its hooks file under `codex_root`, in `CODEX_STEPS` order, as `run_codex` would
+/// find it: a step is done when all its hooks are. Only reads. None when the file is there but can't be read or isn't
+/// a JSON object (setup leaves such a file alone).
+pub fn check_codex(codex_root: &Path) -> Option<Vec<State>> {
+    let v: Value = match fs::read_to_string(codex::hooks_path(codex_root)) {
+        Ok(text) => serde_json::from_str::<Value>(&text).ok().filter(Value::is_object)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(_) => return None,
+    };
+    let states = codex_steps().into_iter().map(|step| {
+        let each: Vec<State> = step
+            .into_iter()
+            .map(|h| {
+                let ours = |c: &str| c.contains("platoon") && args_of(c) == h.args;
+                match commands_state(&hook_commands(&v, h.event, ours)) {
+                    State::Done if !codex_hook_as_written(&v, h) => State::Broken("its matcher or time changed".into()),
+                    other => other,
+                }
+            })
+            .collect();
+        if each.iter().all(State::satisfied) {
+            State::Done
+        } else if let Some(b) = each.iter().find(|s| matches!(s, State::Broken(_))) {
+            State::Broken(b.word().into())
+        } else {
+            State::Missing
+        }
+    });
+    Some(states.collect())
 }
 
 /// Is every one of platoon's commands for `h` in `v` (Codex's hooks file) in a group with `h`'s matcher, and given

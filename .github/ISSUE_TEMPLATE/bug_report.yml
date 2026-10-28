@@ -39,6 +39,13 @@ body:
         3. See ...
     validations:
       required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: platoon report
+      description: |
+        Run `platoon report` (add `--hide-names` to leave your project and folder names out) and drag the file it writes in here. It holds no conversation content and no secrets, but read it first. For a problem that comes and goes, turn on "Keep a diagnostics log" in platoon's settings first, wait for it to happen again, then run it.
+      placeholder: Drag platoon-report-<date>.txt here.
   - type: input
     id: platoon-version
     attributes:

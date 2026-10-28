@@ -158,6 +158,10 @@ small marks its parts leave for each other.
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
 - `setup-notice.json`: what platoon has already told you `platoon setup` has to add (see
   [Install and set up](install-and-setup.md#the-to-tickets-skill))
+- `diagnostics.log` and `diagnostics.log.1`: platoon's errors, and with "Keep a diagnostics log" on what it decided and
+  why, in words and numbers only, never more than about 2 MB together (see
+  [Reporting a problem](troubleshooting.md#reporting-a-problem))
+- `reports/`: only when `platoon report` couldn't write its file in the current folder or your home folder
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 
@@ -202,6 +206,10 @@ whether a newer platoon is out:
 - **Switching it off**: "Check for a newer platoon" on the General tab of the settings (`"update_check": false` in
   `settings.json`), or `PLATOON_NO_UPDATE_CHECK=1` in the environment, which also stops platoon asking `claude` and
   `codex` for their versions. With either, platoon makes no network request at all.
+
+When something goes wrong, [`platoon report`](troubleshooting.md#reporting-a-problem) writes what a bug report needs
+into a file on your computer and says where it is; it sends nothing. You read it, and you decide whether it goes
+anywhere.
 
 Otherwise platoon talks only to the programs it starts on your computer (`claude`, `codex`, `git`, `curl` for the check
 above, your editors) and, over sockets in its cache folder, to its own session hosts. `claude` itself talks to

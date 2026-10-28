@@ -121,13 +121,16 @@ fn a_two_choice_entry_is_listed_explained_and_saved_from_the_real_screen_at_80_c
     assert!(!base.join("config/settings.json").exists(), "looking at the screen writes nothing");
 
     t.send(b"\x1b[D"); // left: Off
-    t.wait_for_flat("‹ Off ›"); // (the explanation, on screen already, says it too)
+    // (The explanation, on screen already, says "Off" too, and so does the diagnostics log's switch below: the row.)
+    let row_says = |t: &mut Term, value: &str| t.text().lines().any(|l| l.contains("Check for a newer platoon") && l.contains(value));
+    until("the row to say Off", || row_says(&mut t, "‹          Off          ›"));
     until("the choice to reach the file", || saved_ok(&base) && saved(&base)["update_check"] == serde_json::json!(false));
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "the other settings are written as they were");
 
     // The value itself is a button that goes to the other choice (and back).
     let screen = t.text();
-    let (col, row) = find(&screen, "Off");
+    let row = screen.lines().position(|l| l.contains("Check for a newer platoon")).unwrap();
+    let col = screen.lines().nth(row).unwrap().find(" Off ").map(|b| screen.lines().nth(row).unwrap()[..b + 1].chars().count()).unwrap();
     t.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", col + 2, row + 1, col + 2, row + 1).as_bytes());
     until("the click to reach the file", || saved(&base)["update_check"] == serde_json::json!(true));
     t.wait_for_flat("‹ Once a day ›");

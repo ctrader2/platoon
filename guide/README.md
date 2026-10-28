@@ -14,6 +14,6 @@ differently in Codex, the page says so beside it.
 | [Settings and keys](settings-and-keys.md) | Every setting, the settings file, system prompts for each smart feature, the back and quit keys, environment variables |
 | [Features that use tokens](tokens.md) | What asks Claude or Codex through your plan, how to turn it on, what is sent, the limits, and `platoon tokens` |
 | [What platoon changes](what-platoon-changes.md) | The hooks and files platoon adds, what a task's session may do, the folders it writes, its one network request (no telemetry), and how to remove it |
-| [Troubleshooting](troubleshooting.md) | Short answers to things that can go wrong, with links to the details |
+| [Troubleshooting](troubleshooting.md) | Short answers to things that can go wrong, with links to the details, and how to report a problem (`platoon report`) |
 
 Want to help? [CONTRIBUTING.md](../CONTRIBUTING.md) says how to report a bug, suggest an idea or send a change.

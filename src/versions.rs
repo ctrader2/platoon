@@ -291,7 +291,7 @@ pub fn decide(state: &State, found: Found, install: &Install) -> Option<(String,
 
 /// Run `program args`, wait at most `wait`, and give back what it printed when it succeeded. A program that is
 /// missing, fails or takes too long gives nothing (one that took too long is stopped: it is ours).
-fn output_of(program: &str, args: &[&str], wait: Duration) -> Option<String> {
+pub fn output_of(program: &str, args: &[&str], wait: Duration) -> Option<String> {
     let mut child =
         crate::ai::spawn_retrying(Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()))
             .ok()?;
@@ -385,16 +385,33 @@ pub fn run(c: &Checks) -> Option<Outcome> {
     let mut state = State::load(&c.cache);
     let claude = c.claude.as_deref().and_then(claude_version);
     let codex = c.codex.as_deref().and_then(codex_version);
-    if c.update_check && state.due(c.now) {
+    let asked = c.update_check && state.due(c.now);
+    let mut answered = false;
+    if asked {
         state.checked_at = c.now;
         if let Some(latest) = fetch_latest(&c.curl, &c.url) {
             state.latest = Some(latest);
+            answered = true;
         }
         let _ = state.save(&c.cache);
     }
     let found =
         Found { claude: claude.as_deref(), codex: codex.as_deref(), running: running(), checked: (checked_with(), codex_checked_with()) };
-    let (text, state) = decide(&state, found, &c.install)?;
+    let decided = decide(&state, found, &c.install);
+    let word = |v: Option<&str>| v.map(crate::diag::ident);
+    crate::diag::decision(
+        "version",
+        "checked",
+        &[
+            ("claude", word(claude.as_deref()).into()),
+            ("codex", word(codex.as_deref()).into()),
+            ("asked_github", asked.into()),
+            ("github_answered", answered.into()),
+            ("latest", word(state.latest.as_deref()).into()),
+            ("notice", decided.is_some().into()),
+        ],
+    );
+    let (text, state) = decided?;
     Some(Outcome { text, state })
 }
 

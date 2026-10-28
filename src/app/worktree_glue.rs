@@ -151,6 +151,17 @@ impl App {
         if let Some(Ok(_)) = forgot {
             let _ = store.set_codex_trust(number, None);
         }
+        let outcome = match &got {
+            Removal::Removed => "removed",
+            Removal::Uncommitted => "kept-uncommitted",
+            Removal::Refused(_) => "refused",
+        };
+        let trust = forgot.as_ref().map(|f| if f.is_ok() { "forgotten" } else { "codex-not-asked" });
+        crate::diag::decision(
+            "worktree",
+            "after-the-work",
+            &[("task", number.into()), ("outcome", outcome.into()), ("codex_trust", trust.into())],
+        );
         let branch = store.get(number).map(Ticket::branch).unwrap_or_else(|| crate::tickets::task_branch(number));
         let said = match got {
             Removal::Removed => store

@@ -36,7 +36,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -177,31 +177,41 @@ pub fn discover() -> Vec<HostInfo> {
 pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
     let Ok(dir) = hosts_dir_in(cache) else { return Vec::new() };
     let mut out = Vec::new();
-    for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+    for (path, info, _) in host_files(&dir) {
+        if !pid_alive(info.claude_pid) {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(&info.sock);
+            continue;
+        }
+        out.push(info);
+    }
+    out
+}
+
+/// Every host's file in the hosts folder `dir`, read (its path, what it says, and the file as JSON), whether or not its
+/// session still runs. Only reads.
+pub fn host_files(dir: &Path) -> Vec<(PathBuf, HostInfo, Value)> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = e.path();
         if path.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
         let Some(v) = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
         let (Some(claude_pid), Some(host_pid)) = (v["claude_pid"].as_u64(), v["host_pid"].as_u64()) else { continue };
-        let sock = dir.join(format!("{claude_pid}.sock"));
-        if !pid_alive(claude_pid as u32) {
-            let _ = fs::remove_file(&path);
-            let _ = fs::remove_file(&sock);
-            continue;
-        }
         let args = v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        out.push(HostInfo {
+        let info = HostInfo {
             agent: agent_of_info(&v),
             claude_pid: claude_pid as u32,
             host_pid: host_pid as u32,
             dir: v["dir"].as_str().unwrap_or("").to_string(),
             args,
-            sock,
+            sock: dir.join(format!("{claude_pid}.sock")),
             task: v["task"].as_str().filter(|t| !t.is_empty()).map(String::from),
             version: v.get("version").and_then(Value::as_str).map(String::from),
             kept: v.get("kept").and_then(Kept::from_json),
-        });
+        };
+        out.push((path, info, v));
     }
     out
 }
@@ -292,14 +302,15 @@ pub fn run(args: &[String]) -> i32 {
     }
     let Ok(hdir) = hosts_dir() else { return 1 };
     let me = std::process::id();
-    let fail = |msg: String| {
+    let fail = |what: &'static str, msg: String| {
+        crate::diag::error("host", "couldnt-start", &[("agent", agent.into()), ("what", what.into())]);
         let _ = fs::write(hdir.join(format!("{me}.err")), msg);
         1
     };
 
     let pair = match native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
         Ok(p) => p,
-        Err(e) => return fail(e.to_string()),
+        Err(e) => return fail("pty", e.to_string()),
     };
     let mut cmd = CommandBuilder::new(&program);
     cmd.args(&rest);
@@ -314,17 +325,17 @@ pub fn run(args: &[String]) -> i32 {
     }
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
-        Err(e) => return fail(format!("couldn't start {program}: {e}")),
+        Err(e) => return fail("program", format!("couldn't start {program}: {e}")),
     };
     drop(pair.slave);
-    let Some(claude_pid) = child.process_id() else { return fail("no process id".into()) };
+    let Some(claude_pid) = child.process_id() else { return fail("no-pid", "no process id".into()) };
     let mut reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
-        Err(e) => return fail(e.to_string()),
+        Err(e) => return fail("pty-reader", e.to_string()),
     };
     let writer: Box<dyn Write + Send> = match pair.master.take_writer() {
         Ok(w) => w,
-        Err(e) => return fail(e.to_string()),
+        Err(e) => return fail("pty-writer", e.to_string()),
     };
 
     let sock_path = hdir.join(format!("{claude_pid}.sock"));
@@ -332,7 +343,7 @@ pub fn run(args: &[String]) -> i32 {
     let _ = fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
-        Err(e) => return fail(format!("couldn't create socket: {e}")),
+        Err(e) => return fail("socket", format!("couldn't create socket: {e}")),
     };
     let _ = fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o600));
 
@@ -347,6 +358,7 @@ pub fn run(args: &[String]) -> i32 {
         quiet_since: Mutex::new(Instant::now()),
         active_at: Mutex::new(Instant::now()),
         info: Mutex::new(None),
+        stopped: AtomicBool::new(false),
     });
 
     {
@@ -368,9 +380,15 @@ pub fn run(args: &[String]) -> i32 {
     }
     let file = InfoFile { value: info, path: info_path.clone(), tmp: hdir.join(format!(".{claude_pid}.tmp")) };
     if file.write().is_err() {
-        return fail("couldn't write host info".into());
+        return fail("info-file", "couldn't write host info".into());
     }
     *lock(&shared.info) = Some(file);
+    let started = Instant::now();
+    crate::diag::decision(
+        "host",
+        "started",
+        &[("agent", agent.into()), ("pid", claude_pid.into()), ("task", std::env::var_os(crate::agents::TASK_ENV).is_some().into())],
+    );
 
     {
         let shared = shared.clone();
@@ -398,7 +416,20 @@ pub fn run(args: &[String]) -> i32 {
             fed
         });
     }
-    let _ = child.wait();
+    let status = child.wait();
+    let (code, signal) = status.as_ref().map_or((None, None), |s| (Some(s.exit_code()), s.signal().map(crate::diag::ident)));
+    crate::diag::decision(
+        "host",
+        "exited",
+        &[
+            ("agent", agent.into()),
+            ("pid", claude_pid.into()),
+            ("code", code.into()),
+            ("signal", signal.into()),
+            ("idle_stopped", shared.stopped.load(Ordering::Relaxed).into()),
+            ("lived", started.elapsed().into()),
+        ],
+    );
     {
         // Under the lock, so the idle check can't write the file again once it is gone.
         let mut file = lock(&shared.info);
@@ -441,6 +472,8 @@ struct Shared {
     cleanup: Mutex<Option<thread::JoinHandle<()>>>,
     /// The host's file (`<pid>.json`), while it is there.
     info: Mutex<Option<InfoFile>>,
+    /// The idle stop has asked the agent to stop.
+    stopped: AtomicBool,
 }
 
 /// The host's file, as written, so a change (why the session is kept) can be written again whole.
@@ -455,6 +488,16 @@ impl InfoFile {
     fn write(&self) -> io::Result<()> {
         fs::write(&self.tmp, self.value.to_string())?;
         fs::rename(&self.tmp, &self.path)
+    }
+
+    /// Say how many windows are open on the session, writing the file only when that changed.
+    fn set_windows(&mut self, n: usize) {
+        let Some(o) = self.value.as_object_mut() else { return };
+        if o.get("windows").and_then(Value::as_u64) == Some(n as u64) {
+            return;
+        }
+        o.insert("windows".into(), json!(n));
+        let _ = self.write();
     }
 
     /// Say why the session is kept (None: it isn't, or nothing worth saying), writing the file only when that changed.
@@ -501,6 +544,19 @@ enum Reason {
 }
 
 impl Reason {
+    /// A word for it, for the diagnostics log.
+    fn word(&self) -> &'static str {
+        match self {
+            Reason::IdleStopOff => "idle-stop-off",
+            Reason::Viewer => "window",
+            Reason::NotIdle => "not-idle",
+            Reason::RecentOutput => "recent-output",
+            Reason::TaskAtWork => "task-at-work",
+            Reason::ProcessesUnknown => "processes-unknown",
+            Reason::Command(_) => "command",
+        }
+    }
+
     /// What the session's row says about it, once it has been `quiet` (no output, no window leaving) for the idle-stop
     /// time. None: nothing to say (still in its quiet time, or idle stop is off).
     fn kept(&self, quiet: bool) -> Option<Kept> {
@@ -610,6 +666,17 @@ impl Watchdog {
         }
     }
 
+    /// The decision in the diagnostics log, when it changed: what was decided and the first reason, with how long the
+    /// session has been quiet.
+    fn note(&self, decision: &Decision, quiet: Duration, windows: usize) {
+        let (event, why, program) = match decision {
+            Decision::Stop(_) => ("stop", "idle", None),
+            Decision::Keep(r) => ("keep", r.word(), if let Reason::Command(Some(w)) = r { crate::diag::Program::named(w) } else { None }),
+        };
+        let fields = [("agent", self.agent.into()), ("pid", self.claude_pid.into()), ("why", why.into()), ("program", program.into())];
+        crate::diag::changed("idle", 0, event, &fields, &[("quiet", quiet.into()), ("windows", windows.into())]);
+    }
+
     /// What the session's row is to say about the decision: why a session quiet since `active_at` is kept.
     fn kept(&self, decision: &Decision, now: Instant, active_at: Instant) -> Option<Kept> {
         let Decision::Keep(reason) = decision else { return None };
@@ -625,10 +692,13 @@ fn watch(sh: &Shared, mut dog: Watchdog) {
         let mut since = *lock(&sh.quiet_since);
         let now = Instant::now();
         let decision = dog.decide(now, viewers, &mut since);
+        dog.note(&decision, now.saturating_duration_since(since), viewers);
         // Why a quiet session is kept, in the host's file for the session's row.
         let kept = dog.kept(&decision, now, *lock(&sh.active_at));
         if let Some(file) = lock(&sh.info).as_mut() {
             file.set_kept(kept.as_ref());
+            // How many windows are open on it, for `platoon report`.
+            file.set_windows(viewers);
         }
         // Output or a window leaving during the decision means it is not idle after all.
         let stop = {
@@ -646,6 +716,13 @@ fn watch(sh: &Shared, mut dog: Watchdog) {
         let ours = dog.claude_pid > 1 && procs::ppid(dog.claude_pid) == Some(dog.host_pid);
         if stop && ours && lock(&sh.clients).is_empty() {
             unsafe { libc::kill(dog.claude_pid as i32, libc::SIGTERM) };
+            sh.stopped.store(true, Ordering::Relaxed);
+            let lefts = tracked.len();
+            crate::diag::decision(
+                "idle",
+                "stopped",
+                &[("agent", dog.agent.into()), ("pid", dog.claude_pid.into()), ("leftovers", lefts.into())],
+            );
             // Some MCP servers don't notice that claude has gone and would run on with nobody to talk to. Once
             // it has gone, those recorded before the stop (and still the same process) are asked to exit too.
             // Its own thread: an MCP server holding the terminal open also keeps this host's output loop going.

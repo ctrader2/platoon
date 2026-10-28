@@ -44,7 +44,6 @@ impl Names {
         self.names.get(id).map(String::as_str)
     }
 
-    #[cfg(test)]
     pub fn is_corrupt(&self) -> bool {
         self.corrupt
     }

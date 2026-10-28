@@ -13,6 +13,16 @@ here.
   "platoon's /to-tickets skill has an update" when a newer platoon changed it). It goes at your next key or click, and
   for good once setup has put the skill in. Before, updating to 1.1.0 without running setup again left `/to-tickets`
   out without a word.
+- **`platoon report`** writes what a bug report needs into one plain-text file and says where it is: versions, where
+  setup stands, platoon's settings, counts of your sessions and tasks, the sessions platoon runs and what runs under
+  them, the plan usage figures, and platoon's diagnostics log. It holds no conversation content, no command lines and
+  no secrets, and nothing is sent anywhere: you read it, then attach it to an issue or an email. `--hide-names` replaces
+  your project and folder names with placeholders.
+- **A diagnostics log**: platoon now writes down its errors (a hook it couldn't read, a session that couldn't start, a
+  crash, a failed call on your plan) in a small file in its cache folder, and with the new setting **Keep a diagnostics
+  log** (Settings, General; off unless you switch it on) also what it decides and why: a session stopped or kept and the
+  reason, what the usage meter chose, each call on your plan and the tokens it used. It holds words and numbers only,
+  never your conversations, and stays under about 2 MB.
 
 ## [1.1.0] - 2026-10-27
 

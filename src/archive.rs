@@ -95,7 +95,6 @@ impl Archive {
         self.touched.get(id).copied()
     }
 
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.ids.len()
     }

@@ -753,19 +753,26 @@ pub fn rate_limits(root: &Path, now: u64) -> Option<Vec<crate::usage::Limit>> {
         reported.extend(found);
     }
     let windows = reported.first()?;
-    Some(
-        windows
-            .iter()
-            .map(|w| {
-                let running = reported.iter().flatten().filter(|l| l.minutes == w.minutes && l.resets_at > now);
-                crate::usage::current(running.map(|l| (l.pct, l.resets_at))).map_or(*w, |(pct, resets_at)| crate::usage::Limit {
-                    minutes: w.minutes,
-                    pct,
-                    resets_at,
-                })
+    let chosen: Vec<crate::usage::Limit> = windows
+        .iter()
+        .map(|w| {
+            let running = reported.iter().flatten().filter(|l| l.minutes == w.minutes && l.resets_at > now);
+            crate::usage::current(running.map(|l| (l.pct, l.resets_at))).map_or(*w, |(pct, resets_at)| crate::usage::Limit {
+                minutes: w.minutes,
+                pct,
+                resets_at,
             })
-            .collect(),
-    )
+        })
+        .collect();
+    let field = |i: usize| chosen.get(i).map_or(crate::diag::Safe::Word("-"), |l| format_limit(l, now));
+    crate::diag::changed("meter", 1, "codex", &[("first", field(0)), ("second", field(1)), ("reports", reported.len().into())], &[]);
+    Some(chosen)
+}
+
+/// A window as the diagnostics log says it: `300m-7pct`, and `-over` once its reset time has passed.
+fn format_limit(l: &crate::usage::Limit, now: u64) -> crate::diag::Safe {
+    let over = if l.resets_at <= now { "-over" } else { "" };
+    crate::diag::ident(&format!("{}m-{}pct{over}", l.minutes, l.pct))
 }
 
 /// The newest `rate_limits` in a rollout's tail (see `rate_limits`).

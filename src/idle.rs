@@ -282,6 +282,17 @@ impl Kept {
         format!("Kept running: {why}")
     }
 
+    /// A word for it, for the diagnostics log.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Kept::Command(_) => "command",
+            Kept::Window => "window",
+            Kept::NotIdle => "not-idle",
+            Kept::TaskAtWork => "task-at-work",
+            Kept::Unknown => "unknown",
+        }
+    }
+
     /// As a host's file keeps it (`"kept"`).
     pub fn to_json(&self) -> Value {
         match self {
@@ -412,9 +423,24 @@ pub fn check_older(hosts: &[OldHost], rules: &Rules) -> Vec<(u32, Option<Kept>)>
         let window = rules.attached == Some(pid) || window_open(&opens, parent, session);
         let at_work = session.is_some_and(|s| crate::tickets::session_at_work(&rules.config, s));
         let under = rows.as_deref().and_then(|r| under(agent, r, pid, &argv_of, rules.settle));
-        match judge(rules.threshold, idle_for, window, at_work, under.as_ref()) {
+        let verdict = judge(rules.threshold, idle_for, window, at_work, under.as_ref());
+        let (event, why) = match &verdict {
+            Verdict::Stop => ("stop", "idle"),
+            Verdict::Keep(None) => ("keep", "not-idle-long-enough"),
+            Verdict::Keep(Some(k)) => ("keep", k.word()),
+        };
+        let program = match &verdict {
+            Verdict::Keep(Some(Kept::Command(Some(w)))) => crate::diag::Program::named(w),
+            _ => None,
+        };
+        let version = h.info.version.as_deref().map(crate::diag::ident);
+        let fields =
+            [("agent", agent.into()), ("pid", pid.into()), ("version", version.into()), ("why", why.into()), ("program", program.into())];
+        crate::diag::changed("idle-older", u64::from(pid), event, &fields, &[("idle_for", idle_for.into())]);
+        match verdict {
             Verdict::Stop => {
-                stop_child(pid, h.info.host_pid);
+                let sent = stop_child(pid, h.info.host_pid);
+                crate::diag::decision("idle-older", "stopped", &[("agent", agent.into()), ("pid", pid.into()), ("signalled", sent.into())]);
                 out.push((pid, None));
             }
             Verdict::Keep(why) => out.push((pid, why)),

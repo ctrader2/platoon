@@ -27,6 +27,7 @@ The other group, **Everything else**:
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive sessions after | A session nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Check for a newer platoon | Once a day at most, platoon asks GitHub for the number of its latest version and says once when a newer one is out (see [One network request](what-platoon-changes.md#one-network-request-no-telemetry)). Off: platoon makes no network request at all. Applies from the next start. | Once a day (default), Off |
+| Keep a diagnostics log | On: platoon writes down what it decides and why (a session kept running or stopped, what the usage meter shows, each call on your plan) in a small file on this computer, for a bug report ([`platoon report`](troubleshooting.md#reporting-a-problem)). Errors are written down either way. Never your conversations, and nothing is sent anywhere. | Off (default), On |
 
 A session with a command still going that Claude or Codex started (a dev server, say) is never stopped; its MCP servers
 don't count (see [Automatic clean-up](sessions.md#automatic-clean-up)).
@@ -180,7 +181,7 @@ shows the exact path). platoon doesn't create it until you change something, and
  "ai_pause_percent": 80, "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
  "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "", "files_editor_ask": false, "notes_quiet_minutes": 3,
- "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true}
+ "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true, "diagnostics_log": false}
 ```
 
 This one has no `ai_model` or `notes_model`: no model has been picked, so the defaults for this computer apply.
@@ -206,6 +207,8 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `update_check` is `true` or `false`; anything else there means the default (`true`).
+- `diagnostics_log` is `true` or `false`; anything else there means the default (`false`): see
+  [Reporting a problem](troubleshooting.md#reporting-a-problem).
 - `offer_tasks`, which platoon 1.0 wrote for its offer to make tasks, does nothing now and stays in the file as it is
   (the offer is the [`/to-tickets`](tasks-and-squads.md#to-tickets-in-a-session) skill).
 - `tokens_enabled` is the master switch for the smart features (`false` unless you said yes), and `token_features` has

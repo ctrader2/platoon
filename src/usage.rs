@@ -193,49 +193,106 @@ pub fn current(figures: impl IntoIterator<Item = (u8, u64)>) -> Option<(u8, u64)
 /// data, not "nothing used yet".
 pub fn load(dir: &Path, now: u64) -> Snapshot {
     let mut context = HashMap::new();
-    // Every figure still running, as (pct, resets_at).
-    let mut fives: Vec<(u8, u64)> = Vec::new();
-    let mut sevens: Vec<(u8, u64)> = Vec::new();
-    // Some report left the 5-hour figure out while its weekly figure was still running (see above).
-    let mut five_unstarted = false;
-    let status = dir.join("status");
-    for e in fs::read_dir(&status).into_iter().flatten().flatten() {
+    let mut reports = Vec::new();
+    for e in fs::read_dir(dir.join("status")).into_iter().flatten().flatten() {
         let path = e.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("json") {
-            continue;
-        }
-        let Some(v) = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
-        let ts = v["ts"].as_u64().unwrap_or(0);
-        if now.saturating_sub(ts) > STALE_SECS {
+        let Some(saved) = read_saved(&path) else { continue };
+        if now.saturating_sub(saved.ts) > STALE_SECS {
             let _ = fs::remove_file(&path);
             continue;
         }
-        if let (Some(id), Some(p)) = (path.file_stem().and_then(|s| s.to_str()), v["context_pct"].as_f64()) {
-            context.insert(id.to_string(), p.round().clamp(0.0, 100.0) as u8);
+        if let Some(p) = saved.context {
+            context.insert(saved.id.clone(), p);
         }
-        let figure = |key: &str| {
-            let w = &v[key];
-            w["pct"].as_u64().zip(w["resets_at"].as_u64())
-        };
-        for (list, key) in [(&mut fives, "five_hour"), (&mut sevens, "seven_day")] {
-            if let Some((pct, resets_at)) = figure(key).filter(|(_, resets_at)| *resets_at > now) {
-                list.push((pct.min(100) as u8, resets_at));
-            }
-        }
-        if v["five_hour"].is_null() && figure("seven_day").is_some_and(|(_, resets_at)| resets_at > now) {
-            five_unstarted = true;
-        }
+        reports.push(saved);
     }
+    Snapshot { plan: meter(&reports, now), context }
+}
+
+/// What the meter shows for these reports at `now` (the rules are `load`'s), and in the diagnostics log what it
+/// chose from what, when that changed.
+pub fn meter(reports: &[Saved], now: u64) -> Option<PlanUsage> {
+    // Every figure still running, as (pct, resets_at).
+    let running = |f: fn(&Saved) -> Option<(u8, u64)>| reports.iter().filter_map(f).filter(|(_, r)| *r > now).collect::<Vec<_>>();
+    let (fives, sevens) = (running(|s| s.five), running(|s| s.seven));
+    // Some report left the 5-hour figure out while its weekly figure was still running (see `load`).
+    let five_unstarted = reports.iter().any(|s| s.five.is_none() && s.seven.is_some_and(|(_, r)| r > now));
+    // What was set aside, for the diagnostics log: figures of a window that is over although its reset time hasn't come.
+    let older = |figures: &[(u8, u64)]| {
+        let latest = figures.iter().map(|f| f.1).max().unwrap_or(0);
+        figures.iter().filter(|f| latest - f.1 > SAME_WINDOW_SECS).count()
+    };
+    let (older_five, older_seven) = (older(&fives), older(&sevens));
+    let (running_five, running_seven) = (fives.len(), sevens.len());
     let window = |figures: Vec<(u8, u64)>| current(figures).map(|(pct, resets_at)| Window { pct, resets_at });
     let (mut five, seven) = (window(fives), window(sevens));
     if five.is_none() && five_unstarted {
         five = Some(Window { pct: 0, resets_at: 0 });
     }
-    let plan = match (five, seven) {
+    let pct = |w: Option<Window>| w.map(|w| w.pct);
+    let resets = |w: Option<Window>| w.filter(|w| w.resets_at > 0).map_or(crate::diag::Safe::Word("-"), |w| crate::diag::at(w.resets_at));
+    crate::diag::changed(
+        "meter",
+        0,
+        "claude",
+        &[
+            ("five", pct(five).into()),
+            ("five_resets", resets(five)),
+            ("seven", pct(seven).into()),
+            ("seven_resets", resets(seven)),
+            ("reports", reports.len().into()),
+            ("running_five", running_five.into()),
+            ("running_seven", running_seven.into()),
+            ("older_window_five", older_five.into()),
+            ("older_window_seven", older_seven.into()),
+            ("five_not_started", five_unstarted.into()),
+        ],
+        &[],
+    );
+    match (five, seven) {
         (None, None) => None,
         (five_hour, seven_day) => Some(PlanUsage { five_hour, seven_day }),
+    }
+}
+
+/// One session's last report as `platoon statusline` saved it: when, its figures (percent, `resets_at`; None for a
+/// window it left out) and its context percentage.
+pub struct Saved {
+    pub id: String,
+    pub ts: u64,
+    pub five: Option<(u8, u64)>,
+    pub seven: Option<(u8, u64)>,
+    pub context: Option<u8>,
+}
+
+/// A status file, read; None for anything that isn't one.
+fn read_saved(path: &Path) -> Option<Saved> {
+    (path.extension().and_then(|x| x.to_str()) == Some("json")).then_some(())?;
+    let v = serde_json::from_str::<Value>(&fs::read_to_string(path).ok()?).ok()?;
+    let figure = |key: &str| {
+        let w = &v[key];
+        w["pct"].as_u64().zip(w["resets_at"].as_u64()).map(|(p, r)| (p.min(100) as u8, r))
     };
-    Snapshot { plan, context }
+    Some(Saved {
+        id: path.file_stem()?.to_str()?.to_string(),
+        ts: v["ts"].as_u64().unwrap_or(0),
+        five: figure("five_hour"),
+        seven: figure("seven_day"),
+        context: v["context_pct"].as_f64().map(|p| p.round().clamp(0.0, 100.0) as u8),
+    })
+}
+
+/// Every report saved in `dir` that `load` would read, newest first. Only read: nothing is deleted.
+pub fn saved(dir: &Path, now: u64) -> Vec<Saved> {
+    let mut out: Vec<Saved> = fs::read_dir(dir.join("status"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| read_saved(&e.path()))
+        .filter(|s| now.saturating_sub(s.ts) <= STALE_SECS)
+        .collect();
+    out.sort_by_key(|s| std::cmp::Reverse(s.ts));
+    out
 }
 
 #[cfg(test)]

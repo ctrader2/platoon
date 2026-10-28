@@ -102,7 +102,8 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   goes over the work against the task before it is Done (it uses your plan, whatever the switches say).
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code and Codex do their own talking to
-  Anthropic and OpenAI.
+  Anthropic and OpenAI. When something goes wrong, `platoon report` writes what a bug report needs into a file you can
+  read first (no conversation content, no secrets); nothing is sent.
 
 platoon reads Claude Code's and Codex's own files, which aren't a documented format, so an update of either can break
 something. It was last checked with Claude Code 2.1.310 and Codex 0.164.0, and says so when yours is newer.

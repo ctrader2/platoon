@@ -346,6 +346,8 @@ impl App {
         if archived_open {
             counted += pending_archived;
         }
+        let due = [("active", pending_active.into()), ("archived", pending_archived.into()), ("archived_may_run", archived_open.into())];
+        crate::diag::changed("smart", 0, "due", &due, &[]);
         if counted == 0 {
             (self.smart.done, self.smart.total) = (0, 0);
         } else {
@@ -356,6 +358,7 @@ impl App {
             return;
         }
         if let Err(r) = ai::gate(settings, "names", &self.cache, self.providers(), now) {
+            crate::diag::changed("smart", 1, "waiting", &[("why", r.word().into())], &[]);
             self.smart.idle = Some(r.plain());
             self.smart.retry_at = now + IDLE_RECHECK_SECS;
             return;
@@ -374,6 +377,7 @@ impl App {
         let mut req = Request::new("names", system, prompt);
         req.cancel = self.switchboard.token("names");
         let rx = self.spawn_call(settings.clone(), req);
+        crate::diag::decision("smart", "names-asked", &[("conversations", p.ids.len().into()), ("archived", p.archived.into())]);
         self.smart.flight =
             Some(Flight { rx, ids: p.ids, totals: p.totals, covers: p.covers, prev_names: p.prev_names, archived: p.archived });
     }
@@ -398,6 +402,7 @@ impl App {
             // conversations, which are simply due again when it is switched back on.
             Err(AiError::Cancelled) => {}
             Err(e) => {
+                crate::diag::decision("smart", "names-failed", &[("why", e.word().into())]);
                 self.smart.idle = Some(e.plain());
                 self.smart.retry_at = now + IDLE_RECHECK_SECS;
             }
@@ -421,6 +426,8 @@ impl App {
                 .push((fl.ids[i].clone(), Summary { name, summary: r.summary, covers: fl.covers[i], model: reply.model.clone(), at: now }));
         }
         for (i, id) in fl.ids.iter().enumerate() {
+            let outcome = if got[i] { "named" } else { "missed" };
+            crate::diag::decision("smart", "name", &[("session", crate::diag::session(id)), ("outcome", outcome.into())]);
             if got[i] {
                 self.smart.misses.clear(id);
                 self.smart.boosted.remove(id);
@@ -428,7 +435,16 @@ impl App {
                 self.smart.misses.miss(id, fl.totals[i]);
             }
         }
+        let missed = got.iter().filter(|g| !**g).count();
+        let taken = [
+            ("asked", fl.ids.len().into()),
+            ("named", changes.len().into()),
+            ("missed", missed.into()),
+            ("tokens", reply.usage.total().into()),
+        ];
+        crate::diag::decision("smart", "names-taken", &taken);
         if let Err(e) = self.summaries.set_many(&changes) {
+            crate::diag::error("smart", "names-not-saved", &[("why", (&e).into())]);
             let why = e.to_string();
             self.notify(format!("Couldn't save the names: {}", why.split(" (os error").next().unwrap_or(&why)));
             self.smart.retry_at = now + IDLE_RECHECK_SECS;

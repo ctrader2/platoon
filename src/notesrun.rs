@@ -521,6 +521,21 @@ pub enum Round {
 }
 
 impl Round {
+    /// A word for it, for the diagnostics log.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Round::Refused(_) => "refused",
+            Round::Busy => "busy",
+            Round::NoNotes => "no-notes",
+            Round::NothingNew => "nothing-new",
+            Round::Failed(_) => "failed",
+            Round::BadReply => "bad-reply",
+            Round::TooLong => "too-long",
+            Round::Unchanged => "unchanged",
+            Round::Written { .. } => "written",
+        }
+    }
+
     /// A call really went out and came back understood. Only then is the project's description looked at: that is
     /// what "refreshed right after a notes update" means.
     pub fn ran_a_call(&self) -> bool {
@@ -792,6 +807,7 @@ fn helper_loop(env: &Env, id: &str, quiet_ms: u64) {
             continue;
         }
         let round = update_once(env, id);
+        crate::diag::decision("notes", "round", &[("project", crate::diag::ident(id)), ("outcome", round.word().into())]);
         // The description follows a notes update, and never more than once an hour (`describe_once` says no).
         if round.ran_a_call() {
             describe_once(env, id);
