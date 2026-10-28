@@ -266,7 +266,6 @@ fn the_report_has_every_section_from_its_world_and_nothing_planted() {
         "  codex session, pid 999999 (host 999998), started by platoon (a platoon older than 1.1.0)",
         "    GONE: the agent's process isn't running; its file is left over",
         "== Plan usage ==",
-        &format!("    {SESSION} reported 1m00s ago: 5h 7% resets "),
         "  the meter shows: 5h 7% (resets in ",
         "== Smart features ==",
         "names 1000; other 500",
@@ -282,6 +281,8 @@ fn the_report_has_every_section_from_its_world_and_nothing_planted() {
     ] {
         assert!(text.contains(want), "missing {want:?} in:\n{text}");
     }
+    // The status file is a minute old when written; a slow machine makes the report a second or two later.
+    assert!(text.lines().any(|l| l.starts_with(&format!("    {SESSION} reported 1m0")) && l.contains("s ago: 5h 7% resets ")), "{text}");
     // Under the session: its `sleep`, by name, never its arguments; and the session itself isn't listed as a program
     // with its token either.
     assert!(!text.contains("--token") && !text.contains("sleep 120") && !text.contains("run dev"), "{text}");
