@@ -290,7 +290,10 @@ impl App {
     }
 
     fn schedule_names(&mut self, settings: &Settings, now: u64) {
-        if self.prompts.catching_up() {
+        // Not before auto-archive has had its first turn, which waits for the first reading of the disk: until then the
+        // rows come from the saved index, and a conversation unused for days would look active and be named as one
+        // (on a fresh install, every conversation not yet archived).
+        if self.prompts.catching_up() || self.last_auto_archive.is_none() {
             return;
         }
         // Worked out first and owned, so the borrow of the app ends before anything is changed.

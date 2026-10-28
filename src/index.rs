@@ -295,6 +295,10 @@ enum Backend {
     /// Scans on the caller's thread, to completion, on each poll. For tests, which need determinism.
     #[cfg(test)]
     Inline(Vec<Scanner>),
+    /// The saved entries only, and a first scan that has not finished: the moments after the app starts, while the
+    /// thread is still reading the disk. For tests of what may and may not happen before the first scan is done.
+    #[cfg(test)]
+    Held,
 }
 
 /// What the UI holds: the current entries plus a way to keep them fresh.
@@ -377,6 +381,18 @@ impl Indexer {
         }
     }
 
+    /// The saved index, and a first scan that stays unfinished until `release_for_test` (see `Backend::Held`).
+    #[cfg(test)]
+    pub fn held(claude_root: &Path, codex_root: Option<&Path>, cache: &Path) -> Self {
+        Self { backend: Backend::Held, ..Self::inline(claude_root, codex_root, cache) }
+    }
+
+    /// Let a held index's first scan run, on the calling thread as `inline` does.
+    #[cfg(test)]
+    pub fn release_for_test(&mut self, claude_root: &Path, codex_root: Option<&Path>, cache: &Path) {
+        self.backend = Backend::Inline(scanners(claude_root, codex_root, cache));
+    }
+
     /// Leave out every transcript whose working folder is (inside) `dir`, now and from here on.
     pub fn hide(&mut self, dir: Hidden) {
         self.hidden = Some(dir);
@@ -423,6 +439,8 @@ impl Indexer {
                 }
                 self.first_scan_done = true;
             }
+            #[cfg(test)]
+            Backend::Held => {}
         }
         for u in updates {
             self.remaining = u.remaining;

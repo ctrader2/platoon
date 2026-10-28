@@ -3,6 +3,11 @@
 //! are named there and then, newest first, with a one-line progress display. Ctrl+C skips the rest: platoon carries
 //! on in the background while its window is open. Then archived conversations are offered, default "skip".
 //!
+//! Active and archived are what the Sessions tab will show once platoon starts: a conversation unused for the
+//! auto-archive age counts as archived although the archive file doesn't say so yet (on a fresh install nothing is
+//! archived; the app's auto-archive does that when it starts, and nothing here writes the archive). A task's
+//! session is on neither list and isn't named here.
+//!
 //! It never blocks starting platoon and never changes what setup did or its exit code: it is only offered in a
 //! terminal, and everything that goes wrong (a refusal, a failed call, an unreadable file) ends in a plain line of
 //! text and "platoon will carry on later". The work itself is the same code the app's worker uses (`smart.rs`).
@@ -58,7 +63,10 @@ pub enum ScanOutcome {
 struct Held {
     id: String,
     fp: Arc<FilePrompts>,
+    /// In the archive, or unused for the auto-archive age: on the Sessions tab's Archived list once platoon starts.
     archived: bool,
+    /// Not in the archive file yet, only unused for the auto-archive age.
+    only_old: bool,
     last_active_ms: u64,
 }
 
@@ -72,10 +80,18 @@ fn load_world(env: &ScanEnv, settings: &Settings) -> Vec<Held> {
     let mut store = Store::load(env.cache, settings.search_prompt_chars as usize);
     store.scan(&entries, settings.search_prompt_chars as usize, true, &mut |_| true);
     let archive = Archive::open(env.config);
+    let (age, now) = (settings.auto_archive_secs(), usage::now());
+    let tasks: HashSet<String> = crate::tickets::every_ticket(env.config).into_iter().filter_map(|(_, t)| t.session).collect();
     let mut by_id: std::collections::HashMap<String, Held> = std::collections::HashMap::new();
     for fp in store.snapshot() {
         let Some(e) = entries.iter().find(|e| e.path == fp.path) else { continue };
-        let held = Held { id: fp.id.clone(), archived: archive.contains(&fp.id), last_active_ms: e.last_active_ms(), fp };
+        if tasks.contains(&fp.id) {
+            continue;
+        }
+        let in_archive = archive.contains(&fp.id);
+        let old = age.is_some_and(|age| crate::archive::unused_for(&archive, &fp.id, e.last_active_ms() / 1000, now, age));
+        let held =
+            Held { id: fp.id.clone(), archived: in_archive || old, only_old: old && !in_archive, last_active_ms: e.last_active_ms(), fp };
         // The same id under two project folders: the most recently active file wins.
         match by_id.get(&held.id) {
             Some(old) if old.last_active_ms >= held.last_active_ms => {}
@@ -154,6 +170,17 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
             if archived_estimate.conversations == 1 { "" } else { "s" },
             thousands(archived_estimate.tokens)
         );
+        let only_old = archived.iter().filter(|(_, i)| held[*i].only_old).count();
+        if only_old > 0 {
+            let days = settings.auto_archive_days;
+            let _ = writeln!(
+                out,
+                "That counts {} you haven't used for {days}+ day{}: platoon archives {} when it starts.",
+                if only_old == 1 { "one session".to_string() } else { format!("{only_old} sessions") },
+                if days == 1 { "" } else { "s" },
+                if only_old == 1 { "it" } else { "them" }
+            );
+        }
         let _ = write!(
             out,
             "Skip them, or name them slowly in the background while platoon is open (they may use at most {}% of what is left of the day's limit)? [S]kip / [b]ackground: ",
@@ -408,6 +435,78 @@ mod tests {
         for jargon in ["json", "stdin", "batch", "index", "api", "conversation"] {
             assert!(!lower.contains(jargon), "{jargon}: {shown}");
         }
+    }
+
+    #[test]
+    fn only_the_sessions_on_the_active_list_are_named_and_older_ones_join_the_archived_question() {
+        // A fresh install: nothing archived yet, two sessions used today, three not used for three days, one archived.
+        let w = World::new("sc-old");
+        fill(&w, 2, 1);
+        for i in 1..=3 {
+            w.transcript(
+                &format!("old{i}"),
+                &format!("/work/old{i}"),
+                &format!("please look into the old topic number {i} for me"),
+                3 * 1440,
+            );
+        }
+        // A task's session is on neither list: not named, not counted.
+        let mut tasks = crate::tickets::Tickets::open(&w.config, crate::tickets::NO_PROJECT_ID);
+        let n = tasks.add(crate::tickets::NewTicket { title: "Coupons".into(), ..Default::default() }).unwrap();
+        tasks
+            .update(n, |t| {
+                t.session = Some("act2".into());
+                true
+            })
+            .unwrap();
+        on(&w, |s| s.auto_archive_days = 2); // the default
+        let fake = AiFake::new("sc-old");
+        let (outcome, shown) = run(&w, &fake, "\n", true, &never);
+        assert_eq!(outcome, ScanOutcome::Done { named: 1 });
+        assert!(shown.contains("Smart names: 1 active session to name, about "), "{shown}");
+        let sent = fake.stdin(1);
+        assert!(
+            sent.contains("active topic number 1 ") && !sent.contains("old topic") && !sent.contains("active topic number 2 "),
+            "{sent}"
+        );
+        // The old ones are offered with the archived one, and setup says why they count as archived.
+        assert!(shown.contains("Archived: 4 archived sessions, about "), "{shown}");
+        assert!(shown.contains("That counts 3 sessions you haven't used for 2+ days: platoon archives them when it starts."), "{shown}");
+        // Setup leaves archiving to platoon: the archive holds what it held.
+        let archive = Archive::open(&w.config);
+        assert!(archive.contains("arc1") && !archive.contains("old1"));
+        // Nothing older is sent now.
+        assert_eq!(fake.calls(), 1);
+
+        // One old session: said in the singular.
+        let w = World::new("sc-old1");
+        fill(&w, 1, 0);
+        w.transcript("old1", "/work/old1", "please look into the old topic number 1 for me", 3 * 1440);
+        on(&w, |s| s.auto_archive_days = 1);
+        let (_, shown) = run(&w, &AiFake::new("sc-old1"), "\n", true, &never);
+        assert!(
+            shown.contains("Archived: 1 archived session, about ")
+                && shown.contains("That counts one session you haven't used for 1+ day: platoon archives it when it starts."),
+            "{shown}"
+        );
+
+        // Auto-archive off: every session not archived is active, as on the Sessions tab.
+        let w = World::new("sc-old-off");
+        fill(&w, 2, 0);
+        for i in 1..=3 {
+            w.transcript(
+                &format!("old{i}"),
+                &format!("/work/old{i}"),
+                &format!("please look into the old topic number {i} for me"),
+                30 * 1440,
+            );
+        }
+        on(&w, |s| s.auto_archive_days = 0);
+        let fake = AiFake::new("sc-old-off");
+        let (outcome, shown) = run(&w, &fake, "\n", true, &never);
+        assert_eq!(outcome, ScanOutcome::Done { named: 5 });
+        assert!(!shown.contains("Archived:"), "{shown}");
+        assert!(fake.stdin(1).contains("old topic number 3 "));
     }
 
     #[test]

@@ -47,8 +47,11 @@ Turning a switch off stops a call already in progress and throws its answer away
 
 After a yes (and also when you said yes earlier and nothing has been named yet), setup shows a local estimate ("3 active
 sessions to name, about 2,100 tokens, roughly 1 call (an estimate, made on this computer)") and names your active
-sessions right there, newest first, with a one-line progress display. `Ctrl+C` skips it: platoon carries on in the
-background while it is open. Setup then asks about archived sessions, showing how many there are and what naming them
+sessions right there, newest first, with a one-line progress display. Active means what the Sessions tab's Active list
+will show: a session you haven't used for the auto-archive age (2 days by default) counts as archived, although on a
+fresh install nothing is archived yet (platoon archives those when it starts; with auto-archive off, every session not
+archived is active). `Ctrl+C` skips it: platoon carries on in the background while it is open. Setup then asks about
+archived sessions, showing how many there are (and how many of them are only unused that long) and what naming them
 would roughly cost, with "skip" as the default and "slowly in the background" as the other choice (the setting `Archived
 sessions`). Without a terminal there is no scan, just one line. None of this ever changes what setup does or its exit
 code, or stops platoon from starting.
@@ -80,7 +83,7 @@ with their descriptions: see [Making tasks from a conversation](tasks-and-squads
 
 The naming work runs only **while the platoon window is open**, on a background worker inside platoon: nothing keeps
 running when you quit (the hosts that keep your sessions alive do no naming), and it catches up the next time platoon
-starts. (Project notes are different: their helper runs whether platoon is open or not.)
+starts, once auto-archive has had its turn (so a session unused for days is never named as an active one). (Project notes are different: their helper runs whether platoon is open or not.)
 
 One call at a time, in this order: a description search you asked for, conversations that hit the refresh trigger (5 new
 substantive messages, i.e. not "yes", "continue", "ok", "go ahead", "thanks" or anything under 10 characters, and quiet for

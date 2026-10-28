@@ -220,12 +220,17 @@ pub fn auto_archive_ids(sessions: &[Session], archive: &Archive, now_secs: u64, 
         // out; the status is checked as well so that stays true whatever happens to `procs`.
         .filter(|s| !archive.contains(&s.id) && s.procs.is_empty() && s.status != crate::model::Status::Background)
         .filter(|s| viewing != Some(s.id.as_str()))
-        .filter(|s| {
-            let active = (s.last_active / 1000).max(archive.touched_at(&s.id).unwrap_or(0));
-            active > 0 && now_secs.saturating_sub(active) >= age_secs
-        })
+        .filter(|s| unused_for(archive, &s.id, s.last_active / 1000, now_secs, age_secs))
         .map(|s| s.id.clone())
         .collect()
+}
+
+/// Has this conversation gone unused for `age_secs`, the auto-archive age? Its last activity is the later of its
+/// transcript's last entry (`last_active_secs`) and the last time the user restored or opened it; with no known time
+/// it never has.
+pub fn unused_for(archive: &Archive, id: &str, last_active_secs: u64, now_secs: u64, age_secs: u64) -> bool {
+    let active = last_active_secs.max(archive.touched_at(id).unwrap_or(0));
+    active > 0 && now_secs.saturating_sub(active) >= age_secs
 }
 
 #[cfg(test)]

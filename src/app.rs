@@ -821,6 +821,14 @@ impl App {
         Self::build(reader, None, cache, config, indexer, false, None)
     }
 
+    /// `with_dirs` as the app is right after it starts: the rows from the saved index, the first scan of the disk not
+    /// finished until `release_index_for_test`.
+    #[cfg(test)]
+    pub fn with_dirs_index_held(reader: Reader, cache: PathBuf, config: PathBuf) -> Self {
+        let indexer = Indexer::held(reader.root(), None, &cache);
+        Self::build(reader, None, cache, config, indexer, false, None)
+    }
+
     /// `with_dirs`, reading Codex's conversations too, from its folder `codex`.
     #[cfg(test)]
     pub fn with_codex_dirs(reader: Reader, codex: codex::Reader, cache: PathBuf, config: PathBuf) -> Self {
@@ -2921,6 +2929,11 @@ impl App {
     #[cfg(test)]
     pub fn index_in_background_for_test(&mut self) {
         self.indexer = Indexer::spawn(self.reader.root(), self.codex.as_ref().map(codex::Reader::root), &self.cache);
+    }
+
+    #[cfg(test)]
+    pub fn release_index_for_test(&mut self) {
+        self.indexer.release_for_test(self.reader.root(), self.codex.as_ref().map(codex::Reader::root), &self.cache);
     }
 
     #[cfg(test)]

@@ -682,6 +682,44 @@ fn archived_conversations_are_left_alone_by_default() {
 }
 
 #[test]
+fn on_the_first_start_after_setup_old_sessions_are_archived_before_any_is_named() {
+    let w = World::new("sm-first-start");
+    simple(&w, "recent", "please look into the recent billing topic", 600);
+    for i in 1..=3 {
+        simple(&w, &format!("old{i}"), &format!("please look into the old export topic {i}"), 3 * 86_400);
+    }
+    smart(&w, |s| s.auto_archive_days = 2);
+    // What `platoon setup` leaves behind: its reading of the transcripts saved, the recent session named, nothing
+    // archived (on a fresh install the archive is empty; setup leaves archiving to the app).
+    let cap = settings::load(&w.config).0.search_prompt_chars as usize;
+    let mut scanner = crate::index::Scanner::load(&w.root, &w.cache);
+    scanner.scan(&mut |_| true);
+    scanner.save();
+    let mut store = crate::prompts::Store::load(&w.cache, cap);
+    store.scan(&scanner.entries(), cap, true, &mut |_| true);
+    store.save();
+    let entry = crate::summaries::Entry { name: "Billing".into(), summary: "S".into(), covers: 1, model: "haiku".into(), at: 1 };
+    crate::summaries::Summaries::open(&w.config).set_many(&[("recent".to_string(), entry)]).unwrap();
+    let fake = AiFake::new("sm-first-start");
+    // The saved index shows the rows at once, before platoon has read the disk again (on a big history, that takes a
+    // while): auto-archive waits for that reading, and the naming waits for auto-archive.
+    let mut app = App::with_dirs_index_held(crate::agents::claude::Reader::with_root(w.root.clone()), w.cache.clone(), w.config.clone());
+    app.set_ai_program_for_test(&fake.script);
+    app.settle_ai_for_test(5);
+    assert!(app.sessions.iter().any(|s| s.id == "old1") && !row(&app, "old1").archived, "rows from the saved index");
+    assert_eq!(fake.calls(), 0, "nothing named before auto-archive has had its turn");
+    app.release_index_for_test();
+    app.refresh_until_for_test(10, "the old sessions archived", |a| (1..=3).all(|i| row(a, &format!("old{i}")).archived));
+    app.settle_ai_for_test(10);
+    assert_eq!(
+        fake.calls(),
+        0,
+        "the old sessions are archived ones, left alone by default: {:?}",
+        (1..=fake.calls()).map(|k| fake.stdin(k)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn archived_conversations_use_at_most_their_share_of_what_is_left_of_the_day_and_never_share_a_call_with_active_ones() {
     let w = World::new("sm-arch-share");
     simple(&w, "act", "please look into the active topic", 300);
