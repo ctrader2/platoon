@@ -57,7 +57,9 @@ code, or stops platoon from starting.
 
 For each conversation: its first message, its last few messages (8 by default, each cut to 300 characters), the name and
 summary platoon made last time (if any) and one line (200 characters) of the last reply (Claude's, or Codex's for a
-Codex conversation). The conversations are
+Codex conversation). A Claude Code conversation you started with a skill and no words (`/sharpen`), and then only
+answered Claude's questions in, has no message of its own to go by: it is named from the skill's name and that line of
+Claude's reply, once Claude has replied. The conversations are
 numbered 1, 2, 3 in the request (never their ids or folders), up to 30 to a call. Never tool output, file contents, or
 anything else.
 
@@ -82,7 +84,7 @@ starts. (Project notes are different: their helper runs whether platoon is open 
 
 One call at a time, in this order: a description search you asked for, conversations that hit the refresh trigger (5 new
 substantive messages, i.e. not "yes", "continue", "ok", "go ahead", "thanks" or anything under 10 characters, and quiet for
-60 seconds), a conversation you just took out of the archive or opened, first-time names for active conversations (newest
+60 seconds; a skill you typed with words after it, `/land the parser fix`, is a message like any other), a conversation you just took out of the archive or opened, first-time names for active conversations (newest
 first), then archived ones if you chose that. Archived conversations may use at most half (a setting) of what is left of
 the day's limit, so the conversations you are using always have room. The work goes on quietly: names and summaries
 appear in the list as they arrive, and when naming is held up the settings' Smart features tab says why under its

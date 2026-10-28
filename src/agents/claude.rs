@@ -1029,8 +1029,8 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
     }
 }
 
-/// The text of a real user prompt: not a slash-command echo, caveat, compaction summary, interrupt marker
-/// or other injected `<...>` block.
+/// The text of a real user prompt: not a built-in command's echo, caveat, compaction summary, interrupt marker
+/// or other injected `<...>` block. A skill the user typed (`/land desc-cut`) is a prompt: see `skill_typed`.
 fn real_prompt(v: &Value) -> Option<String> {
     real_prompt_capped(v, TEXT_MAX)
 }
@@ -1041,12 +1041,39 @@ fn real_prompt_capped(v: &Value, cap: usize) -> Option<String> {
     if v["type"].as_str() != Some("user") || flag("isMeta") || flag("isSidechain") || flag("isCompactSummary") {
         return None;
     }
-    let text = match &v["message"]["content"] {
-        Value::String(s) => one_line(s),
-        Value::Array(a) => one_line(&a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ")),
+    let raw = match &v["message"]["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" "),
         _ => return None,
     };
+    let text = skill_typed(&raw).unwrap_or_else(|| one_line(&raw));
     (!text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted")).then(|| truncate_to(text, cap))
+}
+
+/// What the user typed to run a skill, as they typed it: `/name args` on one line (`/sharpen` without words).
+///
+/// Claude Code records every slash command as a user entry made of tags, written by one of two code paths. A command
+/// whose text goes to the model (a skill, a custom command, a built-in prompt such as `/init`) starts with its
+/// `<command-message>`, and the skill's own text follows as an `isMeta` entry:
+/// `<command-message>land</command-message>\n<command-name>/land</command-name>\n<command-args>x</command-args>`
+/// (older versions: `land is running…` in the first tag; no `<command-args>` without words). A command Claude Code
+/// runs itself (`/model`, `/plugin`, `/add-dir`, `/clear`) starts with its `<command-name>`, and its
+/// `<local-command-stdout>` follows; it is no message to anyone, so it gives None here and stays out, as every
+/// `<...>` text does. The first tag tells them apart on the entry itself, so a reader going line by line (the
+/// index, the prompt store, `prompt_in_line`) needs no look at the entry after it.
+fn skill_typed(raw: &str) -> Option<String> {
+    let raw = raw.trim_start();
+    if !raw.starts_with("<command-message>") {
+        return None;
+    }
+    let after = |open: &str| raw.find(open).map(|at| &raw[at + open.len()..]);
+    let name = after("<command-name>").and_then(|r| r.find("</command-name>").map(|end| one_line(&r[..end])))?;
+    if name.is_empty() || name.contains('<') {
+        return None;
+    }
+    let args = after("<command-args>").and_then(|r| r.rfind("</command-args>").map(|end| one_line(&r[..end]))).unwrap_or_default();
+    let slash = if name.starts_with('/') { "" } else { "/" };
+    Some(one_line(&format!("{slash}{name} {args}")))
 }
 
 /// The real user prompt in one line of a transcript, if it holds one (same rules as the description of a row),
@@ -1687,6 +1714,48 @@ mod transcript_tests {
         assert_eq!(prompt(json!({"type":"user","isSidechain":true,"message":{"content":"sub"}})), None);
         assert_eq!(prompt(json!({"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued"}})), None);
         assert_eq!(prompt(json!({"type":"assistant","message":{"content":"hi"}})), None);
+    }
+
+    /// Claude Code's two shapes of a typed slash command, as it writes them (trimmed, made-up words).
+    fn skill_entry(name: &str, args: Option<&str>) -> Value {
+        let args = args.map(|a| format!("\n<command-args>{a}</command-args>")).unwrap_or_default();
+        serde_json::json!({"type":"user","origin":{"kind":"human"},"message":{"role":"user",
+            "content":format!("<command-message>{name}</command-message>\n<command-name>/{name}</command-name>{args}")}})
+    }
+
+    fn builtin_entry(name: &str, args: &str) -> Value {
+        serde_json::json!({"type":"user","message":{"role":"user","content":format!(
+            "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            <command-args>{args}</command-args>")}})
+    }
+
+    #[test]
+    fn a_typed_skill_is_what_the_user_typed_and_a_built_in_command_is_nothing() {
+        use serde_json::json;
+        assert_eq!(prompt(skill_entry("land", Some("the parser fix"))).as_deref(), Some("/land the parser fix"));
+        assert_eq!(prompt(skill_entry("sharpen", None)).as_deref(), Some("/sharpen"), "no words: the skill alone");
+        assert_eq!(prompt(skill_entry("sharpen", Some(""))).as_deref(), Some("/sharpen"));
+        assert_eq!(prompt(skill_entry("tools:review", Some("line one\n  line   two"))).as_deref(), Some("/tools:review line one line two"));
+        // An older Claude Code said "is running…" in the first tag; only the name and the words count.
+        let old = json!({"type":"user","message":{"content":
+            "<command-message>land is running…</command-message>\n<command-name>/land</command-name>\n<command-args>x y</command-args>"}});
+        assert_eq!(prompt(old).as_deref(), Some("/land x y"));
+        // Built-in commands Claude Code runs itself are never messages, words or not.
+        for (name, args) in [("model", "sonnet"), ("plugin", "marketplace add someone/thing"), ("add-dir", ""), ("clear", "")] {
+            assert_eq!(prompt(builtin_entry(name, args)), None, "/{name}");
+        }
+        // The skill's own text (the next entry) is Claude Code's, not the user's.
+        assert_eq!(
+            prompt(json!({"type":"user","isMeta":true,"message":{"content":[{"type":"text","text":"Base directory for this skill"}]}})),
+            None
+        );
+        assert_eq!(prompt(json!({"type":"user","message":{"content":"<local-command-stdout>Set model</local-command-stdout>"}})), None);
+        // Broken tags are not guessed at.
+        assert_eq!(prompt(json!({"type":"user","message":{"content":"<command-message>x</command-message>"}})), None);
+        // In a line, by the same rules, cut to the line reader's length.
+        let line = |v: Value| v.to_string();
+        assert_eq!(prompt_in_line(&line(skill_entry("land", Some("the parser fix"))), 100).as_deref(), Some("/land the parser fix"));
+        assert_eq!(prompt_in_line(&line(skill_entry("land", Some("the parser fix"))), 9).as_deref(), Some("/land the"));
+        assert_eq!(prompt_in_line(&line(builtin_entry("model", "sonnet")), 100), None);
     }
 
     #[test]

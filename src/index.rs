@@ -26,7 +26,8 @@ use std::{
 
 /// Bump when the parsing changes what an entry holds, so stale indexes are rebuilt instead of trusted.
 /// 2: the added folders (`dirs`), which only a first reading of a file looks for in its head.
-const VERSION: u64 = 2;
+/// 3: a typed skill (`/land x`) is a conversation's first message, so its description.
+pub(crate) const VERSION: u64 = 3;
 /// Results are sent to the UI in batches of this many files, or this often.
 const BATCH: usize = 64;
 const BATCH_EVERY: Duration = Duration::from_millis(60);

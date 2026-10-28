@@ -32,7 +32,9 @@ on the Tasks tab or its project's screen, and is on neither list here, nor in th
 count, nor archived by auto-archive. Each row shows the name, directory, branch, model, a status, how full the context is, when it was last
 active, and a one-line description. Newest activity first.
 Each conversation takes two lines, its name line and its prompt line; the selected one is highlighted across both, with a
-`▎` in front of each. Conversations that only ever held slash commands are hidden.
+`▎` in front of each. A skill you typed counts as a message: a conversation you started with `/land the parser fix`
+says `/land the parser fix` on its prompt line. Conversations that only ever held Claude Code's own commands (`/model`,
+`/clear`, `/add-dir` and the like) are hidden.
 
 **CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning colour
 above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has

@@ -1852,7 +1852,7 @@ mod tests {
             claude.join("projects/-x/s-docs2.jsonl").to_string_lossy(): entry(&docs),
             claude.join("projects/-x/s-none.jsonl").to_string_lossy(): entry(&free),
         });
-        fs::write(cache.join("index.json"), json!({"version": 2, "files": files}).to_string()).unwrap();
+        fs::write(cache.join("index.json"), json!({"version": crate::index::VERSION, "files": files}).to_string()).unwrap();
         let roots = Roots { claude_root: &claude, cache: &cache };
         let run_in = |cwd: &Path, args: &[&str]| {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();

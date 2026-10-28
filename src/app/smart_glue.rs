@@ -491,9 +491,9 @@ impl App {
             .sessions
             .iter()
             .filter(|c| c.archived && self.summaries.get(&c.id).is_none())
-            .filter_map(|c| self.prompts.get(&c.id))
-            .filter(|fp| fp.substantive > 0)
-            .map(|fp| smart::digest_chars(fp, None, &s))
+            .filter_map(|c| self.prompts.get(&c.id).map(|fp| (c.agent, fp)))
+            .filter(|(agent, fp)| smart::worth_naming(*agent, fp))
+            .map(|(_, fp)| smart::digest_chars(fp, None, &s))
             .collect::<Vec<_>>();
         let e = smart::estimate(chars, s.ai_batch_size as usize);
         *self.smart.estimate.borrow_mut() = Some((key, e));

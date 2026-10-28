@@ -37,7 +37,8 @@ use std::{
 };
 
 /// Bump when what the file holds changes meaning, so an old one is rebuilt instead of trusted.
-const VERSION: u64 = 2;
+/// 3: a typed skill (`/land x`) is one of the user's messages.
+const VERSION: u64 = 3;
 /// How much of a file is read at a time.
 const CHUNK: usize = 1 << 20;
 /// How many of a file's first bytes tell whether it is still the file that was read before.

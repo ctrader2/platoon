@@ -54,6 +54,18 @@ pub fn is_substantive(message: &str) -> bool {
     !words.all(is_filler)
 }
 
+/// A conversation with Claude Code that started with a skill and has nothing typed besides: `/sharpen` with no words,
+/// then only answers to Claude's questions (tool results, not messages) or a "yes". None of its messages is
+/// substantive, yet the skill's name and Claude's reply say what it is about, so it is named once Claude has replied.
+pub fn skill_only(agent: Agent, fp: &FilePrompts) -> bool {
+    agent == Agent::Claude && fp.substantive == 0 && fp.reply.is_some() && fp.prompts.first().is_some_and(|p| p.starts_with('/'))
+}
+
+/// Is there enough in this conversation to name it: a substantive message, or a skill and Claude's reply to it.
+pub fn worth_naming(agent: Agent, fp: &FilePrompts) -> bool {
+    fp.substantive > 0 || skill_only(agent, fp)
+}
+
 /// A word that only answers ("yes", "thanks,", "OK!") or is only punctuation.
 fn is_filler(word: &str) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
@@ -182,7 +194,10 @@ pub fn digest_text(n: usize, d: &Digest) -> String {
     if let Some(s) = &d.summary {
         t.push_str(&format!("Previous summary: {s}\n"));
     }
-    t.push_str(&format!("First message: {}\n", d.first));
+    // A skill the user ran (`/sharpen`, `/land the parser fix`) is said to be one: on its own, its name and the reply
+    // are all there is to name the conversation from.
+    let command = d.agent == Agent::Claude && d.first.starts_with('/');
+    t.push_str(&format!("First message{}: {}\n", if command { " (a command the user ran)" } else { "" }, d.first));
     if !d.recent.is_empty() {
         t.push_str("Recent messages:\n");
         for r in &d.recent {
@@ -403,7 +418,7 @@ pub struct Rules<'a> {
 
 /// Is this conversation due, and for which reason? None: nothing to do for it now.
 pub fn tier_of(c: &Conv, r: &Rules) -> Option<Tier> {
-    if c.fp.substantive == 0 || !r.misses.allowed(c.id, c.fp.prompts.len()) {
+    if !worth_naming(c.agent, c.fp) || !r.misses.allowed(c.id, c.fp.prompts.len()) {
         return None;
     }
     let boosted = r.boosted.contains(c.id);
@@ -910,8 +925,45 @@ mod tests {
         let r = Rules { settings: &s, sums: &sums, misses: &misses, boosted: &boosted, now: 5 };
         let f = fp(&["yes", "continue", "ok"], None);
         assert_eq!(tier_of(&conv("x", &f, false, 1), &r), None);
+        let f = fp(&["yes", "continue", "ok"], Some("Claude said something long about a topic"));
+        assert_eq!(tier_of(&conv("x", &f, false, 1), &r), None, "a reply alone is not enough");
         let empty = fp(&[], None);
         assert_eq!(tier_of(&conv("x", &empty, false, 1), &r), None);
+    }
+
+    #[test]
+    fn a_conversation_started_with_a_skill_and_nothing_typed_is_named_from_the_skill_and_the_reply() {
+        let d = tmpdir("skill");
+        let sums = Summaries::open(&d);
+        let (misses, boosted, s) = (Misses::default(), HashSet::new(), settings());
+        let r = Rules { settings: &s, sums: &sums, misses: &misses, boosted: &boosted, now: 5 };
+        // `/sharpen`, then only answers to Claude's questions: due once Claude has said something.
+        let waiting = fp(&["/sharpen"], None);
+        assert_eq!(tier_of(&conv("x", &waiting, false, 1), &r), None, "nothing to name it from yet");
+        let replied = fp(&["/sharpen", "yes"], Some("The expert approach here is to split the parser from the reader."));
+        assert_eq!(replied.substantive, 0);
+        assert_eq!(tier_of(&conv("x", &replied, false, 1), &r), Some(Tier::Fresh));
+        assert_eq!(tier_of(&conv("x", &replied, true, 1), &r), Some(Tier::Archived), "archived ones wait for their setting");
+        // Its digest says the first message is a command and carries the reply.
+        let text = digest_text(1, &digest(Agent::Claude, &replied, None, &s));
+        assert!(
+            text.contains("First message (a command the user ran): /sharpen\n")
+                && text.contains("Claude's last reply: The expert approach here is to split the parser from the reader."),
+            "{text}"
+        );
+        // Words after the skill are a message like any other: substantive, and the conversation is named as usual.
+        let worded = fp(&["/land the parser fix"], None);
+        assert_eq!((worded.substantive, tier_of(&conv("x", &worded, false, 1), &r)), (1, Some(Tier::Fresh)));
+        // Once named, it is not named again for the reply alone.
+        let named = sums_with(&d, &[("x", 0)]);
+        let r = Rules { settings: &s, sums: &named, misses: &misses, boosted: &boosted, now: 5_000 };
+        assert_eq!(tier_of(&conv("x", &replied, false, 1), &r), None);
+        // Codex's prompts are as typed: a lone `/word` there is nothing new.
+        let codex = Conv { agent: Agent::Codex, ..conv("y", &replied, false, 1) };
+        let r = Rules { settings: &s, sums: &sums, misses: &misses, boosted: &boosted, now: 5 };
+        assert_eq!(tier_of(&codex, &r), None);
+        let plain = digest_text(1, &digest(Agent::Codex, &replied, None, &s));
+        assert!(plain.contains("First message: /sharpen\n"), "{plain}");
     }
 
     #[test]

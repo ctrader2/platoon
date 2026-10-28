@@ -304,6 +304,82 @@ fn a_conversation_with_nothing_but_filler_or_no_transcript_is_never_sent() {
     assert_eq!(row(&app, "running-only").name_source, NameSource::Folder);
 }
 
+/// A conversation started by typing a slash command, the way Claude Code writes it: the command's entry, then (for a
+/// skill) the skill's own text as an `isMeta` entry or (for a built-in) its output; Claude's reply; then only the
+/// answer to a question Claude asked, which is a tool result and no message. Made-up words throughout.
+fn started_with_command(w: &World, id: &str, entry: &str, skill: bool, reply: &str, secs_ago: u64) {
+    let cwd = format!("/work/{id}");
+    let end = now_ms() - secs_ago * 1000;
+    let after = if skill {
+        json!({"type":"user","isMeta":true,"cwd":cwd,"timestamp":iso(end - 9000),"message":{"role":"user","content":[{"type":"text","text":"SKILL-BODY-SECRET: steps the skill gives Claude"}]}})
+    } else {
+        json!({"type":"user","cwd":cwd,"timestamp":iso(end - 9000),"message":{"role":"user","content":"<local-command-stdout>LOCAL-OUTPUT-SECRET</local-command-stdout>"}})
+    };
+    let mut lines = vec![
+        json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":iso(end - 10_000),"message":{"role":"user","content":entry}})
+            .to_string(),
+        after.to_string(),
+    ];
+    lines.extend([
+        json!({"type":"assistant","cwd":cwd,"timestamp":iso(end - 5000),"message":{"model":"claude-sonnet-5","content":[{"type":"text","text":reply}],"usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}).to_string(),
+        json!({"type":"user","cwd":cwd,"timestamp":iso(end),"message":{"role":"user","content":[{"tool_use_id":"q","type":"tool_result","content":"ANSWER-SECRET"}]}}).to_string(),
+    ]);
+    w.transcript_lines(id, &lines);
+}
+
+#[test]
+fn a_conversation_started_with_a_skill_is_named_and_a_built_in_command_is_not_a_message() {
+    let w = World::new("sm-skill");
+    started_with_command(
+        &w,
+        "worded",
+        "<command-message>land</command-message>\n<command-name>/land</command-name>\n<command-args>the csv export branch</command-args>",
+        true,
+        "Landing the csv export branch now.",
+        300,
+    );
+    started_with_command(
+        &w,
+        "bare",
+        "<command-message>sharpen</command-message>\n<command-name>/sharpen</command-name>",
+        true,
+        "Which part of the billing retry should we sharpen first?",
+        200,
+    );
+    started_with_command(
+        &w,
+        "builtin",
+        "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>sonnet please now</command-args>",
+        false,
+        "Something Claude said about the weather on a long walk.",
+        100,
+    );
+    smart(&w, |_| {});
+    let fake = AiFake::new("sm-skill");
+    let mut app = app_with(&w, &fake);
+    app.settle_ai_for_test(10);
+    // The row says what was typed.
+    assert_eq!(row(&app, "worded").description, "/land the csv export branch");
+    assert_eq!(row(&app, "bare").description, "/sharpen");
+    // A conversation of nothing but a built-in command has no message at all: no row, as before.
+    assert!(!app.sessions.iter().any(|s| s.id == "builtin"));
+    // Both skills are named in one call; the built-in command is nothing to name.
+    assert_eq!(fake.calls(), 1);
+    let sent = fake.stdin(1);
+    assert_eq!(sent.lines().filter(|l| l.starts_with('[')).count(), 2, "{sent}");
+    assert!(sent.contains("First message (a command the user ran): /land the csv export branch\n"), "{sent}");
+    assert!(
+        sent.contains("First message (a command the user ran): /sharpen\n")
+            && sent.contains("Claude's last reply: Which part of the billing retry should we sharpen first?"),
+        "{sent}"
+    );
+    for secret in ["SKILL-BODY", "LOCAL-OUTPUT", "ANSWER-SECRET", "/model", "sonnet please"] {
+        assert!(!sent.contains(secret), "{secret}: {sent}");
+    }
+    assert_eq!(row(&app, "bare").name_source, NameSource::Generated);
+    assert_eq!(row(&app, "worded").name_source, NameSource::Generated);
+}
+
 // ---- what comes back --------------------------------------------------------------------------------------
 
 #[test]
