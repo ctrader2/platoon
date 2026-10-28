@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-28
+
 ### Added
 
 - After an update, platoon tells you once when `platoon setup` has something new to add that platoon doesn't need to
@@ -126,7 +128,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ctrader2/platoon/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ctrader2/platoon/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/ctrader2/platoon/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ctrader2/platoon/releases/tag/v1.0.0
