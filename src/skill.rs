@@ -48,8 +48,14 @@ fn trailer(body: &str) -> String {
     format!("{TRAILER_START} cksum {} -->\n", cksum(body.as_bytes()))
 }
 
+/// Which text of the skill this platoon ships, whatever path a copy names: it changes when a later platoon changes the
+/// skill.
+pub fn version() -> u32 {
+    cksum(TEMPLATE.as_bytes())
+}
+
 /// The CRC the POSIX `cksum` command prints for `data` (the same on Linux and macOS).
-fn cksum(data: &[u8]) -> u32 {
+pub fn cksum(data: &[u8]) -> u32 {
     fn step(crc: u32, byte: u8) -> u32 {
         let mut c = crc ^ (u32::from(byte) << 24);
         for _ in 0..8 {

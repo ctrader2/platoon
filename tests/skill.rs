@@ -130,6 +130,46 @@ fn the_skill_is_not_part_of_the_start_up_gate() {
     assert!(!err.contains("one-time setup") && past, "past the gate: {err}");
 }
 
+/// The platoon window on this world's folders, past the start-up gate (no `PLATOON_SKIP_SETUP_CHECK`).
+fn window(w: &World) -> common::Term {
+    let env = [
+        ("CLAUDE_CONFIG_DIR", w.claude().to_string_lossy().into_owned()),
+        ("PLATOON_CACHE_DIR", w.base.join("cache").to_string_lossy().into_owned()),
+        ("PLATOON_CONFIG_DIR", w.base.join("config").to_string_lossy().into_owned()),
+    ];
+    common::Term::spawn(&[], &env, &w.base, 24, 100)
+}
+
+const NOTICE: &str = "New: /to-tickets in Claude Code sessions — run `platoon setup` to add it";
+
+#[test]
+fn platoon_says_once_that_setup_has_the_skill_to_add_and_nothing_once_it_is_in() {
+    // Updated without running setup again: the skill is missing. Said above the footer, once.
+    let w = World::new("notice");
+    w.setup();
+    fs::remove_dir_all(w.claude().join("skills")).unwrap();
+    let mut t = window(&w);
+    t.wait_for_all(&[NOTICE, "? help"]);
+    t.send(b"j");
+    t.wait_gone("New: /to-tickets");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+    let mut t = window(&w);
+    t.wait_for("? help");
+    assert!(!t.stable().contains("/to-tickets"), "said once only");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+
+    // With the skill in: nothing.
+    let w = World::new("notice-done");
+    w.setup();
+    let mut t = window(&w);
+    t.wait_for("? help");
+    assert!(!t.stable().contains("/to-tickets"));
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}
+
 #[test]
 fn the_offer_hook_older_sessions_still_run_is_a_silent_no_op() {
     // A session platoon 1.0 started has `--settings` with this hook on its first edit: after an upgrade it must not

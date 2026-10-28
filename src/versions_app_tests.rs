@@ -24,6 +24,9 @@ const CLAUDE: &str = "Claude Code 2.2.0 is newer than this platoon was checked w
 const BOTH: &str =
     "Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). platoon 1.1.0 is out. To update: brew upgrade platoon";
 
+/// No notice showing.
+const NONE: [&str; 0] = [];
+
 fn shown(app: &App, w: u16, h: u16) -> Vec<String> {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(|f| ui::draw(f, app)).unwrap();
@@ -114,41 +117,41 @@ fn it_shows_on_the_two_lists_only_and_is_remembered_once_it_has_shown() {
     app.top = TOP_TASKS;
     app.set_news_for_test(CLAUDE);
     app.refresh();
-    assert_eq!(app.news_showing(), None);
+    assert_eq!(app.news_showing(), NONE);
     assert!(!words(&shown(&app, 110, 24)).contains("Claude Code 2.2.0"));
     assert!(!state.exists(), "not announced before it has shown");
     // Back on a list: it shows, and its versions are remembered as announced.
     app.top = TOP_PROJECTS;
     app.refresh();
-    assert_eq!(app.news_showing(), Some(CLAUDE));
+    assert_eq!(app.news_showing(), [CLAUDE]);
     assert!(words(&shown(&app, 110, 24)).contains(CLAUDE));
     assert!(state.exists());
     app.top = TOP_SESSIONS;
-    assert_eq!(app.news_showing(), Some(CLAUDE));
+    assert_eq!(app.news_showing(), [CLAUDE]);
     // Not over the help.
     app.help_open = true;
-    assert_eq!(app.news_showing(), None);
+    assert_eq!(app.news_showing(), NONE);
     app.help_open = false;
-    assert_eq!(app.news_showing(), Some(CLAUDE));
+    assert_eq!(app.news_showing(), [CLAUDE]);
 }
 
 #[test]
 fn the_next_key_or_click_puts_it_away_and_still_does_what_it_does() {
     let w = world("vn-key");
     let mut app = with_news(&w, CLAUDE);
-    assert_eq!(app.news_showing(), Some(CLAUDE));
+    assert_eq!(app.news_showing(), [CLAUDE]);
     app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
-    assert_eq!(app.news_showing(), None);
+    assert_eq!(app.news_showing(), NONE);
     assert_eq!(app.top, TOP_PROJECTS, "the key went to the Projects tab as well");
     app.on_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
     app.refresh();
-    assert_eq!(app.news_showing(), None, "gone for good");
+    assert_eq!(app.news_showing(), NONE, "gone for good");
     let lines = shown(&app, 110, 24);
     assert!(!words(&lines).contains("Claude Code 2.2.0"));
 
     let mut app = with_news(&w, CLAUDE);
     app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 50, row: 10, modifiers: KeyModifiers::NONE });
-    assert_eq!(app.news_showing(), None);
+    assert_eq!(app.news_showing(), NONE);
 }
 
 #[test]
@@ -157,7 +160,7 @@ fn a_test_app_starts_no_version_checks() {
     let w = world("vn-none");
     let mut app = w.app();
     app.refresh();
-    assert_eq!(app.news_showing(), None);
+    assert_eq!(app.news_showing(), NONE);
     assert!(!w.cache.join("version-check.json").exists());
 }
 

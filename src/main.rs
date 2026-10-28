@@ -78,6 +78,9 @@ mod select_app_tests;
 mod sessionhook;
 mod settings;
 mod setup;
+#[cfg(test)]
+mod setup_notice_app_tests;
+mod setupnotice;
 mod skill;
 mod smart;
 #[cfg(test)]

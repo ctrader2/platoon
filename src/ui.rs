@@ -65,17 +65,23 @@ fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
     }
 }
 
-/// A version notice wrapped to the width: at most four lines (two on a short terminal), the last cut with "…" if it
-/// still doesn't fit.
-fn news_lines(text: &str, width: usize, height: u16) -> Vec<String> {
-    let most = if height >= 20 { 4 } else { 2 };
-    let mut lines = wrap(text, width);
-    if lines.len() > most {
-        lines.truncate(most);
-        let last = lines.pop().unwrap_or_default();
-        lines.push(fit_end(&format!("{last}…"), width));
+/// The notices (`App::news_showing`) wrapped to the width, each starting its own line: at most four lines in all (two
+/// on a short terminal), each notice keeping a line for every one after it, the last line of one that still doesn't
+/// fit cut with "…".
+fn news_lines(texts: &[&str], width: usize, height: u16) -> Vec<String> {
+    let most: usize = if height >= 20 { 4 } else { 2 };
+    let mut out = Vec::new();
+    for (i, text) in texts.iter().enumerate() {
+        let room = most.saturating_sub(out.len() + texts.len() - i - 1).max(1);
+        let mut lines = wrap(text, width);
+        if lines.len() > room {
+            lines.truncate(room);
+            let last = lines.pop().unwrap_or_default();
+            lines.push(fit_end(&format!("{last}…"), width));
+        }
+        out.extend(lines);
     }
-    lines
+    out
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -163,8 +169,10 @@ fn draw_all(f: &mut Frame, app: &App) {
         .selected_session()
         .map(|s| s.summary.as_str())
         .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.board_showing() && !app.squads_showing());
-    // A newer Claude Code or platoon (`versions.rs`): its own lines above the footer, in the summary's place.
-    let news = app.news_showing().map(|text| news_lines(text, rest.width as usize, full.height));
+    // What setup has to add (`setupnotice.rs`), a newer Claude Code or platoon (`versions.rs`): their own lines above
+    // the footer, in the summary's place.
+    let showing = app.news_showing();
+    let news = (!showing.is_empty()).then(|| news_lines(&showing, rest.width as usize, full.height));
     let news_h = news.as_ref().map_or(0, |l| l.len() as u16);
     let strip_h = if news.is_none() && summary.is_some() && full.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = full.width;

@@ -6,6 +6,14 @@ here.
 
 ## [Unreleased]
 
+### Added
+
+- After an update, platoon tells you once when `platoon setup` has something new to add that platoon doesn't need to
+  start: "New: /to-tickets in Claude Code sessions — run `platoon setup` to add it", in a line above the key hints (or
+  "platoon's /to-tickets skill has an update" when a newer platoon changed it). It goes at your next key or click, and
+  for good once setup has put the skill in. Before, updating to 1.1.0 without running setup again left `/to-tickets`
+  out without a word.
+
 ## [1.1.0] - 2026-10-27
 
 ### Changed

@@ -156,6 +156,8 @@ small marks its parts leave for each other.
   when the editor is done
 - `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon,
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
+- `setup-notice.json`: what platoon has already told you `platoon setup` has to add (see
+  [Install and set up](install-and-setup.md#the-to-tickets-skill))
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 

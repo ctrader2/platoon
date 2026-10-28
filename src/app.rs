@@ -18,6 +18,7 @@ use crate::prompts::{self, PromptIndex};
 use crate::select::{Click, Drag, Past, Point, Selection, Unit, click_count, extract};
 use crate::settings::{EditorFor, Item, Kind, ModelFor, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
+use crate::setupnotice;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
 use crate::usage::{self, Usage};
@@ -515,6 +516,13 @@ struct News {
     shown: bool,
 }
 
+/// What `platoon setup` has to add or update outside the start-up gate (`setupnotice.rs`), waiting to show or showing.
+struct SetupNews {
+    notice: setupnotice::Notice,
+    /// It has been on screen, and its reason is remembered as said.
+    shown: bool,
+}
+
 pub struct App {
     /// Every conversation, newest activity first, across all tabs.
     pub sessions: Vec<Session>,
@@ -552,6 +560,8 @@ pub struct App {
     news: Option<News>,
     /// The version checks started with the app, until they answer.
     news_rx: Option<Receiver<Option<versions::Outcome>>>,
+    /// Something `platoon setup` has to add outside the start-up gate: shown where the version notice is, above it.
+    setup_news: Option<SetupNews>,
     pub mouse: (u16, u16),
     /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
     /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
@@ -811,6 +821,10 @@ impl App {
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.start_version_checks();
+        // Like the start-up gate, the setup notice is left out where tests and CI skip setup.
+        if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
+            app.look_for_setup_news();
+        }
         // Know the running hosts before the first frame: until then every session platoon hosts looks like a copy
         // running in another terminal, and Enter on it would offer to take it over instead of opening it.
         app.refresh();
@@ -905,6 +919,7 @@ impl App {
             notice: None,
             news: None,
             news_rx: None,
+            setup_news: None,
             mouse: (0, 0),
             selection: None,
             drag: None,
@@ -1248,6 +1263,29 @@ impl App {
             n.shown = true;
             let _ = n.state.save(&self.cache);
         }
+        // The setup notice goes as soon as its reason does (setup run in another terminal, Claude Code switched off).
+        if self.setup_news.as_ref().is_some_and(|n| self.setup_due().as_ref() != Some(&n.notice)) {
+            self.setup_news = None;
+        }
+        if self.news_place()
+            && let Some(n) = self.setup_news.as_mut().filter(|n| !n.shown)
+        {
+            n.shown = true;
+            let _ = setupnotice::remember(&self.cache, &n.notice);
+        }
+    }
+
+    /// What `platoon setup` has to add or update outside the gate now, for the Claude Code in use (`setupnotice.rs`).
+    fn setup_due(&self) -> Option<setupnotice::Notice> {
+        let claude = self.providers.claude.is_some();
+        setupnotice::look(claude, self.reader.root(), &setup::this_program().ok()?.0)
+    }
+
+    /// Look for what `platoon setup` has to add outside the gate, unless its reason was said before: `App::new` does at
+    /// start; a test's app only when the test asks.
+    pub fn look_for_setup_news(&mut self) {
+        let notice = self.setup_due().filter(|n| !setupnotice::said(&self.cache, n));
+        self.setup_news = notice.map(|notice| SetupNews { notice, shown: false });
     }
 
     /// Where a version notice shows: the Sessions and Projects lists, with nothing over them.
@@ -1255,15 +1293,20 @@ impl App {
         matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.board_showing()
     }
 
-    /// The version notice on screen now, if any.
-    pub fn news_showing(&self) -> Option<&str> {
-        self.news.as_ref().filter(|n| n.shown && self.news_place()).map(|n| n.text.as_str())
+    /// The notices on screen now, each its own lines: what setup has to add, then the version notice.
+    pub fn news_showing(&self) -> Vec<&str> {
+        if !self.news_place() {
+            return Vec::new();
+        }
+        let setup = self.setup_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
+        setup.into_iter().chain(self.news.as_ref().filter(|n| n.shown).map(|n| n.text.as_str())).collect()
     }
 
-    /// A key or a click while the version notice shows puts it away (the key still does what it does).
+    /// A key or a click while a notice shows puts the notices away (the key still does what it does).
     fn dismiss_news(&mut self) {
-        if self.news_showing().is_some() {
+        if !self.news_showing().is_empty() {
             self.news = None;
+            self.setup_news = None;
         }
     }
 

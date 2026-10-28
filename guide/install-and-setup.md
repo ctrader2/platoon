@@ -135,6 +135,24 @@ it) is never overwritten: setup leaves it as it is and says so in one line. To h
 folder and run `platoon setup` again. The skill is not needed to start platoon, so an upgraded platoon starts even
 before you run setup again.
 
+So that you still hear about it, platoon says so once, in a line above the key hints of the Sessions and Projects
+lists, when Claude Code is installed (and not switched off in the settings) and the skill is missing:
+
+```
+New: /to-tickets in Claude Code sessions — run `platoon setup` to add it
+```
+
+or when platoon's copy is older than the one this platoon would write (a newer platoon changed the skill, or platoon
+moved):
+
+```
+platoon's /to-tickets skill has an update — run `platoon setup`
+```
+
+The line goes at your next key or click, and doesn't come back for the same reason; it goes by itself once setup has
+put the skill in. A skill of yours by that name is your choice: platoon says nothing about it. When a version notice
+(below) shows at the same time, this line is just above it.
+
 Codex has skills too, but keeps a person's in `~/.agents/skills` (a folder shared with other tools), not in Codex's own
 folder, so setup doesn't write one there yet. In a Codex session, `t` on its row makes tasks from it.
 
