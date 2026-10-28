@@ -48,9 +48,9 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             screen.push((k.into(), d.into()));
         }
     }
-    // The footer says only "tab next pane"; the arrows do it too, in the direction of the pane.
-    if let Some(at) = screen.iter().position(|(_, d)| d == "next pane") {
-        screen.insert(at + 1, ("shift+arrows".into(), "the pane that way (ctrl+arrows too)".into()));
+    // The footer says only "←→ sessions/notes"; tab does it too, from either pane to the other.
+    if let Some(at) = screen.iter().position(|(_, d)| d == "sessions/notes") {
+        screen.insert(at + 1, ("tab".into(), "the other pane".into()));
     }
     out.extend(screen.into_iter().map(|(k, d)| Entry::Key(k, d)));
     out.push(Entry::Blank);

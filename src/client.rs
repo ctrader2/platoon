@@ -80,6 +80,18 @@ impl Client {
         lock(&self.parser).screen_mut().set_scrollback(0);
     }
 
+    /// Read the session's whole text (`select::History`): what is kept above its screen as well as the screen.
+    pub fn history<R>(&self, read: impl FnOnce(&crate::select::History) -> R) -> R {
+        let mut p = lock(&self.parser);
+        read(&crate::select::History::new(p.screen_mut()))
+    }
+
+    /// The session has asked to hear the mouse (Claude's full screen mode does): the wheel goes to it, and platoon
+    /// has no scrollback of its own to move.
+    pub fn wants_mouse(&self) -> bool {
+        lock(&self.parser).screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
+    }
+
     pub fn app_cursor(&self) -> bool {
         lock(&self.parser).screen().application_cursor()
     }

@@ -15,7 +15,7 @@ use crate::model::{NameSource, Proc, Session, Status};
 use crate::names::{self, Names};
 use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
-use crate::select::{Click, Point, Selection, Unit, click_count, extract};
+use crate::select::{Click, Drag, Past, Point, Selection, Unit, click_count, extract};
 use crate::settings::{EditorFor, Item, Kind, ModelFor, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::summaries::Summaries;
@@ -555,8 +555,8 @@ pub struct App {
     /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
     /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
     pub selection: Option<Selection>,
-    /// The left button is held and the selection follows the mouse.
-    dragging: bool,
+    /// The left button is held and the selection follows the mouse (and the view scrolls past an edge).
+    drag: Option<Drag>,
     /// The last press in the session's screen, for double and triple clicks.
     last_click: Option<Click>,
     /// Where copied text goes. Lives as long as the app: on X11 the program that set the clipboard is the one
@@ -895,7 +895,7 @@ impl App {
             news_rx: None,
             mouse: (0, 0),
             selection: None,
-            dragging: false,
+            drag: None,
             last_click: None,
             // Nothing is ever copied by an App that was not asked to: `new` and tests choose.
             clipboard: Clipboard::off(),
@@ -3309,8 +3309,7 @@ impl App {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
                     Mode::Attached(_) => {
-                        // Scrolling changes which text is under the highlight, and a selection is only of what is
-                        // on screen, so it is dropped.
+                        // The wheel drops the selection, as typing does (a drag scrolls by itself past an edge).
                         self.clear_selection();
                         // A session that asked for mouse reports (Claude's full screen mode does) gets the wheel
                         // as a report and scrolls itself; ours would have nothing to scroll there. Never a paused
@@ -3417,6 +3416,13 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => self.extend_selection(m),
             MouseEventKind::Up(MouseButton::Left) => self.finish_selection(),
+            // The pointer moving with no button held: a release the terminal never reported (it was let go outside
+            // the window). Whatever happens to the selection, the view stops scrolling.
+            MouseEventKind::Moved => {
+                if let Some(d) = &mut self.drag {
+                    d.past = None;
+                }
+            }
             _ => {}
         }
         self.update_view();
@@ -3440,7 +3446,7 @@ impl App {
 
     fn clear_selection(&mut self) {
         self.selection = None;
-        self.dragging = false;
+        self.drag = None;
     }
 
     /// A press on the session's text starts a selection (a double or triple click one by word or line). It only
@@ -3448,14 +3454,16 @@ impl App {
     /// bar, the frame, or a session that is paused (its text is under the banner).
     fn begin_selection(&mut self, m: MouseEvent) {
         self.clear_selection();
-        if !matches!(self.mode, Mode::Attached(_)) || self.client.is_none() || self.attached_paused() {
+        if !matches!(self.mode, Mode::Attached(_)) || self.attached_paused() {
             return;
         }
+        let Some(client) = &self.client else { return };
         let area = self.term_area();
         if !area.contains((m.column, m.row).into()) {
             return;
         }
-        let at = Point::new(m.row - area.y, m.column - area.x);
+        let row = m.row - area.y;
+        let at = Point::new(client.history(|h| h.top()) + usize::from(row), m.column - area.x);
         let now = Instant::now();
         let count = click_count(self.last_click, now, at);
         self.last_click = Some(Click { at: now, point: at, count });
@@ -3465,33 +3473,72 @@ impl App {
             _ => Unit::Line,
         };
         self.selection = Some(Selection::new(at, unit));
-        self.dragging = true;
+        self.drag = Some(Drag::new(row));
     }
 
-    /// Dragging past an edge of the session's screen sticks to that edge (no scrolling in v1).
+    /// The head follows the pointer. Past the top or bottom edge of the session's screen it stays on the edge line
+    /// and the view scrolls (`drag_scroll`), back through the history above or on toward the live screen below;
+    /// where the session has asked to hear the mouse there is no history of platoon's to scroll, and it just stays
+    /// on the edge.
     fn extend_selection(&mut self, m: MouseEvent) {
-        if !self.dragging {
-            return;
-        }
         let area = self.term_area();
+        let scrolls = self.client.as_ref().is_some_and(|c| !c.wants_mouse());
+        let Some(drag) = &mut self.drag else { return };
         let col = m.column.clamp(area.x, area.right().saturating_sub(1)) - area.x;
         let row = m.row.clamp(area.y, area.bottom().saturating_sub(1)) - area.y;
+        drag.left_row |= row != drag.press_row;
+        let past = if !scrolls {
+            None
+        } else if m.row >= area.bottom() {
+            Some((false, m.row - area.bottom() + 1))
+        } else if m.row <= area.y && drag.left_row {
+            Some((true, area.y - m.row + 1))
+        } else {
+            None
+        };
+        let now = Instant::now();
+        drag.past = past.map(|(up, rows)| match drag.past {
+            Some(p) if p.up == up => Past { rows, col, ..p },
+            _ => Past { up, rows, col, since: now, last_step: None },
+        });
+        self.move_head(row, col);
+        self.drag_scroll(now);
+    }
+
+    /// Put the selection's head on a cell of the view.
+    fn move_head(&mut self, row: u16, col: u16) {
+        let Some(client) = &self.client else { return };
+        let top = client.history(|h| h.top());
         if let Some(sel) = &mut self.selection {
-            sel.head = Point::new(row, col);
+            sel.head = Point::new(top + usize::from(row), col);
         }
     }
 
-    /// Letting go copies what is selected, once. A press that never moved (a click) copies nothing, and neither
-    /// does a selection of only blanks: both are dropped.
+    /// While a drag is held past the top or bottom edge, scroll the view a step when one is due and keep the head on
+    /// the edge line, so the selection grows over the text coming into view. Called with every event and on every
+    /// pass of the event loop: the terminal says nothing while the mouse stands still.
+    pub fn drag_scroll(&mut self, now: Instant) {
+        let Some(Drag { past: Some(past), .. }) = &mut self.drag else { return };
+        let (up, col) = (past.up, past.col);
+        let Some(lines) = past.step(now) else { return };
+        let Some(client) = &self.client else { return };
+        if client.wants_mouse() {
+            return;
+        }
+        let lines = i32::try_from(lines).unwrap_or(i32::MAX);
+        client.scroll(if up { lines } else { -lines });
+        let edge = if up { 0 } else { self.term_area().height.saturating_sub(1) };
+        self.move_head(edge, col);
+    }
+
+    /// Letting go copies what is selected, once: all of it, the lines scrolled out of view included. A press that
+    /// never moved (a click) copies nothing, and neither does a selection of only blanks: both are dropped.
     fn finish_selection(&mut self) {
-        if !std::mem::take(&mut self.dragging) {
+        if self.drag.take().is_none() {
             return;
         }
         let (Some(sel), Some(client)) = (self.selection, &self.client) else { return };
-        let text = {
-            let parser = client.parser.lock().unwrap_or_else(|e| e.into_inner());
-            sel.span(parser.screen()).map(|span| extract(parser.screen(), span))
-        };
+        let text = client.history(|h| sel.span(h).map(|span| extract(h, span)));
         match text {
             Some(text) if !text.is_empty() => {
                 let outcome = self.clipboard.copy(&text);

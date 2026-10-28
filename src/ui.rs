@@ -5,7 +5,7 @@ use crate::app::{
 use crate::client::Client;
 use crate::dirs::tilde;
 use crate::model::{NameSource, Session, Status};
-use crate::select::{Selection, Span as Cells};
+use crate::select::{History, Selection, Span as Cells};
 use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
 use crate::theme::Theme;
 use crate::usage::Usage;
@@ -260,7 +260,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         "draft tasks",
         "hand-off",
         "project",
-        "next pane",
+        "sessions/notes",
         "settings",
         "scroll",
         "new session",
@@ -423,7 +423,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     }
     out.extend([
         ("/", "search", Some(Action::Search)),
-        ("tab", "next pane", None),
+        ("←→", "sessions/notes", None),
         ("?", "help", Some(Action::Help)),
         ("esc", "back", Some(Action::Leave)),
     ]);
@@ -3711,9 +3711,14 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
 
 /// Paint the attached session into the buffer.
 fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect, selection: Option<Selection>) {
-    let parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
-    let screen = parser.screen();
-    draw_screen(f, t, screen, area, selection.and_then(|s| s.span(screen)));
+    let mut parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
+    // The selection is of the session's text, which may run on above or below the view: where it starts and ends
+    // there, and the line at the top of the view, are read before the screen is drawn.
+    let selected = selection.and_then(|s| {
+        let text = History::new(parser.screen_mut());
+        s.span(&text).map(|span| (text.top(), span))
+    });
+    draw_screen(f, t, parser.screen(), area, selected);
 }
 
 /// The emulator's colors as the theme shows them: the 16 ANSI colors become the theme's palette (when it has
@@ -3730,10 +3735,11 @@ fn vt_color(c: vt100::Color, default: Color, ansi: Option<&[Color; 16]>) -> Colo
     }
 }
 
-/// Paint an emulator screen into the buffer, cell by cell. Cells in `selected` are drawn as selected text on
+/// Paint an emulator screen into the buffer, cell by cell. Cells in `selected` (the line at the top of the view, and
+/// the selection's span in the session's text) are drawn as selected text on
 /// top of the session's own colors: on the theme's selection color (see `Theme::selection_bg`), keeping the
 /// text's color unless that would not read on it, or reversed where the theme has no colors of its own.
-fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, selected: Option<Cells>) {
+fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, selected: Option<(usize, Cells)>) {
     let (rows, cols) = screen.size();
     let selection_bg = t.selection_bg();
     let buf = f.buffer_mut();
@@ -3755,7 +3761,7 @@ fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, sel
                     std::mem::swap(&mut fg, &mut bg);
                 }
             }
-            if selected.is_some_and(|s| s.contains(r, c)) {
+            if selected.is_some_and(|(top, s)| s.contains(top + usize::from(r), c)) {
                 match selection_bg {
                     Some(sel) => {
                         bg = sel;

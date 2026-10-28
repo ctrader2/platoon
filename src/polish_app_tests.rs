@@ -294,16 +294,17 @@ fn the_help_explains_the_context_figure_the_task_rows_and_the_pane_arrows() {
     let (_w, mut app, _) = on_a_project("h-notes");
     let help = ui::help_for_test(&app);
     let here = section(&help, "On this screen");
-    assert!(here.contains(&("tab".into(), "next pane".into())), "{here:?}");
-    assert!(here.iter().any(|(k, _)| k == "shift+arrows"), "the arrows are kept in the help: {here:?}");
+    assert!(here.contains(&("←→".into(), "sessions/notes".into())), "{here:?}");
+    assert!(here.contains(&("tab".into(), "the other pane".into())), "tab is kept in the help: {here:?}");
+    assert!(!here.iter().any(|(k, d)| k.contains("ctrl") || d.contains("ctrl")), "ctrl+arrows is not advertised: {here:?}");
     let notes = section(&help, "Good to know");
     assert!(notes.iter().any(|(_, n)| n.starts_with("62% on a session's row: how full its context is")), "{notes:?}");
     assert!(notes.iter().any(|(_, n)| n.starts_with("A project's screen lists its sessions, then its tasks.")), "{notes:?}");
-    // The footer says only "tab next pane".
+    // The footer says only "←→ sessions/notes".
     let mut term = sized(&mut app, 120, 30);
     let lines = draw(&mut term, &app);
     let footer = lines.last().unwrap();
-    assert!(footer.contains("tab next pane") && !footer.contains("shift+arrows"), "{footer}");
+    assert!(footer.contains("←→ sessions/notes") && !footer.contains("tab"), "{footer}");
 }
 
 // ---- group 6: the words -------------------------------------------------------------------------------------------

@@ -6,6 +6,16 @@ here.
 
 ## [Unreleased]
 
+### Changed
+
+- On a project's screen, `←` and `→` now switch between the sessions and the notes on their own. They needed `ctrl` or
+  `shift` before, and `ctrl` with an arrow is the Mac's own key for moving between desktops.
+
+### Fixed
+
+- Selecting text in a session by dragging now scrolls when you drag past the top or bottom edge and hold there, so a
+  selection can be longer than the screen; letting go copies all of it. Before, the drag stopped at the edge.
+
 ## [1.0.1] - 2026-10-25
 
 ### Fixed

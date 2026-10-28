@@ -126,3 +126,66 @@ fn dragging_over_a_line_of_the_session_highlights_it_and_copies_it_once_and_a_do
     t.send(b"q");
     t.wait_exit();
 }
+
+/// The text an OSC 52 payload carries (standard base64 with padding).
+fn unbase64(payload: &str) -> String {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bytes = Vec::new();
+    let (mut bits, mut n) = (0u32, 0);
+    for c in payload.bytes().take_while(|&c| c != b'=') {
+        bits = bits << 6 | ABC.iter().position(|&a| a == c).expect("a base64 character") as u32;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            bytes.push((bits >> n) as u8);
+        }
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
+#[test]
+fn a_drag_held_still_above_the_session_keeps_scrolling_back_and_letting_go_copies_all_of_it() {
+    let base = tmp("select-scroll-e2e");
+    let env = env(&base);
+    let work = base.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let _end = EndHost(base.join("cache"));
+    let mut t = Term::spawn(&[], &env, &work, 30, 100);
+    t.wait_for("enter open");
+    t.send(b"n");
+    t.wait_for("pick a folder");
+    t.send(work.to_string_lossy().as_bytes());
+    t.send(b"\r");
+    t.wait_for("back to list");
+
+    // Eighty lines, n1 to n80: far more than the session's 29 rows, so most go above the screen.
+    t.send(b"seq 80 | sed 's/^/n/'\r");
+    let line = |screen: &str, want: &str| screen.lines().position(|l| l.trim_end() == want);
+    let mut row = None;
+    until("the last lines on screen", || {
+        row = line(&t.text(), "n70");
+        row.is_some() && line(&t.text(), "n80").is_some()
+    });
+    let row = row.unwrap() as u16;
+    assert!(line(&t.text(), "n1").is_none(), "the first lines are above the screen");
+
+    // Press at the end of "n70", drag up to the top row, and hold still there: no more mouse events.
+    t.send(&sgr(0, 2, row, false));
+    t.send(&sgr(32, 2, row - 5, false));
+    t.send(&sgr(32, 0, 0, false));
+    until("the view to scroll back to the first line by itself", || line(&t.text(), "n1").is_some());
+    assert!(osc52_payloads(&t.raw()).is_empty(), "nothing is copied before the button is released");
+    t.send(&sgr(0, 0, 0, true));
+    until("the copy", || !osc52_payloads(&t.raw()).is_empty());
+    let copied = unbase64(&osc52_payloads(&t.raw())[0]);
+    // Let go as soon as n1 is in view, the view may have gone on past it to what the shell printed before (its prompt,
+    // the command), which depends on the shell; from n1 on it is exact.
+    let all = (1..=70).map(|i| format!("n{i}")).collect::<Vec<_>>().join("\n");
+    assert!(copied == all || copied.ends_with(&format!("\n{all}")), "every line from the first to n70, in order:\n{copied}");
+    assert_eq!(osc52_payloads(&t.raw()).len(), 1, "copied once");
+
+    t.send(&[0]); // ctrl+space
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
+}

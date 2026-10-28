@@ -304,10 +304,16 @@ selecting itself instead:
 A note in the status bar says what was copied (`Copied 3 lines`, `Copied 12 characters`), or that nothing could be, in
 which case hold `shift` and drag.
 
-- The selection is of what is on screen, in reading order: the rest of the first row, whole rows in between, the start of
-  the last. Rows the terminal wrapped are joined without a line break, real line breaks stay, trailing spaces are dropped,
-  and a selection of nothing but blanks copies nothing. Dragging past the edge of the session sticks to that edge (it does
-  not scroll).
+- The selection is in reading order: the rest of the first row, whole rows in between, the start of the last. Rows the
+  terminal wrapped are joined without a line break, real line breaks stay, trailing spaces are dropped, and a selection of
+  nothing but blanks copies nothing.
+- To select more than fits on the screen, drag past its edge and hold the button there: to the top row to scroll back
+  through the session's history, onto the status bar below to scroll forward again. It keeps scrolling while you hold
+  still, a line at a time at first and faster the longer you hold (and the further out, where your terminal reports
+  that); move back onto the text to stop. The highlight stays on the text as it scrolls, and letting go copies all of it.
+  (If you pressed on the top row itself, it only counts as the edge once the drag has been on another row.) A program
+  that takes the mouse itself (Claude Code's full screen mode) scrolls its own screen, so there the drag stops at the
+  edge.
 - A word is letters, digits and the characters that live inside paths and URLs (`_ - . / : ~ @ % + = # ? &`), so a path, a
   URL or `--flag=value` is one word. Quotes, brackets, commas, `|`, `$` and box-drawing characters end a word, and a full
   stop, colon or question mark right at its end is left off unless you clicked on it.

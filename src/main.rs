@@ -467,6 +467,8 @@ fn run() -> io::Result<usize> {
         }
         // A session's host may have closed its connection: connect again (or leave the session) before drawing.
         app.keep_attached();
+        // A selection dragged past the top or bottom of a session keeps scrolling while the mouse stands still.
+        app.drag_scroll(Instant::now());
         // A notice that appears or runs out changes the footer. (One given by the work above belongs to this screen.)
         app.settle_notice();
         let notice = app.active_notice().map(str::to_string);

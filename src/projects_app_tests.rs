@@ -542,15 +542,34 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     assert!(f.contains("Sessions") && f.contains("Notes") && f.contains("No notes yet"), "{shown}");
     assert!(f.contains("They live in") && f.contains("project.md"), "says where they live: {shown}");
     assert!(!f.contains("beta talks"), "{shown}");
-    // Focus: shift+left and shift+right move it between the panes; the focused pane has the accent border.
+    // Focus: left and right move it between the panes; the focused pane has the accent border.
     assert_eq!(app.pane, Pane::Sessions);
-    shift(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Right);
     assert_eq!(app.pane, Pane::Notes);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.pane, Pane::Notes, "right again stays on the notes");
     key(&mut app, KeyCode::Down); // scrolls the notes, not the sessions
     assert_eq!(app.selected, 0);
-    shift(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.pane, Pane::Sessions);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.pane, Pane::Sessions, "left again stays on the sessions");
     key(&mut app, KeyCode::Down);
     assert_eq!(app.selected, 1);
+    // With shift, ctrl or tab as well.
+    shift(&mut app, KeyCode::Right);
+    assert_eq!(app.pane, Pane::Notes);
+    shift(&mut app, KeyCode::Left);
+    assert_eq!(app.pane, Pane::Sessions);
+    app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+    assert_eq!(app.pane, Pane::Notes);
+    app.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+    assert_eq!(app.pane, Pane::Sessions);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.pane, Pane::Notes);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.pane, Pane::Sessions);
+    assert_eq!(app.selected, 1, "switching panes never moves the session picked");
     // A click on a pane focuses it.
     draw(&mut term, &app);
     click_hit(&mut app, |h| matches!(h, Hit::Pane(Pane::Notes)));

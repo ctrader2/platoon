@@ -422,13 +422,12 @@ impl App {
     }
 
     fn project_screen_key(&mut self, key: KeyEvent) {
-        // Plain arrows move inside a pane. With Shift or Ctrl (both, because some terminals keep one of them for
-        // themselves) they move between the panes: left to the sessions, right to the notes.
-        let across = key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL);
+        // ← and → go to the pane that way, left to the sessions, right to the notes, as they switch Active and
+        // Archived elsewhere: neither pane has a use for them. With Shift or Ctrl too, as they did before (Ctrl+arrows
+        // is the Mac's own key for moving between desktops, so it is not the one platoon says).
         match key.code {
-            KeyCode::Left if across => self.pane = Pane::Sessions,
-            KeyCode::Right if across => self.pane = Pane::Notes,
-            KeyCode::Left | KeyCode::Right => {}
+            KeyCode::Left => self.pane = Pane::Sessions,
+            KeyCode::Right => self.pane = Pane::Notes,
             KeyCode::Tab | KeyCode::BackTab => {
                 self.pane = if self.pane == Pane::Sessions { Pane::Notes } else { Pane::Sessions };
             }

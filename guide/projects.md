@@ -53,9 +53,8 @@ Done). A section with nothing in it says so in one line. A task's session is cou
 in the project's numbers (it isn't on the Sessions tab either). This list has every task but the cancelled ones,
 whichever list of the Tasks tab it is on.
 
-- `tab` and `shift+tab` switch between the two panes. `shift+←` goes to the sessions and `shift+→` to the notes; `ctrl`
-  with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
-  pane: `↑` `↓` move in the sessions or scroll the notes, and `←` `→` do nothing there.
+- `←` goes to the sessions and `→` to the notes; `tab` and `shift+tab` switch between the two panes too. `↑` `↓` move in
+  the sessions or scroll the notes.
 - `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r`, `h` and `t` work there too).
 - `enter` on a task does what it does on the Tasks tab: opens its session, or shows its text when it never started
   (`esc` comes back here). Its other keys (`s`, `e`, `c`) are on the Tasks tab.

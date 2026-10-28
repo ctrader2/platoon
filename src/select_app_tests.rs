@@ -6,7 +6,7 @@ use crate::app::{Action, App, Hit, Mode};
 use crate::client::Client;
 use crate::clipboard::fake::{Fake, Record, osc52_texts};
 use crate::clipboard::{Clipboard, Target};
-use crate::select::{Point, Unit};
+use crate::select::{Point, SCROLL_STEP, Unit};
 use crate::testkit::World;
 use crate::theme::Theme;
 use crate::ui;
@@ -20,7 +20,7 @@ use std::{
     io::Read,
     os::unix::net::UnixStream,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// The screen the tests share: 80x24, so the session's screen is 23 rows by the whole 80 columns at (0, 0) (there
@@ -35,6 +35,8 @@ struct Rig {
     host: UnixStream,
     rec: Arc<Mutex<Record>>,
     term: Terminal<TestBackend>,
+    /// The time the event loop last told the app (`hold`): it only goes forward.
+    clock: Instant,
 }
 
 fn rig_with(text: &str, target: Target, tweak: impl FnOnce(&mut Fake)) -> Rig {
@@ -48,7 +50,7 @@ fn rig_with(text: &str, target: Target, tweak: impl FnOnce(&mut Fake)) -> Rig {
     let (mut fake, rec) = Fake::new();
     tweak(&mut fake);
     app.set_clipboard(Clipboard::new(target, Box::new(fake)));
-    let mut r = Rig { _w: w, app, host, rec, term: Terminal::new(TestBackend::new(80, 24)).unwrap() };
+    let mut r = Rig { _w: w, app, host, rec, term: Terminal::new(TestBackend::new(80, 24)).unwrap(), clock: Instant::now() };
     r.draw();
     r
 }
@@ -132,12 +134,46 @@ impl Rig {
 
     /// The cells the selection covers now.
     fn span(&self) -> Option<crate::select::Span> {
-        let parser = self.app.client.as_ref().unwrap().parser.lock().unwrap();
-        self.app.selection.and_then(|s| s.span(parser.screen()))
+        let sel = self.app.selection?;
+        self.app.client.as_ref().unwrap().history(|h| sel.span(h))
     }
 
     fn buffer(&self) -> &ratatui::buffer::Buffer {
         self.term.backend().buffer()
+    }
+
+    /// How many lines the view is scrolled back from the live screen.
+    fn scrollback(&self) -> usize {
+        self.app.client.as_ref().unwrap().parser.lock().unwrap().screen().scrollback()
+    }
+
+    /// The rows of the session's screen as the view shows them now.
+    fn rows(&self) -> Vec<String> {
+        self.app.client.as_ref().unwrap().parser.lock().unwrap().screen().rows(0, COLS).collect()
+    }
+
+    /// The event loop's pass `after` the last one (or now, if that is later: a drag event also steps at once).
+    fn pass(&mut self, after: Duration) {
+        self.clock = self.clock.max(Instant::now()) + after;
+        self.app.drag_scroll(self.clock);
+    }
+
+    /// The mouse held where it is, as the event loop sees it: `n` steps' time, one step at a time.
+    fn hold(&mut self, n: u32) {
+        for _ in 0..n {
+            self.pass(SCROLL_STEP);
+        }
+    }
+
+    /// Held until the view stops moving (the end of the history or the live screen), at most 30 seconds' worth.
+    fn hold_to_the_end(&mut self) {
+        for _ in 0..600 {
+            let before = self.scrollback();
+            self.pass(SCROLL_STEP);
+            if self.scrollback() == before {
+                return;
+            }
+        }
     }
 }
 
@@ -287,15 +323,18 @@ fn it_only_works_in_the_attached_view() {
 }
 
 #[test]
-fn dragging_past_an_edge_sticks_to_that_edge() {
+fn with_nothing_to_scroll_dragging_past_an_edge_sticks_to_that_edge() {
     let mut r = rig(TEXT);
     r.press(1, 7);
+    let last = usize::from(ROWS - 1);
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 500, 300);
-    assert_eq!(r.app.selection.unwrap().head, Point::new(ROWS - 1, COLS - 1), "bottom right");
+    assert_eq!(r.app.selection.unwrap().head, Point::new(last, COLS - 1), "bottom right");
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0);
     assert_eq!(r.app.selection.unwrap().head, Point::new(0, 0), "top left");
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 40, 23);
-    assert_eq!(r.app.selection.unwrap().head, Point::new(ROWS - 1, 40), "onto the status bar: the last row of the screen");
+    assert_eq!(r.app.selection.unwrap().head, Point::new(last, 40), "onto the status bar: the last row of the screen");
+    r.hold(10);
+    assert_eq!(r.scrollback(), 0, "no history: nothing moved");
 }
 
 #[test]
@@ -305,6 +344,143 @@ fn dragging_out_of_the_screen_and_releasing_there_still_copies_up_to_the_edge() 
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 500, 300);
     r.mouse(MouseEventKind::Up(MouseButton::Left), 500, 300);
     assert_eq!(r.system(), ["line here\nthird"]);
+}
+
+// --- dragging past an edge scrolls ---------------------------------------------------------------------
+
+/// A hundred numbered lines: the screen shows the last 23 (77 to 99), and 77 are kept above it.
+fn long_text() -> String {
+    (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
+}
+
+fn numbered(lines: std::ops::RangeInclusive<usize>) -> String {
+    lines.map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn a_drag_held_above_the_screen_scrolls_back_and_the_selection_stays_on_its_text() {
+    let mut r = rig(&long_text());
+    assert_eq!(r.rows()[0], "line 77");
+    // From the end of "line 87" (row 10) up to the top row.
+    r.press(10, 6);
+    r.drag(5, 3);
+    assert_eq!(r.scrollback(), 0, "inside the screen nothing scrolls");
+    r.drag(0, 0);
+    assert_eq!(r.scrollback(), 1, "the first line comes into view at once");
+    r.hold(4);
+    assert_eq!(r.scrollback(), 5, "and one more for each step it is held there, with the mouse standing still");
+    let frame = r.draw();
+    assert!(frame.contains("scrolled 5 lines"), "{frame}");
+    assert_eq!(r.rows()[0], "line 72");
+    let theme = r.app.effective_theme().clone();
+    let sel = theme.selection_bg().unwrap();
+    // The press was on row 10; its line has moved down five rows with the text, and the highlight with it.
+    assert_eq!(r.rows()[15], "line 87");
+    assert_eq!((bg_of(&r, 0, 0), bg_of(&r, 15, 6)), (sel, sel), "from the top of the view to the press");
+    assert_eq!((bg_of(&r, 15, 7), bg_of(&r, 16, 2)), (theme.bg, theme.bg), "and nothing after it");
+    assert!(r.system().is_empty(), "nothing is copied while the button is down");
+
+    r.hold_to_the_end();
+    assert_eq!(r.scrollback(), 77, "all the way back to the oldest line kept");
+    assert_eq!(r.rows()[0], "line 0");
+    r.release(0, 0);
+    assert_eq!(r.system(), [numbered(0..=87)], "the whole selection, most of it scrolled out of view, in order");
+    assert_eq!(r.osc52(), [numbered(0..=87)]);
+    assert_eq!(r.notice().as_deref(), Some("Copied 88 lines"));
+    r.hold(10);
+    assert_eq!(r.scrollback(), 77, "let go, nothing scrolls any more");
+    assert_eq!(r.system().len(), 1, "and it was copied once");
+}
+
+#[test]
+fn a_drag_held_below_the_screen_scrolls_on_toward_the_live_screen_and_copies_more_than_a_screen() {
+    let mut r = rig(&long_text());
+    for _ in 0..30 {
+        r.mouse(MouseEventKind::ScrollUp, 10, 10);
+    }
+    assert_eq!((r.scrollback(), r.rows()[0].as_str()), (77, "line 0"), "scrolled back to the start");
+    r.press(2, 0);
+    r.drag(12, 4);
+    // Onto the status bar, the row below the session's screen.
+    r.drag(23, 10);
+    assert_eq!(r.scrollback(), 76);
+    r.hold(9);
+    assert_eq!(r.scrollback(), 67, "a line a step");
+    r.draw();
+    let sel = r.app.effective_theme().selection_bg().unwrap();
+    assert_eq!(r.rows()[22], "line 32", "the bottom row is the newest line in view");
+    assert_eq!((bg_of(&r, 0, 3), bg_of(&r, 22, 3)), (sel, sel), "every row in view is selected");
+
+    // Held long enough it goes faster: four lines a step after two seconds.
+    let before = r.scrollback();
+    r.pass(Duration::from_secs(3));
+    assert_eq!(r.scrollback(), before - 4);
+    r.hold_to_the_end();
+    assert_eq!(r.scrollback(), 0, "it stops at the live screen");
+    r.release(23, 10);
+    assert_eq!(r.system(), [numbered(2..=99)]);
+    assert_eq!(r.notice().as_deref(), Some("Copied 98 lines"));
+}
+
+#[test]
+fn moving_back_inside_the_screen_stops_the_scrolling_and_the_head_follows_the_pointer_again() {
+    let mut r = rig(&long_text());
+    r.press(10, 6);
+    r.drag(3, 0);
+    r.drag(0, 0);
+    r.hold(3);
+    assert_eq!(r.scrollback(), 4);
+    r.drag(2, 4);
+    r.hold(10);
+    assert_eq!(r.scrollback(), 4, "inside again: the view stays");
+    // The view starts at line 73, so row 2 is "line 75"; the press's line, 87, is on row 14 now.
+    r.release(2, 4);
+    assert_eq!(r.system(), [format!(" 75\n{}", numbered(76..=87))]);
+}
+
+#[test]
+fn a_press_on_the_top_row_selects_along_it_without_scrolling_until_the_drag_has_left_it() {
+    let mut r = rig(&long_text());
+    r.press(0, 6);
+    r.drag(0, 3);
+    r.drag(0, 0);
+    r.hold(5);
+    assert_eq!(r.scrollback(), 0, "selecting in the top row's own text");
+    r.drag(1, 0);
+    r.drag(0, 0);
+    assert_eq!(r.scrollback(), 1, "back to the top row from below: that is the edge");
+    r.release(0, 0);
+    assert_eq!(r.system(), [numbered(76..=77)]);
+}
+
+#[test]
+fn the_pointer_moving_with_no_button_held_stops_the_scrolling() {
+    let mut r = rig(&long_text());
+    r.press(10, 6);
+    r.drag(3, 0);
+    r.drag(0, 0);
+    assert_eq!(r.scrollback(), 1);
+    // The button was let go outside the window and the terminal never said so.
+    r.mouse(MouseEventKind::Moved, 5, 5);
+    r.hold(10);
+    assert_eq!(r.scrollback(), 1);
+}
+
+#[test]
+fn a_session_that_asked_for_mouse_reports_is_not_scrolled_by_a_drag_and_it_sticks_to_the_edge() {
+    let mut r = rig(&format!("{}\x1b[?1000h\x1b[?1006h", long_text()));
+    r.press(10, 6);
+    r.drag(3, 0);
+    r.drag(0, 0);
+    r.hold(10);
+    assert_eq!(r.scrollback(), 0, "the session scrolls itself: platoon has nothing to move");
+    r.drag(23, 10);
+    r.hold(10);
+    assert_eq!(r.scrollback(), 0);
+    r.drag(0, 0);
+    r.release(0, 0);
+    assert_eq!(r.system(), [numbered(77..=87)], "up to the edge, as before");
+    assert!(r.sent().is_empty(), "and the drag was not sent to the session");
 }
 
 // --- the selection's lifetime -------------------------------------------------------------------------

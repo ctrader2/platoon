@@ -775,8 +775,14 @@ fn a_projects_screen_lists_its_sessions_and_its_tasks_apart_and_enter_on_a_task_
     assert!(app.project_task_picked().is_some());
     let shown = draw(&mut term, &app);
     assert!(shown.contains("enter open") && !shown.contains("a archive") && !shown.contains("h hand-off"), "{shown}");
-    // Enter on one that never started: its text, on its own screen; esc comes back to the project's screen, on its row.
+    // ← and → go to the notes and back, and the task picked stays picked.
     pick(&mut app, 1);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.pane, crate::app::Pane::Notes);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.pane, crate::app::Pane::Sessions);
+    assert_eq!(app.project_task_picked(), Some(1));
+    // Enter on one that never started: its text, on its own screen; esc comes back to the project's screen, on its row.
     key(&mut app, KeyCode::Enter);
     assert!(app.task_screen_showing() && app.tk.open == Some(1));
     assert!(draw(&mut term, &app).contains("Write the guide"));
