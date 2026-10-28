@@ -716,12 +716,19 @@ pub fn spent(path: &Path) -> Option<Spent> {
 /// How many of the rollouts written to last are looked through for the plan's limits.
 const LIMITS_FROM: usize = 8;
 
-/// The plan's limits as Codex last reported them: the `rate_limits` of the newest `token_count` record, in the rollout
-/// written to last that has one (any rollout: a conversation resumed months later writes to its old file). Each window
-/// (`primary`, `secondary`) with its length (`window_minutes`), the percent used and when it starts over; a window
-/// that is null is left out. None when no rollout says. Expired windows are the caller's to drop: it knows the time.
-/// A rollout is read again only when it changes (its time and size), so this can be asked every second.
-pub fn rate_limits(root: &Path) -> Option<Vec<crate::usage::Limit>> {
+/// The plan's limits as Codex reports them. The windows are the ones of the newest `token_count` record, in the
+/// rollout written to last that has one (any rollout: a conversation resumed months later writes to its old file):
+/// each window (`primary`, `secondary`) with its length (`window_minutes`), the percent used and when it starts over;
+/// a window that is null is left out. None when no rollout says.
+///
+/// Each window's figure is the highest that any of those rollouts' newest records holds for the current window of
+/// that length still running at `now` (`usage::current`: the latest `resets_at`, give or take a few minutes): each
+/// conversation records what its own last answer said, so the rollout written to last can hold an old snapshot (a
+/// conversation resumed after a long while, before its first answer), and within one window usage only grows (the
+/// same rule as `usage::load` for Claude Code). A window none of them has running is
+/// left as the newest record has it; expired windows are the caller's to drop. A rollout is read again only when it
+/// changes (its time and size), so this can be asked every second.
+pub fn rate_limits(root: &Path, now: u64) -> Option<Vec<crate::usage::Limit>> {
     type Seen = ((std::time::SystemTime, u64), Option<Vec<crate::usage::Limit>>);
     static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, Seen>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     let mut newest: Vec<(std::time::SystemTime, u64, PathBuf)> = rollout_paths(root)
@@ -733,6 +740,8 @@ pub fn rate_limits(root: &Path) -> Option<Vec<crate::usage::Limit>> {
         .collect();
     newest.sort_by_key(|n| std::cmp::Reverse(n.0));
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // Newest first.
+    let mut reported: Vec<Vec<crate::usage::Limit>> = Vec::new();
     for (modified, len, path) in newest.into_iter().take(LIMITS_FROM) {
         let found = match cache.get(&path) {
             Some((stamp, found)) if *stamp == (modified, len) => found.clone(),
@@ -742,11 +751,22 @@ pub fn rate_limits(root: &Path) -> Option<Vec<crate::usage::Limit>> {
                 found
             }
         };
-        if found.is_some() {
-            return found;
-        }
+        reported.extend(found);
     }
-    None
+    let windows = reported.first()?;
+    Some(
+        windows
+            .iter()
+            .map(|w| {
+                let running = reported.iter().flatten().filter(|l| l.minutes == w.minutes && l.resets_at > now);
+                crate::usage::current(running.map(|l| (l.pct, l.resets_at))).map_or(*w, |(pct, resets_at)| crate::usage::Limit {
+                    minutes: w.minutes,
+                    pct,
+                    resets_at,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// The newest `rate_limits` in a rollout's tail (see `rate_limits`).
@@ -1802,27 +1822,55 @@ trust_level = "trusted"
     fn the_plans_limits_come_from_the_newest_token_count_of_the_rollout_written_to_last() {
         use crate::usage::Limit;
         // The samples: a free plan, one 30-day window, nothing used, no second window.
-        assert_eq!(rate_limits(&data()), Some(vec![Limit { minutes: 43_200, pct: 0, resets_at: 1_794_959_888 }]));
+        assert_eq!(rate_limits(&data(), 0), Some(vec![Limit { minutes: 43_200, pct: 0, resets_at: 1_794_959_888 }]));
         let root = tmp("limits");
-        assert_eq!(rate_limits(&root), None, "no rollout: nothing said");
+        assert_eq!(rate_limits(&root, 0), None, "no rollout: nothing said");
         let a = "01a1517c-0000-7000-8000-00000000000a";
         let b = "01a1517c-0000-7000-8000-00000000000b";
         let w = |pct: f64, minutes: u64, resets: u64| json!({"used_percent": pct, "window_minutes": minutes, "resets_at": resets});
         limits_rollout(&root, a, w(12.4, 300, 5_000), w(40.6, 10_080, 9_000), 60);
         assert_eq!(
-            rate_limits(&root),
+            rate_limits(&root, 0),
             Some(vec![Limit { minutes: 300, pct: 12, resets_at: 5_000 }, Limit { minutes: 10_080, pct: 41, resets_at: 9_000 }])
         );
         // Another conversation written to since: its figures are the newest.
         limits_rollout(&root, b, w(80.0, 43_200, 7_000), Value::Null, 5);
-        assert_eq!(rate_limits(&root), Some(vec![Limit { minutes: 43_200, pct: 80, resets_at: 7_000 }]));
+        assert_eq!(rate_limits(&root, 0), Some(vec![Limit { minutes: 43_200, pct: 80, resets_at: 7_000 }]));
         // A rollout written to last with no figure of its own leaves the one before it; an older Codex's
         // `resets_in_seconds` counts from the record's time.
         let p = limits_rollout(&root, b, json!({"used_percent": 3, "window_minutes": 60, "resets_in_seconds": 100}), Value::Null, 1);
         let at = parse_iso_ms("2026-10-18T20:08:00.000Z").unwrap() / 1000;
-        assert_eq!(rate_limits(&root), Some(vec![Limit { minutes: 60, pct: 3, resets_at: at + 100 }]));
+        assert_eq!(rate_limits(&root, 0), Some(vec![Limit { minutes: 60, pct: 3, resets_at: at + 100 }]));
         fs::write(&p, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
-        assert_eq!(rate_limits(&root).map(|l| l[0].minutes), Some(300), "the older rollout's figures");
+        assert_eq!(rate_limits(&root, 0).map(|l| l[0].minutes), Some(300), "the older rollout's figures");
+    }
+
+    #[test]
+    fn each_window_shows_the_highest_running_figure_any_recent_rollout_holds() {
+        use crate::usage::Limit;
+        let root = tmp("limits-max");
+        let w = |pct: f64, minutes: u64, resets: u64| json!({"used_percent": pct, "window_minutes": minutes, "resets_at": resets});
+        let (now, five, week) = (100_000, 110_000, 600_000);
+        // A conversation used just now, then one resumed after a long while: written to last, its newest record an old
+        // snapshot of the same windows (lower), or of windows long over.
+        limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000a1", w(40.0, 300, five), w(22.0, 10_080, week), 30);
+        limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000a2", w(5.0, 300, five), w(9.0, 10_080, week), 2);
+        assert_eq!(
+            rate_limits(&root, now),
+            Some(vec![Limit { minutes: 300, pct: 40, resets_at: five }, Limit { minutes: 10_080, pct: 22, resets_at: week }])
+        );
+        limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000a2", w(70.0, 300, now - 50), w(9.0, 10_080, week), 1);
+        assert_eq!(
+            rate_limits(&root, now),
+            Some(vec![Limit { minutes: 300, pct: 40, resets_at: five }, Limit { minutes: 10_080, pct: 22, resets_at: week }]),
+            "an expired window never wins, however high"
+        );
+        // A window started early: the one with the latest reset is the current one, however high the old one's figure.
+        limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000a3", w(2.0, 300, five + 17_000), w(22.0, 10_080, week), 0);
+        assert_eq!(rate_limits(&root, now).map(|l| l[0]), Some(Limit { minutes: 300, pct: 2, resets_at: five + 17_000 }));
+        fs::remove_file(root.join("sessions/2026/10/18/rollout-2026-10-18T20-07-40-01a1517c-0000-7000-8000-0000000000a3.jsonl")).unwrap();
+        // Once every figure of a window has expired, the newest record's stays for the caller to drop.
+        assert_eq!(rate_limits(&root, five + 1).map(|l| l[0]), Some(Limit { minutes: 300, pct: 70, resets_at: now - 50 }));
     }
 
     #[test]

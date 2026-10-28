@@ -148,33 +148,56 @@ pub struct Snapshot {
     pub context: HashMap<String, u8>,
 }
 
-/// Read everything the status line command has saved. Across sessions, the newest report wins
-/// for each window, and windows already past their reset time are dropped.
+/// Reports of one window whose `resets_at` are at most this far apart are the same window (they can differ a little,
+/// by rounding); a report this much earlier than the latest is of a window that is over.
+pub const SAME_WINDOW_SECS: u64 = 10 * 60;
+
+/// The figure of the current window among `figures` (percent used, `resets_at`), all of one window length and still
+/// running: the latest `resets_at` is the current window, and of the figures within `SAME_WINDOW_SECS` of it, the
+/// highest percent (usage only grows within a window), with its own `resets_at`. See `load`.
+pub fn current(figures: impl IntoIterator<Item = (u8, u64)>) -> Option<(u8, u64)> {
+    let figures: Vec<(u8, u64)> = figures.into_iter().collect();
+    let latest = figures.iter().map(|f| f.1).max()?;
+    figures.into_iter().filter(|f| latest - f.1 <= SAME_WINDOW_SECS).max()
+}
+
+/// Read everything the status line command has saved. For each window, across sessions, the
+/// highest figure of the current window wins (`current`); windows already past their reset time
+/// are dropped.
+///
+/// Each session reports what its own last answer said, and a session that sits idle keeps
+/// reporting it (a task's session re-runs its status line every few seconds): its report is
+/// often the newest and its figure old. Within one window usage only grows, so an old snapshot of
+/// the current window is lower than the newest truth, and the time of a report never picks the
+/// figure: the highest one of the current window does, with its own `resets_at`.
+///
+/// The current window is the one with the latest `resets_at` still ahead. A report whose
+/// `resets_at` is clearly earlier (more than `SAME_WINDOW_SECS` before it) belongs to a window that
+/// is over although its `resets_at` has not passed: Anthropic can start a new window before the
+/// old one's reset time, and an idle session's old 40% must not beat the new window's 3% until
+/// then. Reports of one window may give its `resets_at` a little differently (rounding), so the
+/// ones within `SAME_WINDOW_SECS` of the latest count as the same window.
 ///
 /// A window that hasn't started reads 0%. Right after the 5-hour window resets, Claude Code leaves
 /// `five_hour` out of its reports altogether (it does not send 0) while still sending `seven_day`,
 /// until the first answer of the new window. So a report with no 5-hour figure but a weekly one
-/// that is still running says "on a plan, nothing used in this 5-hour window yet", and counts as a
-/// 5-hour figure of 0%. But a session reports what its own last answer said: one that has been idle
-/// since before the reset (a task's session, whose status line re-runs every few seconds) keeps
-/// saying "not started" while another session is using the new window. So a 5-hour figure that is
-/// still running, from any session, means the window has started, and it beats every "not
-/// started" report, however new. Only when no session holds a running 5-hour figure does "not
-/// started" compete, by `ts`, with the reports whose figure has since expired: only when it is the
-/// newest does the 5-hour window read 0%, so an older empty report never hides a newer real figure.
-/// Its `resets_at` is 0: unknown, since the window starts with the next answer. When no report
-/// carries either figure (API-key logins), the plan stays None: a genuinely unknown figure still
-/// reads `n/a`.
+/// that is still running says "on a plan, nothing used in this 5-hour window yet". It reads 0%
+/// only when no report holds a 5-hour figure that is still running: a session idle since before
+/// the reset keeps saying "not started" while another one is using the new window. Its
+/// `resets_at` is 0: unknown, since the window starts with the next answer. When no report carries
+/// either figure (API-key logins), the plan stays None: a genuinely unknown figure still reads
+/// `n/a`.
 ///
-/// The weekly window gets no such rule: every 5-hour window lies inside a weekly one, so a report
-/// with a 5-hour figure but no weekly one is missing data, not "nothing used yet".
+/// The weekly window gets the same choice of figure but no "not started" rule: every 5-hour
+/// window lies inside a weekly one, so a report with a 5-hour figure but no weekly one is missing
+/// data, not "nothing used yet".
 pub fn load(dir: &Path, now: u64) -> Snapshot {
     let mut context = HashMap::new();
-    let mut five: Option<(u64, Window)> = None;
-    let mut seven: Option<(u64, Window)> = None;
-    // The newest report that carried a 5-hour figure, expired or not, and the newest that left it out
-    // while its weekly figure was still running (see above).
-    let (mut five_newest, mut five_unstarted): (Option<u64>, Option<u64>) = (None, None);
+    // Every figure still running, as (pct, resets_at).
+    let mut fives: Vec<(u8, u64)> = Vec::new();
+    let mut sevens: Vec<(u8, u64)> = Vec::new();
+    // Some report left the 5-hour figure out while its weekly figure was still running (see above).
+    let mut five_unstarted = false;
     let status = dir.join("status");
     for e in fs::read_dir(&status).into_iter().flatten().flatten() {
         let path = e.path();
@@ -194,27 +217,23 @@ pub fn load(dir: &Path, now: u64) -> Snapshot {
             let w = &v[key];
             w["pct"].as_u64().zip(w["resets_at"].as_u64())
         };
-        for (slot, key) in [(&mut five, "five_hour"), (&mut seven, "seven_day")] {
-            if let Some((pct, resets_at)) = figure(key) {
-                let newer = slot.as_ref().is_none_or(|(t, _)| ts > *t);
-                if resets_at > now && newer {
-                    *slot = Some((ts, Window { pct: pct.min(100) as u8, resets_at }));
-                }
+        for (list, key) in [(&mut fives, "five_hour"), (&mut sevens, "seven_day")] {
+            if let Some((pct, resets_at)) = figure(key).filter(|(_, resets_at)| *resets_at > now) {
+                list.push((pct.min(100) as u8, resets_at));
             }
         }
-        if figure("five_hour").is_some() {
-            five_newest = five_newest.max(Some(ts));
-        } else if v["five_hour"].is_null() && figure("seven_day").is_some_and(|(_, resets_at)| resets_at > now) {
-            five_unstarted = five_unstarted.max(Some(ts));
+        if v["five_hour"].is_null() && figure("seven_day").is_some_and(|(_, resets_at)| resets_at > now) {
+            five_unstarted = true;
         }
     }
-    // A running figure has started the window; otherwise a tie goes to the real (expired) figure.
-    if five.is_none() && five_unstarted.is_some_and(|t| five_newest.is_none_or(|n| t > n)) {
-        five = Some((five_unstarted.unwrap_or(0), Window { pct: 0, resets_at: 0 }));
+    let window = |figures: Vec<(u8, u64)>| current(figures).map(|(pct, resets_at)| Window { pct, resets_at });
+    let (mut five, seven) = (window(fives), window(sevens));
+    if five.is_none() && five_unstarted {
+        five = Some(Window { pct: 0, resets_at: 0 });
     }
     let plan = match (five, seven) {
         (None, None) => None,
-        (f, s) => Some(PlanUsage { five_hour: f.map(|x| x.1), seven_day: s.map(|x| x.1) }),
+        (five_hour, seven_day) => Some(PlanUsage { five_hour, seven_day }),
     };
     Snapshot { plan, context }
 }
@@ -293,32 +312,122 @@ mod tests {
         let (reset, week) = (20_000, 500_000);
         status(&dir, "old-1", 10_000, Some((14, reset)), Some((1, week)));
         status(&dir, "old-2", 12_000, Some((6, reset)), Some((5, week)));
-        assert!(five(&dir, reset - 1).is_some_and(|(p, _)| p == 6), "before the reset the newest real figure shows");
+        // Usage only grows within a window: the older 14% is the higher figure of the same window, and the newer 6% an
+        // old snapshot of it. (This used to show the newest report's 6%.)
+        assert_eq!(five(&dir, reset - 1), Some((14, reset)), "before the reset the highest running figure shows");
+        assert_eq!(load(&dir, reset - 1).plan.unwrap().seven_day.unwrap().pct, 5);
         assert_eq!(five(&dir, reset + 1), None, "just after the reset, before any report: unknown");
         status(&dir, "new-1", reset + 1, None, Some((3, week)));
         let plan = load(&dir, reset + 2).plan.unwrap();
         assert_eq!(plan.five_hour.map(|w| (w.pct, w.resets_at)), Some((0, 0)), "not started: 0%, reset time unknown");
-        assert_eq!(plan.seven_day.unwrap().pct, 3);
+        assert_eq!(plan.seven_day.unwrap().pct, 5, "the highest weekly figure of the week still running");
         // Eleven minutes later a report carries the new window: that figure wins over the older empty report.
         status(&dir, "new-2", reset + 660, Some((2, reset + 5 * 3600)), Some((3, week)));
         assert_eq!(five(&dir, reset + 661), Some((2, reset + 5 * 3600)));
     }
 
     #[test]
-    fn an_older_empty_report_never_hides_a_newer_figure() {
+    fn an_empty_report_never_hides_a_running_figure_and_reads_zero_once_none_is_running() {
         let dir = tmp("older-empty");
         status(&dir, "empty", 1_000, None, Some((3, 9_000)));
         status(&dir, "real", 1_100, Some((40, 5_000)), Some((3, 9_000)));
         assert_eq!(five(&dir, 1_200), Some((40, 5_000)));
-        // The same second: the real figure wins the tie.
+        // The same second, or newer: the running figure wins.
         status(&dir, "empty", 1_100, None, Some((3, 9_000)));
         assert_eq!(five(&dir, 1_200), Some((40, 5_000)));
-        // A newer figure that has since expired still outranks the older empty report: the window started after it,
-        // so 0% would be a guess. Unknown stays n/a.
-        assert_eq!(five(&dir, 5_000), None);
-        // A newer empty report (after that window reset) does read 0%.
-        status(&dir, "empty", 5_001, None, Some((3, 9_000)));
-        assert_eq!(five(&dir, 5_002), Some((0, 0)));
+        status(&dir, "empty", 1_300, None, Some((3, 9_000)));
+        assert_eq!(five(&dir, 1_400), Some((40, 5_000)));
+        // Once that figure has expired its window is over, and nothing has started a new one: 0%, whatever the times
+        // of the reports. (This used to read unknown while the expired figure was the newer report.)
+        assert_eq!(five(&dir, 5_000), Some((0, 0)));
+    }
+
+    #[test]
+    fn an_idle_sessions_newer_lower_figures_never_beat_the_live_sessions_higher_ones() {
+        // What the user's Mac had: ordinary sessions a minute earlier said 15%, 15% and 16% for the week (Anthropic's
+        // usage page said 16%); the newest report, from a task's session idle for a day and a half whose status line
+        // re-runs every 2 s, said 7% for the same week and had no 5-hour figure. The meter showed 5h 0% and 7d 7%.
+        let dir = tmp("mac");
+        let (now, week) = (1_000_000, 1_400_000);
+        status(&dir, "a", now - 70, Some((20, now - 10)), Some((15, week)));
+        status(&dir, "b", now - 65, None, Some((15, week)));
+        status(&dir, "c", now - 60, None, Some((16, week)));
+        status(&dir, "idle-task", now - 1, None, Some((7, week)));
+        let plan = load(&dir, now).plan.unwrap();
+        assert_eq!(plan.seven_day.map(|w| (w.pct, w.resets_at)), Some((16, week)), "the highest weekly figure");
+        // No 5-hour figure is running (a's has expired): not started.
+        assert_eq!(plan.five_hour.map(|w| (w.pct, w.resets_at)), Some((0, 0)));
+        // Once a session holds a running 5-hour figure it shows, and the idle session's reports change nothing.
+        status(&dir, "c", now + 5, Some((4, now + 18_000)), Some((16, week)));
+        for ts in [now + 6, now + 8, now + 10] {
+            status(&dir, "idle-task", ts, None, Some((7, week)));
+            let plan = load(&dir, ts + 1).plan.unwrap();
+            assert_eq!(plan.five_hour.map(|w| (w.pct, w.resets_at)), Some((4, now + 18_000)));
+            assert_eq!(plan.seven_day.unwrap().pct, 16);
+        }
+        // An idle session's older snapshot of the running 5-hour window is lower, so it never shows either.
+        status(&dir, "idle-task", now + 12, Some((1, now + 18_000)), Some((7, week)));
+        assert_eq!(five(&dir, now + 13), Some((4, now + 18_000)));
+    }
+
+    #[test]
+    fn a_window_started_early_shows_the_new_figure_not_an_idle_sessions_old_one() {
+        // Anthropic started a new 5-hour window before the old one's reset time `t`: an idle session still reports the
+        // old window at 40% (resetting at `t`, still ahead), the live session the new one at 3%.
+        let dir = tmp("early");
+        let (now, t) = (100_000, 104_000);
+        let new_reset = t + 4 * 3600 + 55 * 60;
+        status(&dir, "idle", now - 2, Some((40, t)), Some((30, 700_000)));
+        status(&dir, "live", now - 30, Some((3, new_reset)), Some((31, 700_000)));
+        assert_eq!(five(&dir, now), Some((3, new_reset)), "the window with the latest reset is the current one");
+        // The weekly window follows the same rule: a week started early beats the old week's higher figure.
+        status(&dir, "idle", now - 2, Some((40, t)), Some((80, 300_000)));
+        status(&dir, "live", now - 30, Some((3, new_reset)), Some((2, 300_000 + 6 * 86_400)));
+        let plan = load(&dir, now).plan.unwrap();
+        assert_eq!(plan.seven_day.map(|w| (w.pct, w.resets_at)), Some((2, 300_000 + 6 * 86_400)));
+        assert_eq!(plan.five_hour.map(|w| w.pct), Some(3));
+    }
+
+    #[test]
+    fn reports_of_one_window_a_little_apart_in_their_reset_time_are_one_window() {
+        let dir = tmp("rounding");
+        let (now, reset, week) = (100_000, 110_000, 600_000);
+        // One second apart: the higher figure wins, with its own reset time, whichever is later.
+        status(&dir, "a", now - 10, Some((25, reset)), Some((44, week + 1)));
+        status(&dir, "b", now - 5, Some((12, reset + 1)), Some((41, week)));
+        let plan = load(&dir, now).plan.unwrap();
+        assert_eq!(plan.five_hour.map(|w| (w.pct, w.resets_at)), Some((25, reset)));
+        assert_eq!(plan.seven_day.map(|w| (w.pct, w.resets_at)), Some((44, week + 1)));
+        // Ten minutes apart is still the same window; more than that is another one.
+        status(&dir, "b", now - 5, Some((12, reset + SAME_WINDOW_SECS)), Some((41, week)));
+        assert_eq!(five(&dir, now), Some((25, reset)));
+        status(&dir, "b", now - 5, Some((12, reset + SAME_WINDOW_SECS + 1)), Some((41, week)));
+        assert_eq!(five(&dir, now), Some((12, reset + SAME_WINDOW_SECS + 1)));
+    }
+
+    #[test]
+    fn when_a_five_hour_window_ends_it_reads_not_started_until_a_new_figure_arrives() {
+        // At the end of a 5-hour window Claude Code re-runs every session's status line one second after `resets_at`,
+        // all of them without a 5-hour figure.
+        let dir = tmp("window-end");
+        let (reset, week) = (50_000, 400_000);
+        status(&dir, "live", reset - 300, Some((62, reset)), Some((30, week)));
+        status(&dir, "other", reset - 200, Some((58, reset)), Some((29, week)));
+        status(&dir, "idle-task", reset - 1, None, Some((12, week)));
+        assert_eq!(five(&dir, reset - 1), Some((62, reset)));
+        for id in ["live", "other", "idle-task"] {
+            status(&dir, id, reset + 1, None, Some((30, week)));
+        }
+        assert_eq!(five(&dir, reset + 2), Some((0, 0)), "not started");
+        // The first answer of the new window: its figure wins over every "not started" report after it.
+        status(&dir, "live", reset + 120, Some((1, reset + 120 + 18_000)), Some((30, week)));
+        for ts in [reset + 122, reset + 124, reset + 600] {
+            status(&dir, "idle-task", ts, None, Some((30, week)));
+            assert_eq!(five(&dir, ts + 1), Some((1, reset + 120 + 18_000)));
+        }
+        // The old window's figures never come back: they expired at `resets_at`, whatever was reported.
+        status(&dir, "other", reset + 700, Some((58, reset)), Some((29, week)));
+        assert_eq!(five(&dir, reset + 701), Some((1, reset + 120 + 18_000)));
     }
 
     #[test]

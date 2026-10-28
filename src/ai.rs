@@ -298,7 +298,7 @@ pub fn plan_limits(agent: Agent, cache: &Path, providers: &Providers, now: u64) 
         Agent::Claude => Some(usage::load(cache, now).plan?.limits()),
         Agent::Codex => {
             let running: Vec<usage::Limit> =
-                crate::agents::codex::rate_limits(providers.codex_root()?)?.into_iter().filter(|l| l.resets_at > now).collect();
+                crate::agents::codex::rate_limits(providers.codex_root()?, now)?.into_iter().filter(|l| l.resets_at > now).collect();
             (!running.is_empty()).then_some(running)
         }
     }

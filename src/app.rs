@@ -1608,10 +1608,9 @@ impl App {
             None => Usage::NotSetUp,
         };
         let now = usage::now();
-        self.codex_limits = self
-            .providers
-            .codex_root()
-            .map(|root| crate::agents::codex::rate_limits(root).unwrap_or_default().into_iter().filter(|l| l.resets_at > now).collect());
+        self.codex_limits = self.providers.codex_root().map(|root| {
+            crate::agents::codex::rate_limits(root, now).unwrap_or_default().into_iter().filter(|l| l.resets_at > now).collect()
+        });
         self.rev += 1;
         self.update_view();
         if let Some(id) = selected_id
