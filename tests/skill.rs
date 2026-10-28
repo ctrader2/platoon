@@ -124,7 +124,10 @@ fn the_skill_is_not_part_of_the_start_up_gate() {
     fs::remove_dir_all(w.claude().join("skills")).unwrap();
     let out = w.run(&["open", "--project", "nope"], "");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!err.contains("one-time setup") && err.contains("no project called \"nope\""), "past the gate: {err}");
+    // Past the gate, `open` stops at the first thing it can't do: with no terminal to size (as in CI) that is the
+    // terminal, else the project. Either way it got past the gate.
+    let past = err.contains("no project called \"nope\"") || err.contains("platoon open needs an interactive terminal.");
+    assert!(!err.contains("one-time setup") && past, "past the gate: {err}");
 }
 
 #[test]
