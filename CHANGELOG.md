@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-29
+
 ### Added
 
 - The JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio and
@@ -47,7 +49,7 @@ here.
   installed itself (JetBrains Toolbox's scripts, `~/.local/bin`, snaps, `/opt/<app>/bin`, and on macOS the apps in
   `/Applications` and `~/Applications`). Before, VS Code on a Mac was missing from the list unless you had run its
   "Install 'code' command in PATH".
-- An update that found nothing to change used to count as an answer platoon couldn't read, so the same conversation
+- A notes update that found nothing to change used to count as an answer platoon couldn't read, so the same conversation
   was sent again at the next update; it is now taken as "nothing to change" and not sent again.
 
 ## [1.2.0] - 2026-10-28
@@ -172,7 +174,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ctrader2/platoon/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ctrader2/platoon/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ctrader2/platoon/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/ctrader2/platoon/compare/v1.0.0...v1.0.1

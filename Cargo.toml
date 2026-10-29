@@ -1,6 +1,6 @@
 [package]
 name = "platoon-tui"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A terminal app for running and managing Claude Code and Codex sessions: every conversation in one list, projects with notes, tasks run by squads"
