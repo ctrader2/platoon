@@ -513,13 +513,18 @@ fn setup(d: &mut Doc, places: &Places, probes: &Probes) {
         for (step, state) in crate::setup::STEPS.iter().zip(crate::setup::check(&places.claude_root)) {
             d.line(&[T("  Claude Code, "), T(step.name), T(": "), T(state.word())]);
         }
-        let skill = match crate::skill::state(&places.claude_root) {
+        let word = |state| match state {
             Ok(crate::skill::State::Missing) => "missing",
             Ok(crate::skill::State::Ours(_)) => "platoon's, unchanged",
             Ok(crate::skill::State::NotOurs) => "not platoon's (left alone)",
             Err(_) => "can't be read",
         };
-        d.line(&[T("  Claude Code, /to-tickets skill: "), T(skill)]);
+        d.line(&[T("  Claude Code, /to-tasks skill: "), T(word(crate::skill::state(&places.claude_root)))]);
+        // The skill under its old name, only when something is there (setup not run since the rename, or one kept).
+        let old = crate::skill::old_state(&places.claude_root);
+        if !matches!(old, Ok(crate::skill::State::Missing)) {
+            d.line(&[T("  Claude Code, /to-tickets skill (its old name): "), T(word(old))]);
+        }
     }
     if probes.installed.codex.is_some() {
         match crate::setup::check_codex(&places.codex_root) {

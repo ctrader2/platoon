@@ -357,7 +357,7 @@ pub struct SessionMaterial {
     /// The session's id, for what the answer says about it: never put in the prompt.
     pub session: String,
     /// Ask whether this conversation has agreed on work that could become tasks (`to_tickets`): a Claude Code
-    /// session that is no task's, with the `/to-tickets` skill installed (`ticketshint.rs`).
+    /// session that is no task's, with the `/to-tasks` skill installed (`ticketshint.rs`).
     pub ask_to_tickets: bool,
 }
 
@@ -432,7 +432,7 @@ Rules:
 - Decisions: send only new entries, and only choices that settle how the project works or what it does, one short sentence each with its reason (\"X, because Y\"). Something that was done, finished, fixed, pushed or released is an event, not a decision. At most 5, none that repeats one already there. Don't put a date in them: platoon dates them itself. They are added to the end; nothing there is rewritten except through decisions_condensed.
 - The whole notes must stay under 8,000 characters: you are told how long they are now. When they are over, or this answer would take them over, condense in the same answer: shorten and merge older detail in your own sections (fold sections together with \"was\"), and keep what was decided and what is still open. Over the limit you may also send \"decisions_condensed\": the whole Decisions list again, older entries merged into fewer short dated lines (\"- 2026-09: ...\"), the latest kept as they are; a line there that doesn't start with \"- \" and a date is the user's and must come back word for word. An answer that leaves the notes over the limit is thrown away.
 - A line starting with a single \"# \" starts a new section of the notes, so never start a line of a body with a single \"#\".
-- \"to_tickets\" answers only the question the request may end with, about some of the conversations: the numbers of those (1 for [1]) that have agreed with the user on concrete work with several steps or pieces that is still to be done and has not yet been made into platoon tasks (with /to-tickets, or in platoon itself); [] when none has. A question, an idea still being talked over, or work already finished doesn't count. It changes nothing in the notes.";
+- \"to_tickets\" answers only the question the request may end with, about some of the conversations: the numbers of those (1 for [1]) that have agreed with the user on concrete work with several steps or pieces that is still to be done and has not yet been made into platoon tasks (with /to-tasks, called /to-tickets before, or in platoon itself); [] when none has. A question, an idea still being talked over, or work already finished doesn't count. It changes nothing in the notes.";
 
 /// The system prompt with the built-in guidance.
 #[cfg(test)]

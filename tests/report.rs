@@ -249,7 +249,7 @@ fn the_report_has_every_section_from_its_world_and_nothing_planted() {
         "== Setup ==",
         "  Claude Code, Status line: left-alone",
         "  Claude Code, Session guard: missing",
-        "  Claude Code, /to-tickets skill: missing",
+        "  Claude Code, /to-tasks skill: missing",
         "== Settings ==",
         "  keep a diagnostics log: yes",
         "  model for smart features: ?",
@@ -281,6 +281,7 @@ fn the_report_has_every_section_from_its_world_and_nothing_planted() {
     ] {
         assert!(text.contains(want), "missing {want:?} in:\n{text}");
     }
+    assert!(!text.contains("/to-tickets"), "the skill's old name only when something is there: {text}");
     // The status file is a minute old when written; a slow machine makes the report a second or two later.
     assert!(text.lines().any(|l| l.starts_with(&format!("    {SESSION} reported 1m0")) && l.contains("s ago: 5h 7% resets ")), "{text}");
     // Under the session: its `sleep`, by name, never its arguments; and the session itself isn't listed as a program
@@ -317,6 +318,17 @@ fn hide_names_replaces_every_project_and_folder_name_consistently_and_leaves_non
     assert!(worktree.ends_with("/task-1"), "{worktree}");
     assert!(text.contains("  project-1: 1 sessions") && text.contains("#1 in project-1: needs_you"), "{text}");
     assert!(text.contains("  platoon's cache: ~/folder-"), "{text}");
+}
+
+#[test]
+fn the_report_names_the_skill_under_its_old_name_when_a_copy_is_there() {
+    let w = World::new("report-old-skill");
+    let old = w.base.join("claude/skills/to-tickets/SKILL.md");
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    fs::write(&old, "---\nname: to-tickets\n---\nMine.\n").unwrap();
+    let text = w.report(&["--stdout"]);
+    assert!(text.contains("  Claude Code, /to-tasks skill: missing\n"), "{text}");
+    assert!(text.contains("  Claude Code, /to-tickets skill (its old name): not platoon's (left alone)\n"), "{text}");
 }
 
 #[test]

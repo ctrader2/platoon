@@ -25,7 +25,7 @@ list, and everything below works with each. With both installed, either can be s
   and can keep themselves up to date as you work. When a conversation gets long, hand the work on to a fresh session
   with one key. → [Projects](guide/projects.md)
 - **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude or Codex drafts
-  tasks from the conversation, each with the squad that suits it, or type `/to-tickets` in a Claude Code session and
+  tasks from the conversation, each with the squad that suits it, or type `/to-tasks` in a Claude Code session and
   it drafts them with you), then start it: one Claude Code or Codex session
   (the squad's model decides) in a copy of your folder (a git worktree on the branch `task/<N>`), following a squad, a
   short Markdown file of steps for that kind of work (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or
@@ -84,7 +84,7 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 
 - **Claude Code's `settings.json`**: a status line and three hooks (a guard against two copies of one conversation,
   and two that carry a project's notes to its sessions). Nothing else in the file is touched, and a status line of your
-  own is left alone. Beside it, one skill, `/to-tickets` (`skills/to-tickets/`); a skill of that name that isn't
+  own is left alone. Beside it, one skill, `/to-tasks` (`skills/to-tasks/`); a skill of that name that isn't
   platoon's is left alone.
 - **Codex's `hooks.json`**, only when Codex is installed: three hooks that carry a project's notes to its Codex sessions,
   and six that run a task in Codex (they do nothing in any other Codex session). Setup has Codex mark them trusted, so

@@ -1,4 +1,4 @@
-//! The `/to-tickets` hint at the end of Claude Code's status line (`platoon statusline`): a few words, shown only while
+//! The `/to-tasks` hint at the end of Claude Code's status line (`platoon statusline`): a few words, shown only while
 //! a conversation has agreed on work that could become platoon tasks, never a question and never anything sent into
 //! the conversation.
 //!
@@ -10,9 +10,10 @@
 //! - **An approved plan**: an `ExitPlanMode` the user said yes to, near the end of the transcript
 //!   (`claude::to_tickets_tail`).
 //!
-//! It goes away once `/to-tickets` is used in the conversation after the signal, when a later notes verdict about it
-//! is no, and `LIFE_SECS` after the signal. Never in a task's session (`PLATOON_TASK` set: the caller doesn't ask, and a
-//! session a task records is refused here too), never without the skill installed for Claude Code, never in Codex.
+//! It goes away once the skill is used in the conversation after the signal (`/to-tasks`, or its old name
+//! `/to-tickets`), when a later notes verdict about it is no, and `LIFE_SECS` after the signal. Never in a task's
+//! session (`PLATOON_TASK` set: the caller doesn't ask, and a session a task records is refused here too), never
+//! without the skill installed for Claude Code, never in Codex. It names the skill as installed (`skill::command`).
 
 use crate::agents::claude::ToTicketsTail;
 use std::{
@@ -23,11 +24,8 @@ use std::{
 /// How long a signal keeps the hint up.
 pub const LIFE_SECS: u64 = 30 * 60;
 
-/// The hint, as the status line ends with it.
-pub const HINT: &str = "/to-tickets turns this into tasks";
-
-/// The hint when the whole of it doesn't fit.
-pub const SHORT: &str = "/to-tickets";
+/// The hint, as the status line ends with it, after the skill's command (`skill::command`: the one installed).
+pub const HINT: &str = "turns this into tasks";
 
 const DIR: &str = "tickets-hint";
 
@@ -80,7 +78,7 @@ pub fn record(cache: &Path, verdicts: &[(String, bool)], at: u64, now: u64) {
 }
 
 /// Is the hint due, from the notes' mark and the transcript's end, at `now`? The newest signal still alive counts: a
-/// yes from the notes, or an approved plan no later notes verdict said no to. `/to-tickets` used at or after it puts
+/// yes from the notes, or an approved plan no later notes verdict said no to. The skill used at or after it puts
 /// it away.
 pub fn due(mark: Option<Mark>, tail: &ToTicketsTail, now: u64) -> bool {
     let alive = |at: u64| now.saturating_sub(at) < LIFE_SECS;
@@ -90,10 +88,10 @@ pub fn due(mark: Option<Mark>, tail: &ToTicketsTail, now: u64) -> bool {
     tail.to_tickets_used.is_none_or(|used| used < signal)
 }
 
-/// `line` with the hint at its end, within `width` characters: the hint gives way first, to its short form and then
-/// altogether.
-pub fn with_hint(line: &str, width: usize) -> String {
-    for hint in [HINT, SHORT] {
+/// `line` with the hint for the skill typed as `command` at its end, within `width` characters: the hint gives way
+/// first, to the command alone and then altogether.
+pub fn with_hint(line: &str, command: &str, width: usize) -> String {
+    for hint in [format!("{command} {HINT}"), command.to_string()] {
         let joined = if line.is_empty() { hint.to_string() } else { format!("{line} · {hint}") };
         if joined.chars().count() <= width {
             return joined;
@@ -109,16 +107,15 @@ pub struct Places<'a> {
     pub claude_root: &'a Path,
 }
 
-/// Should the status line of the session Claude Code's status-line JSON `input` describes carry the hint? Only for a
-/// session that is no task's, with the skill installed and Claude Code not switched off in platoon's settings. Reads
-/// one small mark, the skill's file and the transcript's last `TO_TICKETS_TAIL_BYTES`; anything unreadable is no.
-pub fn wanted(input: &str, at: &Places, now: u64) -> bool {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else { return false };
-    let Some(session) = v.get("session_id").and_then(serde_json::Value::as_str).filter(|s| crate::sessionhook::safe_name(s)) else {
-        return false;
-    };
+/// Should the status line of the session Claude Code's status-line JSON `input` describes carry the hint, and naming
+/// which command (the skill as installed: `skill::command`)? Only for a session that is no task's, with the skill
+/// installed and Claude Code not switched off in platoon's settings. Reads one small mark, the skill's files and the
+/// transcript's last `TO_TICKETS_TAIL_BYTES`; anything unreadable is no.
+pub fn wanted(input: &str, at: &Places, now: u64) -> Option<&'static str> {
+    let v = serde_json::from_str::<serde_json::Value>(input).ok()?;
+    let session = v.get("session_id").and_then(serde_json::Value::as_str).filter(|s| crate::sessionhook::safe_name(s))?;
     if !crate::skill::present(at.claude_root) {
-        return false;
+        return None;
     }
     let tail = v
         .get("transcript_path")
@@ -126,9 +123,10 @@ pub fn wanted(input: &str, at: &Places, now: u64) -> bool {
         .filter(|p| !p.is_empty())
         .map(|p| crate::agents::claude::to_tickets_tail(Path::new(p)))
         .unwrap_or_default();
-    due(read(at.cache, session), &tail, now)
+    let wanted = due(read(at.cache, session), &tail, now)
         && crate::tickets::find_session(at.config, session).is_none()
-        && !crate::agents::switched_off(at.config, crate::agents::Agent::Claude)
+        && !crate::agents::switched_off(at.config, crate::agents::Agent::Claude);
+    wanted.then(|| crate::skill::command(at.claude_root))
 }
 
 #[cfg(test)]
@@ -159,26 +157,29 @@ mod tests {
         assert!(!due(yes(NOW - LIFE_SECS), &none, NOW), "30 minutes on");
         assert!(due(None, &tail(Some(NOW - 60), None), NOW), "a plan approved a minute ago");
         assert!(!due(None, &tail(Some(NOW - LIFE_SECS), None), NOW));
-        // /to-tickets used after the signal puts it away; a newer signal brings it back.
+        // The skill used after the signal puts it away; a newer signal brings it back.
         assert!(!due(yes(NOW - 60), &tail(None, Some(NOW - 30)), NOW));
         assert!(!due(None, &tail(Some(NOW - 60), Some(NOW - 60)), NOW));
         assert!(due(yes(NOW - 10), &tail(None, Some(NOW - 30)), NOW), "a later yes about new material");
         // A later no from the notes puts a plan's hint away; an earlier one doesn't.
         assert!(!due(no(NOW - 30), &tail(Some(NOW - 60), None), NOW));
         assert!(due(no(NOW - 90), &tail(Some(NOW - 60), None), NOW));
-        // The newest signal counts: a plan after an old yes, /to-tickets between them.
+        // The newest signal counts: a plan after an old yes, the skill used between them.
         assert!(due(yes(NOW - 600), &tail(Some(NOW - 60), Some(NOW - 300)), NOW));
     }
 
     #[test]
     fn the_hint_gives_way_first_when_the_line_is_narrow() {
         let line = "5h 12% · 7d 40%";
-        assert_eq!(with_hint(line, 120), format!("{line} · {HINT}"));
-        let full = format!("{line} · {HINT}").chars().count();
-        assert_eq!(with_hint(line, full), format!("{line} · {HINT}"));
-        assert_eq!(with_hint(line, full - 1), format!("{line} · {SHORT}"));
-        assert_eq!(with_hint(line, line.chars().count() + 3), line, "no room even for the short one");
-        assert_eq!(with_hint("", 120), HINT, "no usage figures: the hint alone");
+        let hinted = format!("{line} · /to-tasks turns this into tasks");
+        assert_eq!(with_hint(line, "/to-tasks", 120), hinted);
+        let full = hinted.chars().count();
+        assert_eq!(with_hint(line, "/to-tasks", full), hinted);
+        assert_eq!(with_hint(line, "/to-tasks", full - 1), format!("{line} · /to-tasks"));
+        assert_eq!(with_hint(line, "/to-tasks", line.chars().count() + 3), line, "no room even for the short one");
+        assert_eq!(with_hint("", "/to-tasks", 120), "/to-tasks turns this into tasks", "no usage figures: the hint alone");
+        // The skill by its old name while only that is installed.
+        assert_eq!(with_hint(line, "/to-tickets", 120), format!("{line} · /to-tickets turns this into tasks"));
     }
 
     #[test]

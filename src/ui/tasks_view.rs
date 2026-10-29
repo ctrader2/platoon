@@ -248,14 +248,14 @@ pub(super) fn draw_board(f: &mut Frame, app: &App, area: Rect, counts: &[usize])
         let shelf = app.bd.shelf;
         let count = |s: Shelf| counts.get(s.index()).copied().unwrap_or(0);
         let msg = if count(shelf) > 0 {
-            "No tasks match the filter. Esc clears it."
+            "No tasks match the filter. Esc clears it.".to_string()
         } else if shelf == Shelf::Active && count(Shelf::Archived) > 0 {
-            board::ALL_ARCHIVED
+            board::ALL_ARCHIVED.to_string()
         } else {
-            shelf.empty(app.providers().claude.is_some())
+            shelf.empty(app.skill_command())
         };
         let lines: Vec<Line> =
-            wrap(msg, area.width.saturating_sub(4) as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(hint_fg(t)))).collect();
+            wrap(&msg, area.width.saturating_sub(4) as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(hint_fg(t)))).collect();
         let h = lines.len() as u16;
         let at = Rect::new(area.x, area.y + area.height / 3, area.width, h.min(area.height));
         f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), at);

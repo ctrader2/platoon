@@ -90,6 +90,12 @@ impl App {
         self.top == TOP_TASKS && self.open_project.is_none()
     }
 
+    /// Where Claude Code is in use, the command its sessions make tasks with (`skill::command`: the name the skill is
+    /// installed under). Read from Claude Code's folder when asked, only for the empty Tasks tab's words.
+    pub fn skill_command(&self) -> Option<&'static str> {
+        self.providers.claude.is_some().then(|| crate::skill::command(self.reader.root()))
+    }
+
     /// The Tasks tab shows a task whose work is being checked: its timer ("… 0:23") moves every second.
     pub fn board_clock_running(&self) -> bool {
         let now = usage::now();

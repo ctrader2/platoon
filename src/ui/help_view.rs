@@ -61,10 +61,10 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
-    // Where sessions are listed: the two ways to make tasks from a conversation (`/to-tickets` is Claude Code's).
+    // Where sessions are listed: the two ways to make tasks from a conversation (`/to-tasks` is Claude Code's).
     if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
         let skill = if app.providers().claude.is_some() {
-            "In a Claude Code session, type /to-tickets to turn the work agreed there into tasks for a squad (platoon setup adds it). "
+            "In a Claude Code session, type /to-tasks to turn the work agreed there into tasks for a squad (platoon setup adds it). "
         } else {
             ""
         };

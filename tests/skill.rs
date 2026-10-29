@@ -1,7 +1,9 @@
-//! The `/to-tickets` skill `platoon setup` writes into Claude Code's folder (`src/skill.rs`), through the real binary
+//! The `/to-tasks` skill `platoon setup` writes into Claude Code's folder (`src/skill.rs`), through the real binary
 //! in a made-up Claude Code folder: added, updated when it is platoon's copy, a skill of the user's left alone and said,
-//! never part of the start-up gate; `platoon hook offer-tasks`, the hook platoon 1.0 gave its sessions, now a
-//! silent no-op; and the `/to-tickets` hint `platoon statusline` ends its line with (`src/ticketshint.rs`).
+//! never part of the start-up gate; platoon's copy under the skill's old name, `/to-tickets`, renamed by setup (an old
+//! copy the user changed kept and said); `platoon hook offer-tasks`, the hook platoon 1.0 gave its sessions, now a
+//! silent no-op; and the hint `platoon statusline` ends its line with (`src/ticketshint.rs`), naming the skill as it
+//! is installed.
 
 mod common;
 
@@ -32,7 +34,21 @@ impl World {
     }
 
     fn skill(&self) -> PathBuf {
+        self.claude().join("skills/to-tasks/SKILL.md")
+    }
+
+    /// Where platoon 1.3 and before wrote the skill, as `/to-tickets`.
+    fn old_skill(&self) -> PathBuf {
         self.claude().join("skills/to-tickets/SKILL.md")
+    }
+
+    /// platoon 1.3's own copy at the old place, as its setup wrote it (its text, its trailer): returns the text.
+    fn old_platoons_copy(&self) -> String {
+        let body = "---\nname: to-tickets\ndescription: \"The user runs it by typing /to-tickets.\"\n---\n\nTurn the work into tasks.\n";
+        let text = format!("{body}{TRAILER} cksum {} -->\n", cksum(body));
+        fs::create_dir_all(self.old_skill().parent().unwrap()).unwrap();
+        fs::write(self.old_skill(), &text).unwrap();
+        text
     }
 
     /// `platoon <args>` on this world's folders, Claude Code installed (a stand-in that can't run), no Codex.
@@ -65,6 +81,9 @@ impl World {
     }
 }
 
+/// How the last line of a copy platoon's setup wrote starts.
+const TRAILER: &str = "<!-- platoon setup wrote this file and keeps it up to date; once you change it, platoon leaves it alone.";
+
 /// The CRC `cksum` prints for `data`.
 fn cksum(data: &str) -> String {
     let mut c = Command::new("cksum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
@@ -83,9 +102,9 @@ fn split_last(text: &str) -> (&str, &str) {
 fn setup_writes_the_skill_naming_itself_and_updates_only_its_own_copy() {
     let w = World::new("setup");
     let said = w.setup();
-    assert!(said.contains("[✓] /to-tickets") && said.contains("added"), "{said}");
+    assert!(said.contains("[✓] /to-tasks") && said.contains("added") && !said.contains("to-tickets"), "{said}");
     let text = fs::read_to_string(w.skill()).unwrap();
-    assert!(text.starts_with("---\nname: to-tickets\n"), "{text}");
+    assert!(text.starts_with("---\nname: to-tasks\n"), "{text}");
     assert!(text.contains(&format!("{BIN} task squads")) && text.contains(&format!("\"Bash({BIN} task add:*)\"")), "{text}");
     // Its last line says platoon wrote it, with the POSIX cksum of the rest (what `scripts/uninstall.sh` checks).
     let (body, last) = split_last(&text);
@@ -97,7 +116,7 @@ fn setup_writes_the_skill_naming_itself_and_updates_only_its_own_copy() {
 
     // An older platoon's copy (another text, its own trailer): updated to this one.
     let older = body.replace("Fewer is better", "Few is better");
-    fs::write(w.skill(), format!("{older}<!-- platoon setup wrote this file and keeps it up to date; once you change it, platoon leaves it alone. cksum {} -->\n", cksum(&older))).unwrap();
+    fs::write(w.skill(), format!("{older}{TRAILER} cksum {} -->\n", cksum(&older))).unwrap();
     let said = w.setup();
     assert!(said.contains("updated to this platoon's copy") && !said.contains("Nothing to change."), "{said}");
     assert_eq!(fs::read_to_string(w.skill()).unwrap(), text);
@@ -110,10 +129,51 @@ fn setup_writes_the_skill_naming_itself_and_updates_only_its_own_copy() {
         "left alone: {} wasn't written by platoon (delete its folder and run `platoon setup` again for platoon's)",
         w.skill().display()
     );
-    assert!(said.contains("[–] /to-tickets") && said.contains(&line), "{said}");
+    assert!(said.contains("[–] /to-tasks") && said.contains(&line), "{said}");
     assert_eq!(fs::read_to_string(w.skill()).unwrap(), mine);
     let tasks = w.run(&["task", "squads"], "");
     assert!(tasks.status.success() && String::from_utf8_lossy(&tasks.stdout).contains("bug-fix: "), "{tasks:?}");
+}
+
+#[test]
+fn setup_renames_platoons_old_to_tickets_copy_and_keeps_one_the_user_changed() {
+    // platoon 1.3's copy, unchanged: /to-tasks written, the old copy and its folder gone, said as a rename.
+    let w = World::new("rename");
+    w.old_platoons_copy();
+    let said = w.setup();
+    assert!(said.contains("[✓] /to-tasks") && said.contains("renamed /to-tickets to /to-tasks"), "{said}");
+    assert!(!said.contains("Nothing to change."), "{said}");
+    assert!(fs::read_to_string(w.skill()).unwrap().starts_with("---\nname: to-tasks\n"));
+    assert!(!w.old_skill().parent().unwrap().exists(), "the old copy's folder went too");
+    let again = w.setup();
+    assert!(again.contains("Nothing to change.") && !again.contains("to-tickets"), "{again}");
+
+    // The old copy changed by the user: /to-tasks written beside it, the old one kept and said in one line.
+    let w = World::new("rename-edited");
+    let mine = w.old_platoons_copy().replace("Turn the work", "Turn my work");
+    fs::write(w.old_skill(), &mine).unwrap();
+    let said = w.setup();
+    assert!(said.contains("[✓] /to-tasks") && said.contains("added") && !said.contains("renamed"), "{said}");
+    let line = format!(
+        "left alone: {} was changed since platoon wrote it (or isn't platoon's), so it is yours; delete its folder when you no longer want it",
+        w.old_skill().display()
+    );
+    assert!(said.contains("[–] /to-tickets") && said.contains(&line), "{said}");
+    assert_eq!(fs::read_to_string(w.old_skill()).unwrap(), mine);
+    assert!(w.skill().is_file());
+
+    // The user's own /to-tasks: not written, and platoon's old copy stays (the only platoon skill there is).
+    let w = World::new("rename-theirs");
+    let old = w.old_platoons_copy();
+    w.own_skill();
+    let said = w.setup();
+    assert!(said.contains("[–] /to-tasks") && said.contains("wasn't written by platoon"), "{said}");
+    assert!(
+        said.contains(&format!("kept: {} is platoon's, and stays while /to-tasks isn't platoon's copy", w.old_skill().display())),
+        "{said}"
+    );
+    assert_eq!(fs::read_to_string(w.old_skill()).unwrap(), old);
+    assert!(fs::read_to_string(w.skill()).unwrap().contains("description: mine"));
 }
 
 #[test]
@@ -140,7 +200,7 @@ fn window(w: &World) -> common::Term {
     common::Term::spawn(&[], &env, &w.base, 24, 100)
 }
 
-const NOTICE: &str = "New: /to-tickets in Claude Code sessions — run `platoon setup` to add it";
+const NOTICE: &str = "New: /to-tasks in Claude Code sessions — run `platoon setup` to add it";
 
 #[test]
 fn platoon_says_once_that_setup_has_the_skill_to_add_and_nothing_once_it_is_in() {
@@ -151,12 +211,12 @@ fn platoon_says_once_that_setup_has_the_skill_to_add_and_nothing_once_it_is_in()
     let mut t = window(&w);
     t.wait_for_all(&[NOTICE, "? help"]);
     t.send(b"j");
-    t.wait_gone("New: /to-tickets");
+    t.wait_gone("New: /to-tasks");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
     let mut t = window(&w);
     t.wait_for("? help");
-    assert!(!t.stable().contains("/to-tickets"), "said once only");
+    assert!(!t.stable().contains("/to-tasks"), "said once only");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 
@@ -165,7 +225,17 @@ fn platoon_says_once_that_setup_has_the_skill_to_add_and_nothing_once_it_is_in()
     w.setup();
     let mut t = window(&w);
     t.wait_for("? help");
-    assert!(!t.stable().contains("/to-tickets"));
+    assert!(!t.stable().contains("/to-tasks"));
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+
+    // platoon 1.3's /to-tickets there, setup not run since: said as a rename.
+    let w = World::new("notice-renamed");
+    w.setup();
+    fs::remove_dir_all(w.claude().join("skills")).unwrap();
+    w.old_platoons_copy();
+    let mut t = window(&w);
+    t.wait_for_all(&["/to-tickets is now called /to-tasks — run `platoon setup` to rename it", "? help"]);
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }
@@ -269,10 +339,10 @@ impl World {
         p
     }
 
-    /// The user's own `/to-tickets` skill (as present as platoon's copy).
+    /// The user's own `/to-tasks` skill (as present as platoon's copy).
     fn own_skill(&self) {
         fs::create_dir_all(self.skill().parent().unwrap()).unwrap();
-        fs::write(self.skill(), "---\nname: to-tickets\ndescription: mine\n---\n\nMake tasks.\n").unwrap();
+        fs::write(self.skill(), "---\nname: to-tasks\ndescription: mine\n---\n\nMake tasks.\n").unwrap();
     }
 }
 
@@ -297,17 +367,17 @@ fn plan_answer(id: &str, approved: bool) -> serde_json::Value {
     serde_json::json!({"type": "user", "isSidechain": false, "cwd": "/home/u/shop", "message": {"role": "user", "content": [block]}})
 }
 
-fn typed_to_tickets() -> serde_json::Value {
-    said("<command-message>to-tickets</command-message>\n<command-name>/to-tickets</command-name>")
+fn typed(name: &str) -> serde_json::Value {
+    said(&format!("<command-message>{name}</command-message>\n<command-name>/{name}</command-name>"))
 }
 
 const FIGURES: &str = "5h 12% · 7d 40%";
 
 #[test]
-fn the_status_line_hints_at_to_tickets_while_a_conversation_has_agreed_on_work() {
+fn the_status_line_hints_at_to_tasks_while_a_conversation_has_agreed_on_work() {
     let w = World::new("hint");
     let plain = format!("{FIGURES}\n");
-    let hinted = format!("{FIGURES} · /to-tickets turns this into tasks\n");
+    let hinted = format!("{FIGURES} · /to-tasks turns this into tasks\n");
     let talk = w.transcript("s-1", &[(600, said("Plan the plain-text mails with me"))]);
 
     // Nothing says so: the figures alone.
@@ -316,8 +386,14 @@ fn the_status_line_hints_at_to_tickets_while_a_conversation_has_agreed_on_work()
     // The notes said yes a minute ago: the hint, giving way when the line is narrow.
     w.mark("s-1", true, 60);
     assert_eq!(w.status_line("s-1", &talk, None, None), hinted);
-    assert_eq!(w.status_line("s-1", &talk, None, Some("40")), format!("{FIGURES} · /to-tickets\n"));
+    assert_eq!(w.status_line("s-1", &talk, None, Some("40")), format!("{FIGURES} · /to-tasks\n"));
     assert_eq!(w.status_line("s-1", &talk, None, Some("22")), plain);
+    // Only platoon 1.3's /to-tickets there (setup not run since): the hint names the command that works.
+    fs::remove_dir_all(w.claude().join("skills")).unwrap();
+    w.old_platoons_copy();
+    assert_eq!(w.status_line("s-1", &talk, None, None), format!("{FIGURES} · /to-tickets turns this into tasks\n"));
+    w.own_skill();
+    assert_eq!(w.status_line("s-1", &talk, None, None), hinted, "both there: the new name");
     // Without the skill there is nothing to run: no hint.
     fs::remove_dir_all(w.claude().join("skills")).unwrap();
     assert_eq!(w.status_line("s-1", &talk, None, None), plain);
@@ -327,21 +403,23 @@ fn the_status_line_hints_at_to_tickets_while_a_conversation_has_agreed_on_work()
     assert_eq!(w.status_line("s-1", &talk, None, None), plain);
     w.mark("s-1", true, 31 * 60);
     assert_eq!(w.status_line("s-1", &talk, None, None), plain, "too old");
-    // /to-tickets used since the yes: gone. Typed, or run by Claude with the Skill tool.
+    // The skill used since the yes: gone. Typed, or run by Claude with the Skill tool; by its name or its old one.
     w.mark("s-1", true, 120);
-    let used = w.transcript("s-1", &[(600, said("Plan the plain-text mails with me")), (60, typed_to_tickets())]);
-    assert_eq!(w.status_line("s-1", &used, None, None), plain);
-    let skill_tool = serde_json::json!({"type": "assistant", "isSidechain": false, "message": {"role": "assistant",
-        "content": [{"type": "tool_use", "id": "toolu_9", "name": "Skill", "input": {"skill": "to-tickets"}}]}});
-    let used = w.transcript("s-1", &[(600, said("Plan the plain-text mails with me")), (60, skill_tool)]);
-    assert_eq!(w.status_line("s-1", &used, None, None), plain);
+    for name in ["to-tasks", "to-tickets"] {
+        let used = w.transcript("s-1", &[(600, said("Plan the plain-text mails with me")), (60, typed(name))]);
+        assert_eq!(w.status_line("s-1", &used, None, None), plain, "{name}");
+        let skill_tool = serde_json::json!({"type": "assistant", "isSidechain": false, "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_9", "name": "Skill", "input": {"skill": name}}]}});
+        let used = w.transcript("s-1", &[(600, said("Plan the plain-text mails with me")), (60, skill_tool)]);
+        assert_eq!(w.status_line("s-1", &used, None, None), plain, "{name}");
+    }
 }
 
 #[test]
 fn an_approved_plan_brings_the_hint_and_a_rejected_one_does_not() {
     let w = World::new("hint-plan");
     w.own_skill();
-    let hinted = format!("{FIGURES} · /to-tickets turns this into tasks\n");
+    let hinted = format!("{FIGURES} · /to-tasks turns this into tasks\n");
     let approved = w.transcript("s-2", &[(300, said("Plan it")), (200, plan("toolu_1")), (100, plan_answer("toolu_1", true))]);
     assert_eq!(w.status_line("s-2", &approved, None, None), hinted);
     let rejected = w.transcript("s-2", &[(300, said("Plan it")), (200, plan("toolu_1")), (100, plan_answer("toolu_1", false))]);
@@ -354,8 +432,8 @@ fn an_approved_plan_brings_the_hint_and_a_rejected_one_does_not() {
     assert_eq!(w.status_line("s-2", &approved, None, None), format!("{FIGURES}\n"));
     w.mark("s-2", false, 150);
     assert_eq!(w.status_line("s-2", &approved, None, None), hinted);
-    // /to-tickets typed after the plan: gone.
-    let used = w.transcript("s-2", &[(200, plan("toolu_1")), (100, plan_answer("toolu_1", true)), (30, typed_to_tickets())]);
+    // /to-tasks typed after the plan: gone.
+    let used = w.transcript("s-2", &[(200, plan("toolu_1")), (100, plan_answer("toolu_1", true)), (30, typed("to-tasks"))]);
     assert_eq!(w.status_line("s-2", &used, None, None), format!("{FIGURES}\n"));
 }
 
@@ -381,12 +459,12 @@ fn a_tasks_session_never_shows_the_hint() {
             w.mark("s-other", true, 30);
         }
         let line = w.status_line(session, &path, task, None);
-        assert!(!line.contains("to-tickets"), "{session} {task:?}: {line}");
+        assert!(!line.contains("to-tasks"), "{session} {task:?}: {line}");
     }
     // And without it, the session a task records is still a task's.
     let line = w.status_line("s-task", &path, None, None);
     assert_eq!(line, format!("{FIGURES}\n"));
     // The same transcript in a session that is no task's does get it (the test above is not vacuous).
     let line = w.status_line("s-free", &w.transcript("s-free", &lines), None, None);
-    assert!(line.contains("/to-tickets turns this into tasks"), "{line}");
+    assert!(line.contains("/to-tasks turns this into tasks"), "{line}");
 }

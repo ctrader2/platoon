@@ -69,7 +69,7 @@ box; then [the check of the work](#the-check-of-the-work) judges each box itself
 
 ### Making tasks from a conversation
 
-There are two ways to turn a conversation into tasks: `t` on its row in platoon, and `/to-tickets` typed in the session
+There are two ways to turn a conversation into tasks: `t` on its row in platoon, and `/to-tasks` typed in the session
 itself. Either way the tasks are made as **Not started**, each with the squad that suits it suggested, and nothing starts
 until you press `s` on each.
 
@@ -77,10 +77,11 @@ until you press `s` on each.
 Codex's (with the smart features on), to read the conversation and suggest tasks, each with the squad that suits it. They open in a popup: `↑` `↓` move, `e` edits one in your editor, `x` removes one, `enter` makes
 them all as **Not started**, `esc` makes nothing.
 
-### `/to-tickets` in a session
+### `/to-tasks` in a session
 
-In a Claude Code session, type `/to-tickets` (optionally followed by what to turn into tasks: a plan file, or a part of
-the conversation). [`platoon setup`](install-and-setup.md#the-to-tickets-skill) installs this skill. The session:
+In a Claude Code session, type `/to-tasks` (optionally followed by what to turn into tasks: a plan file, or a part of
+the conversation). [`platoon setup`](install-and-setup.md#the-to-tasks-skill) installs this skill (up to platoon 1.3 it
+was called `/to-tickets`, which keeps working until you run setup again). The session:
 
 1. lists the squads there are (`platoon task squads`),
 2. drafts the tasks, one for each piece of the agreed work that can be done and checked on its own, each with a **Done
@@ -93,12 +94,12 @@ the conversation). [`platoon setup`](install-and-setup.md#the-to-tickets-skill) 
 It starts none of them, and doesn't do their work itself. A task goes in the project whose sessions worked in its
 folder (or in no project); when sessions of more than one project worked there, the session asks you which.
 
-Claude may also suggest `/to-tickets` itself, once, in a line at the end of a reply, when the conversation has settled on
+Claude may also suggest `/to-tasks` itself, once, in a line at the end of a reply, when the conversation has settled on
 concrete work with several steps. It never interrupts work to ask, and never makes tasks without you typing
-`/to-tickets` and approving the list.
+`/to-tasks` and approving the list.
 
 **A reminder in the status line.** While a conversation has agreed on work that could become tasks, platoon's status
-line ends with **· /to-tickets turns this into tasks** (just **/to-tickets** when the line is narrow, nothing when there
+line ends with **· /to-tasks turns this into tasks** (just **/to-tasks** when the line is narrow, nothing when there
 is no room). It asks nothing and adds nothing to the conversation. It appears when:
 
 - the project's [notes update](projects.md#notes-that-keep-themselves-up-to-date) finds that the conversation has agreed
@@ -107,10 +108,11 @@ is no room). It asks nothing and adds nothing to the conversation. It appears wh
   the conversation goes quiet (**Update notes after**);
 - or you approved a plan in the session (Claude Code's plan mode).
 
-It goes away once `/to-tickets` has been used in that conversation, when a later notes update says the conversation no
+It goes away once `/to-tasks` has been used in that conversation, when a later notes update says the conversation no
 longer qualifies, or 30 minutes after it appeared. New agreed work can bring it back. It shows only where the
-`/to-tickets` skill is installed and platoon's status line is the one Claude Code uses, never in a task's own session
-and never in Codex.
+`/to-tasks` skill is installed and platoon's status line is the one Claude Code uses, never in a task's own session
+and never in Codex. Where only the skill's old name, `/to-tickets`, is installed (setup not run since an update), the
+reminder names `/to-tickets`.
 
 ## Starting a task
 

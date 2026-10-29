@@ -174,7 +174,7 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => timed_hook("stop", notesrun::run_hook),
         // Kept as a silent no-op: Claude Code sessions an older platoon started (1.0.x) carry a `--settings` hook that runs
         // `hook offer-tasks` before their first edit, and must not see it fail after an upgrade. The offer to make tasks is
-        // the /to-tickets skill now (`skill.rs`).
+        // the /to-tasks skill now (`skill.rs`).
         Some("hook") if std::env::args().nth(2).as_deref() == Some("offer-tasks") => {
             use std::io::IsTerminal;
             if !io::stdin().is_terminal() {
@@ -329,7 +329,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, two hooks
                   that hand a project's notes to its sessions and keep them up to date, and
-                  the /to-tickets skill; and, when Codex is installed, the notes and task
+                  the /to-tasks skill; and, when Codex is installed, the notes and task
                   hooks to Codex's hooks.json
   task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
                   make a task and print its number (#N); with no --folder it works in the
@@ -358,7 +358,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly. Every session's usage
 /// figures are recorded; a task's session (its task in its environment) shows the task's line, the figures at its end.
-/// Any other session's figures end with the `/to-tickets` hint while its conversation has agreed on work
+/// Any other session's figures end with the `/to-tasks` hint while its conversation has agreed on work
 /// (`ticketshint.rs`); a task's session never gets it, whichever line it shows.
 fn statusline() -> io::Result<()> {
     let mut input = String::new();
@@ -371,7 +371,10 @@ fn statusline() -> io::Result<()> {
     } else {
         let root = agents::claude::claude_root();
         let at = ticketshint::Places { config: &config, cache: &cache, claude_root: &root };
-        if ticketshint::wanted(&input, &at, now) { ticketshint::with_hint(&figures, status_width()) } else { figures }
+        match ticketshint::wanted(&input, &at, now) {
+            Some(command) => ticketshint::with_hint(&figures, command, status_width()),
+            None => figures,
+        }
     };
     println!("{line}");
     Ok(())
@@ -432,10 +435,12 @@ fn setup() -> io::Result<()> {
     match claude {
         Ok(mut report) => {
             report.off.clone_from(&providers.off);
-            // The /to-tickets skill, where Claude Code is: not part of the start-up gate, so it never blocks platoon.
+            // The /to-tasks skill, where Claude Code is: not part of the start-up gate, so it never blocks platoon. Then
+            // platoon's copy under its old name, /to-tickets, goes once the new one is in.
             if providers.claude.is_some() {
                 let exe = setup::this_program().map(|(exe, _)| exe);
                 report.skill = Some(exe.map_or_else(skill::Installed::Failed, |exe| skill::install(&root, &exe)));
+                report.old_skill = Some(skill::retire_old(&root));
             }
             // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
             if let Some(agents::CodexAt { program, root: codex }) = &providers.codex {
@@ -715,7 +720,7 @@ mod tests {
         assert!(USAGE.contains("task add | task list"), "{USAGE}");
         // No `platoon squads` or `platoon ticket` any more: `task squads` lists them, `task add --squad` names one.
         assert!(!USAGE.contains("platoon squads") && !USAGE.contains("ticket ") && !USAGE.contains("| squads"), "{USAGE}");
-        assert!(USAGE.contains("task squads") && USAGE.contains("the /to-tickets skill"), "{USAGE}");
+        assert!(USAGE.contains("task squads") && USAGE.contains("the /to-tasks skill"), "{USAGE}");
         assert!(!USAGE.contains("offer-tasks"), "kept only so older sessions don't fail: {USAGE}");
         assert!(USAGE.contains("[--squad <id>]"), "{USAGE}");
         assert!(USAGE.contains("  task add [--project") && USAGE.contains("  task list [--project"));
@@ -1148,7 +1153,7 @@ mod tests {
         // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '3');
         assert!(app.top == 2 && app.board_showing() && app.selected_session().is_none());
-        assert!(flat(&draw(&mut term, &app)).contains(crate::board::Shelf::Active.empty(app.providers().claude.is_some())));
+        assert!(flat(&draw(&mut term, &app)).contains(&crate::board::Shelf::Active.empty(Some("/to-tasks"))));
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));

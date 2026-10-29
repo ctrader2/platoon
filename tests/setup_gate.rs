@@ -87,7 +87,7 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tickets skill: {shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tasks skill: {shown}");
     assert!(
         shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"),
         "{shown}"
@@ -97,7 +97,7 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tickets skill: {shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "the four steps and the /to-tasks skill: {shown}");
     assert_eq!(shown.matches("already done").count(), 5, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
@@ -131,7 +131,7 @@ fn setup_refuses_arguments() {
     let out = platoon(&claude, &cache, &["setup"]);
     assert!(out.status.success());
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
-    for gone in [&["setup", "--remove", "to-tickets"][..], &["setup", "--add", "to-tickets"], &["setup", "--nope"]] {
+    for gone in [&["setup", "--remove", "to-tasks"][..], &["setup", "--add", "to-tasks"], &["setup", "--nope"]] {
         let out = platoon(&claude, &cache, gone);
         assert_eq!(out.status.code(), Some(2), "{gone:?}");
         assert!(text(&out.stderr).starts_with("usage: platoon setup"), "{gone:?}: {out:?}");

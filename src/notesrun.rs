@@ -408,7 +408,7 @@ pub fn gather(
     let cap = settings.ai_prompt_chars as usize;
     let mut sessions: Vec<(u64, SessionMaterial)> = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    // Whether a conversation has agreed on work for `/to-tickets` is asked only where the skill is there to use, and
+    // Whether a conversation has agreed on work for `/to-tasks` is asked only where the skill is there to use, and
     // never of a task's own session (`ticketshint.rs`).
     let skill = root.is_some_and(crate::skill::present);
     let task_sessions: std::collections::HashSet<String> =
@@ -625,7 +625,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
             Err(AiError::Refused(r)) => return Round::Refused(r.plain()),
             Err(e) => return Round::Failed(e.plain()),
         };
-        // What the first answer says about the conversations asked about for `/to-tickets`: the status line's hint.
+        // What the first answer says about the conversations asked about for `/to-tasks`: the status line's hint.
         let to_tickets = if tries == 1 { notesupdate::parse_to_tickets(&reply) } else { None };
         if tries == 1 {
             record_to_tickets(&env.cache, &material, to_tickets.as_deref(), now);
@@ -683,7 +683,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     outcome
 }
 
-/// Mark each conversation of `material` that was asked about for `/to-tickets` with the answer (`numbers`, 1 for the
+/// Mark each conversation of `material` that was asked about for `/to-tasks` with the answer (`numbers`, 1 for the
 /// first of the material): yes for one it names, no for the others, as of `at`, when the material was read. A number
 /// of a conversation that wasn't asked about (a task's, a Codex one) or of none is ignored. No answer (missing, or not
 /// a list of numbers): no mark changes.
@@ -1343,11 +1343,11 @@ mod tests {
         assert_eq!((one.lines().count(), one.chars().count()), (1, claude::REPLY_CHARS));
     }
 
-    /// The user's own `/to-tickets` skill in this rig's Claude Code folder.
+    /// The user's own `/to-tasks` skill in this rig's Claude Code folder.
     fn with_skill(r: &Rig) {
         let p = crate::skill::path(&r.env.root);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(&p, "---\nname: to-tickets\ndescription: mine\n---\n").unwrap();
+        fs::write(&p, "---\nname: to-tasks\ndescription: mine\n---\n").unwrap();
     }
 
     /// A task (in no project) whose session is `sid`.
@@ -1359,7 +1359,7 @@ mod tests {
 
     #[test]
     fn the_notes_update_asks_which_conversations_agreed_on_work_and_marks_them_for_the_status_line() {
-        let r = Rig::new("to-tickets");
+        let r = Rig::new("to-tasks");
         with_skill(&r);
         let id = r.project(NOTES);
         r.session(&id, "s-free", &["Plan the plain-text mails with me"], "Agreed: three steps.");
@@ -1403,7 +1403,7 @@ mod tests {
 
     #[test]
     fn without_the_skill_the_notes_update_asks_nothing_about_to_tickets() {
-        let r = Rig::new("to-tickets-none");
+        let r = Rig::new("to-tasks-none");
         let id = r.project(NOTES);
         r.session(&id, "s-free", &["Plan the plain-text mails with me"], "Agreed: three steps.");
         r.fake.reply(1, r#"{"summary":"A sock shop.","to_tickets":[1]}"#);

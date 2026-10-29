@@ -31,15 +31,17 @@ impl Shelf {
         }
     }
 
-    /// What the list says when nothing is on it. `to_tickets`: Claude Code is in use, so `/to-tickets` is there to
-    /// make tasks from a conversation.
-    pub fn empty(self, to_tickets: bool) -> &'static str {
-        match self {
-            Shelf::Active if to_tickets => {
-                "No tasks yet. Press n to write one, or type /to-tickets in a session to turn the work you agreed on there into tasks."
+    /// What the list says when nothing is on it. `skill`: where Claude Code is in use, the command that makes tasks from
+    /// a conversation there (`skill::command`: `/to-tasks`, or the old name while only that is installed).
+    pub fn empty(self, skill: Option<&str>) -> String {
+        match (self, skill) {
+            (Shelf::Active, Some(command)) => {
+                format!(
+                    "No tasks yet. Press n to write one, or type {command} in a session to turn the work you agreed on there into tasks."
+                )
             }
-            Shelf::Active => "No tasks yet. Press n to write one.",
-            Shelf::Archived => "Nothing archived. A finished task moves here a day after it finishes; a on it moves it sooner.",
+            (Shelf::Active, None) => "No tasks yet. Press n to write one.".into(),
+            (Shelf::Archived, _) => "Nothing archived. A finished task moves here a day after it finishes; a on it moves it sooner.".into(),
         }
     }
 

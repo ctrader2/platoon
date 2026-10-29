@@ -888,23 +888,27 @@ pub fn helpers(transcript: &Path) -> Vec<Helper> {
 /// and the status line runs often.
 pub const TO_TICKETS_TAIL_BYTES: u64 = 256 * 1024;
 
-/// What the end of a conversation says about `/to-tickets`, for the status line's hint (`ticketshint.rs`). Times are
-/// seconds since the epoch.
+/// What the end of a conversation says about the `/to-tasks` skill, for the status line's hint (`ticketshint.rs`).
+/// Times are seconds since the epoch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ToTicketsTail {
     /// The latest plan the user approved: an `ExitPlanMode` call whose result is not an error (a rejected plan's is).
     pub plan_approved: Option<u64>,
-    /// The latest use of `/to-tickets`: typed by the user, or Claude running it with the Skill tool.
+    /// The latest use of the skill, `/to-tasks` or by its old name `/to-tickets`: typed by the user, or Claude running it
+    /// with the Skill tool.
     pub to_tickets_used: Option<u64>,
 }
 
 /// Read the last `TO_TICKETS_TAIL_BYTES` of a transcript for `ToTicketsTail`. Claude Code 2.1.312 writes a plan as an
 /// assistant entry with a `tool_use` block named `ExitPlanMode` and its answer as a user entry with a `tool_result`
 /// for that block's id (`"is_error": true` when the user said no); a typed skill as a user entry of tags (see
-/// `skill_typed`); the Skill tool as a `tool_use` named `Skill` with `{"skill": "to-tickets"}`. Subagents' entries
+/// `skill_typed`); the Skill tool as a `tool_use` named `Skill` with `{"skill": "to-tasks"}` (or `"to-tickets"`, the
+/// skill's old name, in conversations from before the rename or where setup hasn't run since). Subagents' entries
 /// don't count. A line is parsed only when a substring test says it may matter. An entry without a time takes the
 /// file's. Anything unreadable: nothing found.
 pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
+    /// The skill's names: `/to-tasks`, and `/to-tickets` until the rename.
+    const SKILL_NAMES: [&str; 2] = ["to-tasks", "to-tickets"];
     let mut out = ToTicketsTail::default();
     let Ok(mut file) = File::open(path) else { return out };
     let Ok(meta) = file.metadata() else { return out };
@@ -926,7 +930,7 @@ pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
     for line in lines {
         let plan_call = line.contains("\"ExitPlanMode\"");
         let answer = !plans.is_empty() && line.contains("\"tool_result\"") && plans.iter().any(|id| line.contains(id.as_str()));
-        let skill = line.contains("to-tickets");
+        let skill = SKILL_NAMES.iter().any(|n| line.contains(n));
         if !(plan_call || answer || skill) || line.contains("\"isSidechain\":true") {
             continue;
         }
@@ -941,7 +945,7 @@ pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
                 for b in blocks.iter().filter(|b| b["type"].as_str() == Some("tool_use")) {
                     match b["name"].as_str() {
                         Some("ExitPlanMode") => plans.extend(b["id"].as_str().filter(|id| !id.is_empty()).map(String::from)),
-                        Some("Skill") if b["input"]["skill"].as_str().map(str::trim) == Some("to-tickets") => {
+                        Some("Skill") if b["input"]["skill"].as_str().is_some_and(|s| SKILL_NAMES.contains(&s.trim())) => {
                             out.to_tickets_used = Some(at);
                         }
                         _ => {}
@@ -956,7 +960,9 @@ pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
                 }
                 if skill
                     && let Some(p) = real_prompt(&v)
-                    && (p == "/to-tickets" || p.starts_with("/to-tickets "))
+                    && SKILL_NAMES
+                        .iter()
+                        .any(|n| p.strip_prefix('/').and_then(|p| p.strip_prefix(n)).is_some_and(|r| r.is_empty() || r.starts_with(' ')))
                 {
                     out.to_tickets_used = Some(at);
                 }
@@ -2133,8 +2139,8 @@ mod hidden_tests {
     }
 
     #[test]
-    fn the_end_of_a_transcript_says_when_a_plan_was_approved_and_when_to_tickets_was_used() {
-        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-to-tickets-{}", std::process::id())));
+    fn the_end_of_a_transcript_says_when_a_plan_was_approved_and_when_the_to_tasks_skill_was_used() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-to-tasks-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         let p = d.join("s.jsonl");
@@ -2167,17 +2173,22 @@ mod hidden_tests {
         // The latest of two; a rejected one after an approved one leaves the approved one's time.
         let two = read(&[plan("t1", 100, false), answer("t1", 110, false), plan("t2", 200, false), answer("t2", 210, true)]);
         assert_eq!(two.plan_approved, Some(110));
-        // /to-tickets typed (with words or without), or run with the Skill tool; mentioned in words is not a use.
-        let cmd = |args: &str| format!("<command-message>to-tickets</command-message>\n<command-name>/to-tickets</command-name>{args}");
-        assert_eq!(read(&[typed(&cmd(""), 300)]).to_tickets_used, Some(300));
-        assert_eq!(read(&[typed(&cmd("\n<command-args>just the mails</command-args>"), 300)]).to_tickets_used, Some(300));
-        let tool = json!({"type":"assistant","timestamp":at(400),"message":{"role":"assistant","content":[
-            {"type":"tool_use","id":"t9","name":"Skill","input":{"skill":"to-tickets"}}]}})
-        .to_string();
-        assert_eq!(read(std::slice::from_ref(&tool)).to_tickets_used, Some(400));
-        assert_eq!(read(&[typed("Should I run /to-tickets for this?", 300)]).to_tickets_used, None);
-        let meta = json!({"type":"user","isMeta":true,"timestamp":at(300),"message":{"role":"user","content":"Base directory for this skill: /x/to-tickets"}}).to_string();
-        assert_eq!(read(&[meta]).to_tickets_used, None, "the skill's own text that follows a typed one");
+        // The skill typed (with words or without), or run with the Skill tool; mentioned in words is not a use. By its
+        // name, /to-tasks, or its old one, /to-tickets (conversations from before the rename).
+        for name in ["to-tasks", "to-tickets"] {
+            let cmd = |args: &str| format!("<command-message>{name}</command-message>\n<command-name>/{name}</command-name>{args}");
+            assert_eq!(read(&[typed(&cmd(""), 300)]).to_tickets_used, Some(300), "{name}");
+            assert_eq!(read(&[typed(&cmd("\n<command-args>just the mails</command-args>"), 300)]).to_tickets_used, Some(300), "{name}");
+            let tool = json!({"type":"assistant","timestamp":at(400),"message":{"role":"assistant","content":[
+                {"type":"tool_use","id":"t9","name":"Skill","input":{"skill":name}}]}})
+            .to_string();
+            assert_eq!(read(std::slice::from_ref(&tool)).to_tickets_used, Some(400), "{name}");
+            assert_eq!(read(&[typed(&format!("Should I run /{name} for this?"), 300)]).to_tickets_used, None, "{name}");
+            let meta = json!({"type":"user","isMeta":true,"timestamp":at(300),"message":{"role":"user","content":format!("Base directory for this skill: /x/{name}")}}).to_string();
+            assert_eq!(read(&[meta]).to_tickets_used, None, "the skill's own text that follows a typed one");
+        }
+        let other = "<command-message>to-tasks-later</command-message>\n<command-name>/to-tasks-later</command-name>";
+        assert_eq!(read(&[typed(other, 300)]).to_tickets_used, None, "another skill whose name starts the same");
         // Only the end is read: a plan approved before the last TO_TICKETS_TAIL_BYTES is not seen, one after is.
         let filler = typed(&"x".repeat(1000), 150);
         let mut long = vec![plan("t1", 100, false), answer("t1", 110, false)];

@@ -55,7 +55,7 @@ it, and its folder if needed.
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](projects.md) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](projects.md) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions |
 | Notes updates | Lets platoon [keep a project's notes up to date](projects.md#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional |
-| /to-tickets | A Claude Code skill: type `/to-tickets` in a session to [turn the work agreed there into tasks](tasks-and-squads.md#to-tickets-in-a-session). Written to `skills/to-tickets/SKILL.md` in Claude Code's folder. Optional too |
+| /to-tasks | A Claude Code skill: type `/to-tasks` in a session to [turn the work agreed there into tasks](tasks-and-squads.md#to-tasks-in-a-session). Written to `skills/to-tasks/SKILL.md` in Claude Code's folder. Optional too |
 
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in
@@ -123,30 +123,41 @@ run `platoon setup` once more to add it.
 If you run setup from a build folder (a path with `/target/` in it), it warns you: the hooks would point at a binary
 that moves. Install platoon first, then run `platoon setup` again.
 
-### The `/to-tickets` skill
+### The `/to-tasks` skill
 
-Setup writes the [`/to-tickets`](tasks-and-squads.md#to-tickets-in-a-session) skill into Claude Code's folder
-(`skills/to-tickets/SKILL.md`), naming platoon by its full path so the skill works whether or not `platoon` is on your
+Setup writes the [`/to-tasks`](tasks-and-squads.md#to-tasks-in-a-session) skill into Claude Code's folder
+(`skills/to-tasks/SKILL.md`), naming platoon by its full path so the skill works whether or not `platoon` is on your
 path. The file's last line says platoon wrote it, with a checksum of the rest. Running setup again updates platoon's
 copy when a newer platoon ships a newer text (or platoon moved), and says "already done" otherwise.
 
-A `/to-tickets` skill platoon didn't write (your own, one an older platoon installed, or platoon's copy once you edit
+A `/to-tasks` skill platoon didn't write (your own, one an older platoon installed, or platoon's copy once you edit
 it) is never overwritten: setup leaves it as it is and says so in one line. To have platoon's instead, delete that
 folder and run `platoon setup` again. The skill is not needed to start platoon, so an upgraded platoon starts even
 before you run setup again.
+
+Up to platoon 1.3 the skill was called `/to-tickets` (`skills/to-tickets/SKILL.md`). Once its `/to-tasks` copy is in
+place, setup deletes platoon's old copy (and its folder) and says "renamed /to-tickets to /to-tasks". An old copy you
+changed is yours: setup leaves it and says so in one line. Until you run setup, `/to-tickets` keeps working, and the
+places in platoon that tell you to type the skill name `/to-tickets` while that is the one installed.
 
 So that you still hear about it, platoon says so once, in a line above the key hints of the Sessions and Projects
 lists, when Claude Code is installed (and not switched off in the settings) and the skill is missing:
 
 ```
-New: /to-tickets in Claude Code sessions — run `platoon setup` to add it
+New: /to-tasks in Claude Code sessions — run `platoon setup` to add it
+```
+
+or, when platoon's copy is there only under the skill's old name:
+
+```
+/to-tickets is now called /to-tasks — run `platoon setup` to rename it
 ```
 
 or when platoon's copy is older than the one this platoon would write (a newer platoon changed the skill, or platoon
 moved):
 
 ```
-platoon's /to-tickets skill has an update — run `platoon setup`
+platoon's /to-tasks skill has an update — run `platoon setup`
 ```
 
 The line goes at your next key or click, and doesn't come back for the same reason; it goes by itself once setup has
@@ -229,8 +240,9 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
-   **The `/to-tickets` skill.** It deletes the copy setup wrote (and its folder), only while it is unchanged; a skill of
-   that name that platoon didn't write, or that you changed, stays, and the end says so.
+   **The `/to-tasks` skill.** It deletes the copy setup wrote (and its folder), only while it is unchanged; a skill of
+   that name that platoon didn't write, or that you changed, stays, and the end says so. The same goes for the skill
+   under its old name, `/to-tickets`.
    **Codex's hooks.** It takes the hooks setup added out of Codex's `hooks.json` the same way (backup first, as
    `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks included. Codex's records that
    those hooks are trusted go too, taken out through Codex itself as setup put them in (the records of any other
@@ -271,7 +283,7 @@ sessions are running the uninstall stops with nothing changed unless you add `--
 ### Without platoon
 
 If the `platoon` program is already gone (or is too old to have `uninstall`), the script still asks the same two
-questions, stops the sessions and deletes the folders, and the `/to-tickets` skill when it is platoon's unchanged copy
-(it checks the file's last line with `cksum`). It can't safely edit Claude Code's settings without platoon, so
+questions, stops the sessions and deletes the folders, and the `/to-tasks` skill (and `/to-tickets`, its old name)
+when it is platoon's unchanged copy (it checks the file's last line with `cksum`). It can't safely edit Claude Code's settings without platoon, so
 it tells you what to take out by hand, as described in
 [Removing platoon by hand](what-platoon-changes.md#removing-platoon-by-hand).

@@ -374,7 +374,7 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
 #[test]
 fn sessions_platoon_starts_carry_no_offer_to_make_tasks() {
     // platoon 1.0 gave each session it started a hook (`--settings`) and `PLATOON_OFFER_TASKS=1`; the offer is the
-    // /to-tickets skill now, so a session gets the agent's own arguments and nothing else.
+    // /to-tasks skill now, so a session gets the agent's own arguments and nothing else.
     let lab = Lab::new("proj-no-offer");
     lab.save("aaaa-0001", "fix the docker build", 5);
     lab.project(&["aaaa-0001"], None);

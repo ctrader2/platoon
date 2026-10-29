@@ -6,6 +6,13 @@ here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`/to-tickets` is now `/to-tasks`**, to match what platoon calls the work everywhere else. Run `platoon setup`: it
+  writes `/to-tasks` and deletes platoon's `/to-tickets` copy (one you changed is kept, and setup says so). Until then
+  `/to-tickets` keeps working, platoon names it in the status line's reminder and on the empty Tasks tab, and a line
+  above the key hints says to run setup. Uninstall removes platoon's copy under either name.
+
 ## [1.3.0] - 2026-10-29
 
 ### Added
