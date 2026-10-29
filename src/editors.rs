@@ -3,13 +3,18 @@
 //! Nothing is installed and nothing is assumed: platoon looks at `$VISUAL` and `$EDITOR` first, then for a list of
 //! editors it knows by name, and offers only the ones it found. Editors that live in a terminal (nano, vim, ...) are
 //! run inside platoon's own window, in a pseudo-terminal, exactly as a session is; editors with a window of their own
-//! (VS Code, Mousepad, ...) are started beside platoon and left alone.
+//! (VS Code, Mousepad, the JetBrains IDEs, ...) are started beside platoon and asked to wait until the file is closed.
+//!
+//! Editors are looked for where `v`'s are (`fileeditors::places`): on `PATH`, then where editors install themselves
+//! outside it (JetBrains Toolbox's scripts, `~/.local/bin`, snaps, `/opt/<app>/bin`); and the windowed ones `v` knows
+//! too, also as macOS app bundles, by the program inside the bundle (`fileeditors::file_program`).
 //!
 //! Two knobs exist for tests, so a test never starts a real editor:
-//!   `PLATOON_EDITOR_PATH`  where to look for editors, instead of `PATH`
+//!   `PLATOON_EDITOR_PATH`  the only place to look for editors, instead of `PATH`, the install places and app bundles
 //!   `PLATOON_EDITOR_BIN`   run this program instead of whichever editor was chosen
 //! With neither set, `PLATOON_FORBID_REAL_EDITOR` makes starting an editor fail instead.
 
+use crate::fileeditors::{self, Places};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
@@ -30,6 +35,7 @@ use std::{
 pub const ASK: &str = "ask";
 
 /// An editor platoon knows how to name and how to run.
+#[derive(Clone, Copy)]
 struct Known {
     /// The command, which is also the editor's id in the settings file.
     command: &'static str,
@@ -41,31 +47,50 @@ struct Known {
     terminal: bool,
     /// Only offered on macOS.
     macos: bool,
+    /// `v` knows it too, by this id (`fileeditors`): found where `v` finds it, its macOS app bundle included.
+    shared: bool,
+}
+
+const fn terminal(command: &'static str, name: &'static str, args: &'static [&'static str]) -> Known {
+    Known { command, name, args, terminal: true, macos: false, shared: false }
+}
+
+const fn window(command: &'static str, name: &'static str, args: &'static [&'static str], shared: bool) -> Known {
+    Known { command, name, args, terminal: false, macos: false, shared }
 }
 
 /// Editors that live in a terminal first, then ones with a window of their own; in each group, the order here is
-/// the order the settings and the picker show.
+/// the order the settings and the picker show. The JetBrains IDEs and TextEdit come after these (`known`).
 const KNOWN: &[Known] = &[
-    Known { command: "nvim", name: "Neovim", args: &[], terminal: true, macos: false },
-    Known { command: "vim", name: "Vim", args: &[], terminal: true, macos: false },
-    Known { command: "hx", name: "Helix", args: &[], terminal: true, macos: false },
-    Known { command: "helix", name: "Helix", args: &[], terminal: true, macos: false },
-    Known { command: "micro", name: "Micro", args: &[], terminal: true, macos: false },
-    Known { command: "nano", name: "nano", args: &[], terminal: true, macos: false },
+    terminal("nvim", "Neovim", &[]),
+    terminal("vim", "Vim", &[]),
+    terminal("hx", "Helix", &[]),
+    terminal("helix", "Helix", &[]),
+    terminal("micro", "Micro", &[]),
+    terminal("nano", "nano", &[]),
     // Plain `emacs` opens a window when it can; `-nw` keeps it in the terminal, which is what this list means.
-    Known { command: "emacs", name: "Emacs", args: &["-nw"], terminal: true, macos: false },
-    Known { command: "vi", name: "vi", args: &[], terminal: true, macos: false },
-    Known { command: "code", name: "VS Code", args: &["--wait"], terminal: false, macos: false },
-    Known { command: "cursor", name: "Cursor", args: &["--wait"], terminal: false, macos: false },
-    Known { command: "zed", name: "Zed", args: &["--wait"], terminal: false, macos: false },
-    Known { command: "subl", name: "Sublime Text", args: &["--wait"], terminal: false, macos: false },
-    Known { command: "kate", name: "Kate", args: &["--block"], terminal: false, macos: false },
-    Known { command: "gedit", name: "gedit", args: &["--wait"], terminal: false, macos: false },
-    Known { command: "gnome-text-editor", name: "GNOME Text Editor", args: &[], terminal: false, macos: false },
+    terminal("emacs", "Emacs", &["-nw"]),
+    terminal("vi", "vi", &[]),
+    window("code", "VS Code", &["--wait"], true),
+    window("cursor", "Cursor", &["--wait"], true),
+    window("zed", "Zed", &["--wait"], true),
+    window("subl", "Sublime Text", &["--wait"], true),
+    window("kate", "Kate", &["--block"], true),
+    window("gedit", "gedit", &["--wait"], false),
+    window("gnome-text-editor", "GNOME Text Editor", &[], false),
     // Without this Mousepad hands the file to a copy that is already running and returns at once.
-    Known { command: "mousepad", name: "Mousepad", args: &["--disable-server"], terminal: false, macos: false },
-    Known { command: "open", name: "TextEdit", args: &["-t", "-W"], terminal: false, macos: true },
+    window("mousepad", "Mousepad", &["--disable-server"], false),
 ];
+
+/// `open -t -W`: the file in TextEdit, and `open` waits until TextEdit has quit.
+const TEXTEDIT: Known = Known { command: "open", name: "TextEdit", args: &["-t", "-W"], terminal: false, macos: true, shared: false };
+
+/// Every editor this list knows, in the order it offers them: `KNOWN`, then the JetBrains IDEs `v` knows, by `v`'s ids
+/// and names (`<launcher> --wait <file>` returns once the file is closed), then TextEdit.
+fn known() -> Vec<Known> {
+    let jetbrains = fileeditors::jetbrains_ides().map(|(id, name)| window(id, name, &["--wait"], true));
+    KNOWN.iter().copied().chain(jetbrains).chain([TEXTEDIT]).collect()
+}
 
 /// One editor platoon can offer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,12 +123,6 @@ fn basename(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 
-/// Where to look for editors: `PLATOON_EDITOR_PATH` if it is set, else `PATH`.
-fn search_path(env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
-    let list = env("PLATOON_EDITOR_PATH").or_else(|| env("PATH")).unwrap_or_default();
-    list.split(':').filter(|p| !p.is_empty()).map(PathBuf::from).collect()
-}
-
 /// The absolute path of `program` if it is there and can be run. A program given with a path of its own is used
 /// as it is.
 fn look_up(program: &str, path: &[PathBuf]) -> Option<String> {
@@ -115,24 +134,40 @@ fn look_up(program: &str, path: &[PathBuf]) -> Option<String> {
     path.iter().map(|d| d.join(program)).find(|p| runnable(p)).map(|p| p.to_string_lossy().into_owned())
 }
 
-/// The editors this computer has, in the order they are offered: whatever `$VISUAL`/`$EDITOR` names first, then the
-/// terminal editors platoon knows, then the ones with a window of their own. Nothing found at all: `nano` and `vi`,
-/// which nearly every machine has, so there is always something to edit with.
-pub fn detect() -> Vec<Editor> {
-    detect_with(&|k| std::env::var(k).ok())
+/// Where one of the editors this list knows is installed here.
+fn find(k: &Known, places: &Places) -> Option<String> {
+    if k.shared { fileeditors::file_program(k.command, places) } else { places.find(&[k.command]) }
 }
 
-pub fn detect_with(env: &dyn Fn(&str) -> Option<String>) -> Vec<Editor> {
-    let path = search_path(env);
+/// The editors this computer has (`detect_in`).
+#[cfg(not(test))]
+pub fn detect() -> Vec<Editor> {
+    let env = |k: &str| std::env::var(k).ok();
+    let macos = cfg!(target_os = "macos");
+    detect_in(&env, &fileeditors::places(&env, Path::new("/"), macos), macos)
+}
+
+/// A unit test never looks at this computer's editors: it gets the last resort, `nano` and `vi` by name.
+#[cfg(test)]
+pub fn detect() -> Vec<Editor> {
+    detect_in(&|_| None, &Places::default(), false)
+}
+
+/// The editors found in `places`, in the order they are offered: whatever `$VISUAL`/`$EDITOR` names first (looked for
+/// on `PATH` only), then the terminal editors platoon knows, then the ones with a window of their own, the JetBrains
+/// IDEs last among those. Nothing found at all: `nano` and `vi`, which nearly every machine has, so there is always
+/// something to edit with. `macos` says whether TextEdit is offered.
+pub fn detect_in(env: &dyn Fn(&str) -> Option<String>, places: &Places, macos: bool) -> Vec<Editor> {
+    let known: Vec<Known> = known().into_iter().filter(|k| !k.macos || macos).collect();
+    let path = &places.path;
     let mut out: Vec<Editor> = Vec::new();
     for key in ["VISUAL", "EDITOR"] {
         let Some(line) = env(key).filter(|v| !v.trim().is_empty()) else { continue };
         let mut words = line.split_whitespace().map(String::from);
         let Some(program) = words.next() else { continue };
         let args: Vec<String> = words.collect();
-        let Some(found) = look_up(&program, &path) else { continue };
-        let known = KNOWN.iter().find(|k| k.command == basename(&program) && (!k.macos || cfg!(target_os = "macos")));
-        let editor = match known {
+        let Some(found) = look_up(&program, path) else { continue };
+        let editor = match known.iter().find(|k| k.command == basename(&program)) {
             // The name and, when the variable gave none, the arguments platoon knows for it.
             Some(k) => Editor {
                 id: k.command.into(),
@@ -150,11 +185,11 @@ pub fn detect_with(env: &dyn Fn(&str) -> Option<String>) -> Vec<Editor> {
             out.push(editor);
         }
     }
-    for k in KNOWN.iter().filter(|k| !k.macos || cfg!(target_os = "macos")) {
+    for k in &known {
         if out.iter().any(|e| e.id == k.command) {
             continue;
         }
-        if let Some(found) = look_up(k.command, &path) {
+        if let Some(found) = find(k, places) {
             out.push(Editor::of(k, found));
         }
     }
@@ -361,11 +396,12 @@ mod tests {
         }
 
         fn names(&self) -> Vec<String> {
-            detect_with(&|k| self.vars.get(k).cloned()).into_iter().map(|e| e.name).collect()
+            self.list().into_iter().map(|e| e.name).collect()
         }
 
         fn list(&self) -> Vec<Editor> {
-            detect_with(&|k| self.vars.get(k).cloned())
+            let env = |k: &str| self.vars.get(k).cloned();
+            detect_in(&env, &fileeditors::places(&env, &self.dir, false), false)
         }
     }
 
@@ -426,6 +462,163 @@ mod tests {
         assert_eq!(names("one-i-uninstalled"), ["nano", "VS Code"], "an editor that is no longer here changes nothing");
         assert_eq!(in_order(&list, "code").len(), list.len(), "every editor is offered exactly once");
         assert_eq!(by_id(&list, "nano").map(|e| e.name.as_str()), Some("nano"));
+    }
+
+    /// A pretend computer with a home at `home/u` and `usr/bin` as its `PATH`: editors are placed where they install
+    /// themselves, and looked for with Linux's places or macOS's.
+    struct World {
+        root: PathBuf,
+        vars: HashMap<String, String>,
+    }
+
+    impl World {
+        fn new(name: &str) -> Self {
+            let root =
+                crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-editors-w-{name}-{}", std::process::id())));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(root.join("home/u")).unwrap();
+            fs::create_dir_all(root.join("usr/bin")).unwrap();
+            let mut vars = HashMap::new();
+            vars.insert("HOME".to_string(), s(&root.join("home/u")));
+            vars.insert("PATH".to_string(), s(&root.join("usr/bin")));
+            Self { root, vars }
+        }
+
+        /// A runnable program at `rel` (from the root).
+        fn program(&self, rel: &str) -> &Self {
+            let p = self.root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "#!/bin/sh\n").unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+            self
+        }
+
+        fn dir(&self, rel: &str) -> &Self {
+            fs::create_dir_all(self.root.join(rel)).unwrap();
+            self
+        }
+
+        fn list(&self, macos: bool) -> Vec<Editor> {
+            let env = |k: &str| self.vars.get(k).cloned();
+            detect_in(&env, &fileeditors::places(&env, &self.root, macos), macos)
+        }
+
+        fn names(&self, macos: bool) -> Vec<String> {
+            self.list(macos).into_iter().map(|e| e.name).collect()
+        }
+
+        fn at(&self, rel: &str) -> String {
+            s(&self.root.join(rel))
+        }
+    }
+
+    impl Drop for World {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn macos_app_bundles_are_offered_by_the_program_inside_them_and_asked_to_wait() {
+        let w = World::new("mac");
+        w.program("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code");
+        w.program("Applications/IntelliJ IDEA.app/Contents/MacOS/idea");
+        w.program("home/u/Applications/PyCharm CE.app/Contents/MacOS/pycharm");
+        w.dir("Applications/GoLand.app"); // no launcher inside: it couldn't be asked to wait
+        w.dir("Applications/Zed.app"); // no tool inside
+        let list = w.list(true);
+        let code = by_id(&list, "code").expect("VS Code from its bundle");
+        assert_eq!(
+            (code.name.as_str(), code.program.clone(), code.args.clone(), code.terminal),
+            ("VS Code", w.at("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"), vec!["--wait".to_string()], false)
+        );
+        let idea = by_id(&list, "idea").expect("IntelliJ IDEA from its bundle");
+        assert_eq!(
+            (idea.name.as_str(), idea.program.clone(), idea.args.clone(), idea.terminal),
+            ("IntelliJ IDEA", w.at("Applications/IntelliJ IDEA.app/Contents/MacOS/idea"), vec!["--wait".to_string()], false),
+            "the launcher itself, not `open -na`, which returns at once"
+        );
+        let pycharm = by_id(&list, "pycharm-community").expect("~/Applications too");
+        assert_eq!(pycharm.program, w.at("home/u/Applications/PyCharm CE.app/Contents/MacOS/pycharm"));
+        assert!(by_id(&list, "goland").is_none() && by_id(&list, "zed").is_none(), "a bundle without its program is not offered");
+        assert_eq!(w.names(true), ["VS Code", "IntelliJ IDEA", "PyCharm Community"]);
+        // Linux doesn't look in app bundles.
+        assert_eq!(w.names(false), ["nano", "vi"]);
+    }
+
+    #[test]
+    fn jetbrains_ides_are_found_in_toolbox_scripts_opt_snaps_and_local_bin_on_linux() {
+        let w = World::new("jb-linux");
+        w.program("home/u/.local/share/JetBrains/Toolbox/scripts/pycharm");
+        w.program("snap/bin/intellij-idea-community");
+        w.program("opt/idea-IU-253.1/bin/idea.sh");
+        w.program("opt/android-studio/bin/studio.sh");
+        w.program("home/u/.local/bin/rustrover");
+        let list = w.list(false);
+        let found: Vec<(&str, &str, &str)> = list.iter().map(|e| (e.id.as_str(), e.name.as_str(), e.program.as_str())).collect();
+        let (idea, community, pycharm, rust, studio) = (
+            w.at("opt/idea-IU-253.1/bin/idea.sh"),
+            w.at("snap/bin/intellij-idea-community"),
+            w.at("home/u/.local/share/JetBrains/Toolbox/scripts/pycharm"),
+            w.at("home/u/.local/bin/rustrover"),
+            w.at("opt/android-studio/bin/studio.sh"),
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("idea", "IntelliJ IDEA", idea.as_str()),
+                ("idea-community", "IntelliJ IDEA Community", community.as_str()),
+                ("pycharm", "PyCharm", pycharm.as_str()),
+                ("rustrover", "RustRover", rust.as_str()),
+                ("android-studio", "Android Studio", studio.as_str()),
+            ]
+        );
+        assert!(list.iter().all(|e| !e.terminal && e.args == ["--wait"]), "each opened with --wait: {list:?}");
+        // The other windowed editors are found off the PATH too.
+        w.program("snap/bin/code");
+        assert_eq!(by_id(&w.list(false), "code").map(|e| e.program.clone()), Some(w.at("snap/bin/code")));
+    }
+
+    #[test]
+    fn a_test_path_means_no_install_places_and_no_app_bundles() {
+        let mut w = World::new("only");
+        w.program("snap/bin/code");
+        w.program("home/u/.local/share/JetBrains/Toolbox/scripts/idea");
+        w.program("opt/goland/bin/goland.sh");
+        w.program("Applications/IntelliJ IDEA.app/Contents/MacOS/idea");
+        w.program("fake/mousepad");
+        let only = w.at("fake");
+        w.vars.insert("PLATOON_EDITOR_PATH".into(), only);
+        assert_eq!(w.names(false), ["Mousepad"]);
+        assert_eq!(w.names(true), ["Mousepad"]);
+    }
+
+    #[test]
+    fn terminal_editors_first_then_windows_with_jetbrains_after_the_others_and_textedit_last() {
+        let w = World::new("order");
+        for p in ["usr/bin/open", "usr/bin/rider", "usr/bin/idea", "usr/bin/mousepad", "usr/bin/code", "usr/bin/vi", "usr/bin/nano"] {
+            w.program(p);
+        }
+        assert_eq!(w.names(true), ["nano", "vi", "VS Code", "Mousepad", "IntelliJ IDEA", "Rider", "TextEdit"]);
+        assert_eq!(w.names(false), ["nano", "vi", "VS Code", "Mousepad", "IntelliJ IDEA", "Rider"], "TextEdit on macOS only");
+    }
+
+    #[test]
+    fn the_editor_variables_can_name_a_jetbrains_ide() {
+        let mut w = World::new("visual-idea");
+        w.program("usr/bin/idea");
+        w.program("usr/bin/nano");
+        w.vars.insert("VISUAL".into(), "idea".into());
+        let list = w.list(false);
+        assert_eq!(
+            (list[0].id.as_str(), list[0].name.as_str(), list[0].terminal, list[0].args.clone()),
+            ("idea", "IntelliJ IDEA", false, vec!["--wait".to_string()])
+        );
+        assert_eq!(w.names(false), ["IntelliJ IDEA", "nano"], "not listed twice");
     }
 
     #[test]

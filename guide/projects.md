@@ -116,13 +116,20 @@ With the notes pane in focus (the right arrow on a project's screen):
 | `u` | undo the last change (and `u` again undoes the undo) |
 
 **Which editors.** platoon uses editors you already have; nothing is installed. It looks at `$VISUAL` and `$EDITOR` first,
-then for editors it knows by name: nano, Neovim, Vim, Helix, Micro, Emacs and `vi` in the terminal, and VS Code, Cursor,
-Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of their own (TextEdit on macOS). Only the ones
-it finds are offered, by their plain names. An editor that lives in the terminal **runs inside platoon's window**, like a
-session (`ctrl+space` then `y` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
-notes and reads them again as soon as you are done or the file changes. There is nothing to set up: whichever one you use
-is remembered (as `notes_editor` in `settings.json`, also chosen in Settings, Editors) and offered first, with a star, the
-next time. If platoon finds nothing at all it offers `nano` and `vi`.
+then for editors it knows by name: nano, Neovim, Vim, Helix, Micro, Emacs and `vi` in the terminal; VS Code, Cursor,
+Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of their own; then the JetBrains IDEs
+(IntelliJ IDEA and IntelliJ IDEA Community, PyCharm and PyCharm Community, WebStorm, GoLand, RustRover, CLion, PhpStorm,
+Rider, Android Studio); and TextEdit on macOS. Only the ones it finds are offered, by their plain names. It looks where
+[`v`](sessions.md#opening-the-editor-v) looks: on your `PATH`, then where editors install themselves outside it
+(JetBrains Toolbox's scripts, `~/.local/bin`, snaps in `/snap/bin`, `/opt/<app>/bin`), and on macOS in the apps in
+`/Applications` and `~/Applications`, so VS Code or IntelliJ IDEA is found even when you never put its command on your
+`PATH`. An editor that lives in the terminal **runs inside platoon's window**, like a session (`ctrl+space` then `y` ends
+it if it ever wedges); one with a window of its own opens beside platoon, which says so on the notes and reads them again
+as soon as you are done or the file changes. platoon asks a windowed editor to tell it when you close the file (`--wait`
+for VS Code and the JetBrains IDEs); a JetBrains IDE that wasn't already running may count as open until you quit it.
+There is nothing to set up: whichever one you use is remembered (as `notes_editor` in `settings.json`, also chosen in
+Settings, Editors) and offered first, with a star, the next time. If platoon finds nothing at all it offers `nano` and
+`vi`.
 
 The same list of editors is used for a task's text and for the
 [system prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).

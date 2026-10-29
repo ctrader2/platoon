@@ -14,6 +14,9 @@
 //! Editors with a window of their own start beside platoon and are left alone (their own session, no output, no
 //! waiting): platoon cannot tell when they close.
 //!
+//! This is also the one place that knows where editors install themselves: the notes' list of editors (`e`,
+//! `editors.rs`) finds its windowed ones with the same places and app bundles (`places`, `file_program`).
+//!
 //! Knobs (the same as `editors.rs`): `PLATOON_EDITOR_PATH` is the only place looked in (instead of `PATH` and the
 //! install places); `PLATOON_EDITOR_BIN` runs that program instead of the editor chosen; with neither set,
 //! `PLATOON_FORBID_REAL_EDITOR` refuses to start one.
@@ -64,6 +67,17 @@ pub struct FileEditor {
     pub several: Several,
 }
 
+/// What starts an editor that comes as a macOS app bundle, inside the bundle.
+#[derive(Clone, Copy)]
+enum Inside {
+    /// Its command line tool, which both lists run (`v` here, the notes' list in `editors.rs`). "" for an editor that
+    /// has no bundle.
+    Tool(&'static str),
+    /// A JetBrains IDE's launcher. `v` starts the bundle with `open -na`, as a Mac app is started; the notes' list runs
+    /// the launcher itself with `--wait`, since `open` returns at once and platoon must know when the file is closed.
+    Launcher(&'static str),
+}
+
 /// An editor platoon knows how to find and start.
 struct Known {
     id: &'static str,
@@ -74,9 +88,10 @@ struct Known {
     args: &'static [&'static str],
     runs: Runs,
     several: Several,
-    /// On macOS: app bundles (in `/Applications`, `~/Applications`) and, for the ones with a command line tool of
-    /// their own, where it is inside the bundle ("" to start the bundle with `open -na`).
-    mac: &'static [(&'static str, &'static str)],
+    /// On macOS: the app bundles it comes as (in `/Applications`, `~/Applications`), in the order looked for.
+    apps: &'static [&'static str],
+    /// What starts it, inside the bundle.
+    inside: Inside,
 }
 
 const fn window(
@@ -84,69 +99,90 @@ const fn window(
     name: &'static str,
     commands: &'static [&'static str],
     args: &'static [&'static str],
-    mac: &'static [(&'static str, &'static str)],
+    apps: &'static [&'static str],
+    tool: &'static str,
 ) -> Known {
-    Known { id, name, commands, args, runs: Runs::Window, several: Several::OneWindow, mac }
+    Known { id, name, commands, args, runs: Runs::Window, several: Several::OneWindow, apps, inside: Inside::Tool(tool) }
 }
 
 /// A JetBrains IDE: `<launcher> <folder>`, one call per folder. Its command line has no documented way to force a new
 /// window (JetBrains' help, "Command-line interface" and "Open files from the command line", lists only `nosplash`,
 /// `dontReopenProjects`, `disableNonBundledPlugins`, `--wait` and the diff/merge/format/inspect/installPlugins
 /// commands), so a running IDE opens the folder as its own "Open project in" setting says (new window, this window, or
-/// ask); platoon never changes that setting.
+/// ask); platoon never changes that setting. `launcher` is its program in a Mac bundle's `Contents/MacOS`.
 const fn jetbrains(
     id: &'static str,
     name: &'static str,
     commands: &'static [&'static str],
-    mac: &'static [(&'static str, &'static str)],
+    apps: &'static [&'static str],
+    launcher: &'static str,
 ) -> Known {
-    Known { id, name, commands, args: &[], runs: Runs::Window, several: Several::EachWindow, mac }
+    Known { id, name, commands, args: &[], runs: Runs::Window, several: Several::EachWindow, apps, inside: Inside::Launcher(launcher) }
 }
 
 /// In the order the list shows them: windowed editors, the JetBrains family, then the ones in
 /// the terminal.
 const KNOWN: &[Known] = &[
     // `--new-window` with several folders: one window with each as a root (an untitled multi-root workspace).
-    window("code", "VS Code", &["code"], &["--new-window"], &[("Visual Studio Code.app", "Contents/Resources/app/bin/code")]),
-    window("cursor", "Cursor", &["cursor"], &["--new-window"], &[("Cursor.app", "Contents/Resources/app/bin/cursor")]),
+    window("code", "VS Code", &["code"], &["--new-window"], &["Visual Studio Code.app"], "Contents/Resources/app/bin/code"),
+    window("cursor", "Cursor", &["cursor"], &["--new-window"], &["Cursor.app"], "Contents/Resources/app/bin/cursor"),
     // `zed --new a b`: a new workspace holding both folders. Some Linux packages call it `zeditor`.
-    window("zed", "Zed", &["zed", "zeditor"], &["--new"], &[("Zed.app", "Contents/MacOS/cli")]),
+    window("zed", "Zed", &["zed", "zeditor"], &["--new"], &["Zed.app"], "Contents/MacOS/cli"),
     // `subl --new-window a b`: a new window with both folders in its sidebar.
-    window("subl", "Sublime Text", &["subl"], &["--new-window"], &[("Sublime Text.app", "Contents/SharedSupport/bin/subl")]),
+    window("subl", "Sublime Text", &["subl"], &["--new-window"], &["Sublime Text.app"], "Contents/SharedSupport/bin/subl"),
     // `kate --new a b`: a Kate of its own with both folders (its Projects view).
-    window("kate", "Kate", &["kate"], &["--new"], &[]),
+    window("kate", "Kate", &["kate"], &["--new"], &[], ""),
     jetbrains(
         "idea",
         "IntelliJ IDEA",
         &["idea", "idea.sh", "intellij-idea-ultimate"],
-        &[("IntelliJ IDEA.app", ""), ("IntelliJ IDEA Ultimate.app", "")],
+        &["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app"],
+        "Contents/MacOS/idea",
     ),
     jetbrains(
         "idea-community",
         "IntelliJ IDEA Community",
         &["idea-community", "intellij-idea-community"],
-        &[("IntelliJ IDEA CE.app", ""), ("IntelliJ IDEA Community Edition.app", "")],
+        &["IntelliJ IDEA CE.app", "IntelliJ IDEA Community Edition.app"],
+        "Contents/MacOS/idea",
     ),
     jetbrains(
         "pycharm",
         "PyCharm",
         &["pycharm", "pycharm.sh", "pycharm-professional"],
-        &[("PyCharm.app", ""), ("PyCharm Professional Edition.app", "")],
+        &["PyCharm.app", "PyCharm Professional Edition.app"],
+        "Contents/MacOS/pycharm",
     ),
     jetbrains(
         "pycharm-community",
         "PyCharm Community",
         &["pycharm-community"],
-        &[("PyCharm CE.app", ""), ("PyCharm Community Edition.app", "")],
+        &["PyCharm CE.app", "PyCharm Community Edition.app"],
+        "Contents/MacOS/pycharm",
     ),
-    jetbrains("webstorm", "WebStorm", &["webstorm", "webstorm.sh"], &[("WebStorm.app", "")]),
-    jetbrains("goland", "GoLand", &["goland", "goland.sh"], &[("GoLand.app", "")]),
-    jetbrains("rustrover", "RustRover", &["rustrover", "rustrover.sh"], &[("RustRover.app", "")]),
-    jetbrains("clion", "CLion", &["clion", "clion.sh"], &[("CLion.app", "")]),
-    jetbrains("phpstorm", "PhpStorm", &["phpstorm", "phpstorm.sh"], &[("PhpStorm.app", "")]),
-    jetbrains("rider", "Rider", &["rider", "rider.sh"], &[("Rider.app", "")]),
-    jetbrains("android-studio", "Android Studio", &["studio", "studio.sh", "android-studio"], &[("Android Studio.app", "")]),
-    Known { id: "helix", name: "Helix", commands: &["hx", "helix"], args: &[], runs: Runs::Terminal, several: Several::First, mac: &[] },
+    jetbrains("webstorm", "WebStorm", &["webstorm", "webstorm.sh"], &["WebStorm.app"], "Contents/MacOS/webstorm"),
+    jetbrains("goland", "GoLand", &["goland", "goland.sh"], &["GoLand.app"], "Contents/MacOS/goland"),
+    jetbrains("rustrover", "RustRover", &["rustrover", "rustrover.sh"], &["RustRover.app"], "Contents/MacOS/rustrover"),
+    jetbrains("clion", "CLion", &["clion", "clion.sh"], &["CLion.app"], "Contents/MacOS/clion"),
+    jetbrains("phpstorm", "PhpStorm", &["phpstorm", "phpstorm.sh"], &["PhpStorm.app"], "Contents/MacOS/phpstorm"),
+    jetbrains("rider", "Rider", &["rider", "rider.sh"], &["Rider.app"], "Contents/MacOS/rider"),
+    jetbrains(
+        "android-studio",
+        "Android Studio",
+        &["studio", "studio.sh", "android-studio"],
+        &["Android Studio.app"],
+        "Contents/MacOS/studio",
+    ),
+    Known {
+        id: "helix",
+        name: "Helix",
+        commands: &["hx", "helix"],
+        args: &[],
+        runs: Runs::Terminal,
+        several: Several::First,
+        apps: &[],
+        inside: Inside::Tool(""),
+    },
     // Only with a config folder of the user's own: that is what "your setup" means (plain nvim is not a file-tree
     // editor).
     Known {
@@ -156,7 +192,8 @@ const KNOWN: &[Known] = &[
         args: &[],
         runs: Runs::Terminal,
         several: Several::First,
-        mac: &[],
+        apps: &[],
+        inside: Inside::Tool(""),
     },
 ];
 
@@ -223,14 +260,24 @@ fn runnable(p: &Path) -> bool {
     p.is_file() && p.metadata().is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
 }
 
-fn find(commands: &[&str], dirs: &[PathBuf]) -> Option<String> {
-    commands.iter().find_map(|c| dirs.iter().map(|d| d.join(c)).find(|p| runnable(p))).map(|p| p.to_string_lossy().into_owned())
+impl Places {
+    /// The first of `commands` on `PATH` or in an install place, by its full path.
+    pub fn find(&self, commands: &[&str]) -> Option<String> {
+        commands
+            .iter()
+            .find_map(|c| self.path.iter().chain(&self.extra).map(|d| d.join(c)).find(|p| runnable(p)))
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+}
+
+/// `k`'s macOS app bundle, the first one there.
+fn bundle(k: &Known, places: &Places) -> Option<PathBuf> {
+    k.apps.iter().find_map(|app| places.apps.iter().map(|d| d.join(app)).find(|b| b.is_dir()))
 }
 
 /// The editors `v` offers here: each one found, in `KNOWN`'s order.
 pub fn detect_in(places: &Places) -> Vec<FileEditor> {
     let mut out = Vec::new();
-    let dirs: Vec<PathBuf> = places.path.iter().chain(&places.extra).cloned().collect();
     for k in KNOWN {
         if k.id == "nvim" && places.nvim_config.is_none() {
             continue;
@@ -244,21 +291,38 @@ pub fn detect_in(places: &Places) -> Vec<FileEditor> {
             runs: k.runs,
             several: k.several,
         };
-        if let Some(found) = find(k.commands, &dirs) {
+        if let Some(found) = places.find(k.commands) {
             out.push(of(found, args()));
             continue;
         }
         // macOS: the app bundle, by its command line tool, or started with `open -na <bundle> --args`.
-        let bundle = k.mac.iter().find_map(|(app, tool)| places.apps.iter().map(|d| (d.join(app), *tool)).find(|(b, _)| b.is_dir()));
-        if let Some((b, tool)) = bundle {
-            if tool.is_empty() {
-                out.push(of("open".into(), vec!["-na".into(), b.to_string_lossy().into_owned(), "--args".into()]));
-            } else if runnable(&b.join(tool)) {
-                out.push(of(b.join(tool).to_string_lossy().into_owned(), args()));
+        if let Some(b) = bundle(k, places) {
+            match k.inside {
+                Inside::Launcher(_) => out.push(of("open".into(), vec!["-na".into(), b.to_string_lossy().into_owned(), "--args".into()])),
+                Inside::Tool(tool) if runnable(&b.join(tool)) => out.push(of(b.join(tool).to_string_lossy().into_owned(), args())),
+                Inside::Tool(_) => {}
             }
         }
     }
     out
+}
+
+/// The program that opens a file in the editor `v` calls `id`, wherever it is installed here: on `PATH`, in an install
+/// place, or inside its macOS app bundle (its tool; a JetBrains IDE's launcher, which can wait for the file to be
+/// closed as `open -na` can't). The notes' list of editors (`editors.rs`) finds its windowed ones by it, so both lists
+/// look in the same places.
+pub fn file_program(id: &str, places: &Places) -> Option<String> {
+    let k = KNOWN.iter().find(|k| k.id == id)?;
+    places.find(k.commands).or_else(|| {
+        let (Inside::Tool(inside) | Inside::Launcher(inside)) = k.inside;
+        let program = bundle(k, places)?.join(inside);
+        runnable(&program).then(|| program.to_string_lossy().into_owned())
+    })
+}
+
+/// The JetBrains IDEs, as (id, name), in `KNOWN`'s order.
+pub fn jetbrains_ides() -> impl Iterator<Item = (&'static str, &'static str)> {
+    KNOWN.iter().filter(|k| matches!(k.inside, Inside::Launcher(_))).map(|k| (k.id, k.name))
 }
 
 /// The editors `v` offers on this computer. (A unit test's app never calls it: see `EdState::files`.)
@@ -553,6 +617,23 @@ mod tests {
         assert_eq!(cmds[0].1, vec!["-na".to_string(), w.at("Applications/IntelliJ IDEA CE.app"), "--args".into(), "/r/a".into()]);
         // Linux places are not macOS ones.
         assert_eq!(w.ids(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_jetbrains_bundle_is_opened_by_open_here_and_its_launcher_is_what_a_file_is_opened_with() {
+        let w = World::new("mac-launcher");
+        w.program("Applications/IntelliJ IDEA.app/Contents/MacOS/idea");
+        w.dir("Applications/GoLand.app");
+        let places = w.places(true);
+        let idea = by_id(&detect_in(&places), "idea").unwrap().clone();
+        assert_eq!(idea.program, "open", "v starts the bundle as a Mac app is started");
+        assert_eq!(file_program("idea", &places), Some(w.at("Applications/IntelliJ IDEA.app/Contents/MacOS/idea")));
+        assert_eq!(file_program("goland", &places), None, "no launcher inside: nothing that can wait for a file");
+        assert!(by_id(&detect_in(&places), "goland").is_some(), "though v still opens it");
+        assert_eq!(file_program("not-an-editor", &places), None);
+        // On the PATH first, as `v` finds it.
+        w.program("usr/bin/idea");
+        assert_eq!(file_program("idea", &w.places(true)), Some(w.at("usr/bin/idea")));
     }
 
     #[test]

@@ -199,8 +199,9 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
 - `ai_model` (smart features) and `notes_model` (project notes) are a model's id as its program names it (`haiku`,
   `sonnet`, `gpt-6-luna`), kept exactly as written; they are not in the file until you pick one, and until then the
   default for this computer applies (see [Choosing a model](#choosing-a-model)).
-- `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an
-  editor this computer no longer has is simply not starred and stays in the file until you use another.
+- `notes_editor` is the editor you used last, by its command (`code`, `nano`; a JetBrains IDE by the same id as in
+  `files_editor` below, `idea`, `pycharm-community`), or `ask` while you haven't used one; an editor this computer no
+  longer has is simply not starred and stays in the file until you use another.
 - `files_editor` is empty until you choose (the first editor found opens) or an editor's id (`code`, `cursor`, `zed`,
   `subl`, `kate`, `idea`, `idea-community`, `pycharm`, `pycharm-community`, `webstorm`, `goland`, `rustrover`, `clion`,
   `phpstorm`, `rider`, `android-studio`, `helix`, `nvim`), kept as it is when that editor isn't installed;

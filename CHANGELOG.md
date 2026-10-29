@@ -6,12 +6,22 @@ here.
 
 ## [Unreleased]
 
+### Added
+
+- The JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio and
+  the Community editions) are in the list of editors `e` offers for a project's notes, a task's text, a squad and the
+  system prompts, opened with `--wait` so platoon knows when you close the file.
+
 ### Fixed
 
 - Making the window shorter while you look at a session no longer cuts off the session's newest lines. As in a terminal,
   the lines that no longer fit now go up into the session's history, where the wheel scrolls to them, and come back where
   they were when the window is taller again. Before, the lines at the bottom (the prompt among them) were dropped, and a
   window joining a session while a smaller window had it open could be shown it without them.
+- `e`'s list of editors now looks where `v` does: an editor whose command isn't on your `PATH` is found where it
+  installed itself (JetBrains Toolbox's scripts, `~/.local/bin`, snaps, `/opt/<app>/bin`, and on macOS the apps in
+  `/Applications` and `~/Applications`). Before, VS Code on a Mac was missing from the list unless you had run its
+  "Install 'code' command in PATH".
 
 ## [1.2.0] - 2026-10-28
 

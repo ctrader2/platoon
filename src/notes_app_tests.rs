@@ -420,8 +420,8 @@ fn twenty_versions_are_kept_per_project_and_the_oldest_go() {
 
 #[test]
 fn nothing_here_ever_touches_the_real_config_or_starts_a_real_editor() {
-    // The detection only reads; it never runs anything. On this machine it finds whatever is installed, and on a
-    // machine with nothing it still offers something to edit with.
+    // A unit test never looks at this computer's editors: it gets the last resort, which is still something to edit
+    // with.
     let list = crate::editors::detect();
     assert!(!list.is_empty());
     assert!(list.iter().all(|e| !e.name.is_empty() && !e.program.is_empty()));
