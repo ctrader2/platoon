@@ -27,6 +27,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::Shutdown,
+    num::NonZeroU16,
     os::unix::{
         fs::{DirBuilderExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -80,6 +81,19 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
 pub fn size_payload(rows: u16, cols: u16) -> [u8; 4] {
     let (r, c) = (rows.to_be_bytes(), cols.to_be_bytes());
     [r[0], r[1], c[0], c[1]]
+}
+
+/// A terminal's size as the emulator takes it. A size can be zero (a window's size frame, a terminal that reports
+/// none), which the emulator can't be: a zero is taken as one row or column.
+pub fn vt_size(rows: u16, cols: u16) -> (NonZeroU16, NonZeroU16) {
+    let at_least_one = |n: u16| NonZeroU16::new(n).unwrap_or(NonZeroU16::MIN);
+    (at_least_one(rows), at_least_one(cols))
+}
+
+/// An emulator of `rows` x `cols` (`vt_size`) that keeps `scrollback` lines above its screen.
+pub fn emulator(rows: u16, cols: u16, scrollback: usize) -> vt100::Parser {
+    let (r, c) = vt_size(rows, cols);
+    vt100::Parser::new(r, c, scrollback)
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -349,7 +363,7 @@ pub fn run(args: &[String]) -> i32 {
 
     let shared = Arc::new(Shared {
         cleanup: Mutex::new(None),
-        parser: Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)),
+        parser: Mutex::new(emulator(rows, cols, SCROLLBACK)),
         clients: Mutex::new(Vec::new()),
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
@@ -751,7 +765,8 @@ fn fit_smallest_viewer(sh: &Shared) {
     }
     *cur = (rows, cols);
     let _ = lock(&sh.master).resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-    lock(&sh.parser).screen_mut().set_size(rows, cols);
+    let (r, c) = vt_size(rows, cols);
+    lock(&sh.parser).screen_mut().set_size(r, c);
 }
 
 fn parse_size(payload: &[u8]) -> Option<(u16, u16)> {
@@ -784,7 +799,7 @@ fn serve_client(mut stream: UnixStream, sh: &Shared) {
         let snapshot = p.screen().state_formatted();
         let mut clients = lock(&sh.clients);
         let Some(me) = clients.iter_mut().find(|c| c.id == id) else { return };
-        if write_frame(&mut me.stream, F_OUTPUT, &snapshot).is_err() {
+        if write_frame(&mut me.stream, F_OUTPUT, snapshot.as_bytes()).is_err() {
             cut_off(me);
             clients.retain(|c| c.id != id);
             return;

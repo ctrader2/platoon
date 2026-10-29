@@ -6,6 +6,13 @@ here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Making the window shorter while you look at a session no longer cuts off the session's newest lines. As in a terminal,
+  the lines that no longer fit now go up into the session's history, where the wheel scrolls to them, and come back where
+  they were when the window is taller again. Before, the lines at the bottom (the prompt among them) were dropped, and a
+  window joining a session while a smaller window had it open could be shown it without them.
+
 ## [1.2.0] - 2026-10-28
 
 ### Added

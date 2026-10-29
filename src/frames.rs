@@ -303,7 +303,7 @@ mod tests {
 
         /// The screen a terminal shows after everything written so far.
         fn screen(&self) -> String {
-            let mut p = vt100::Parser::new(3, 20, 0);
+            let mut p = crate::host::emulator(3, 20, 0);
             for w in self.writes() {
                 p.process(&w);
             }

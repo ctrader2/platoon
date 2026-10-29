@@ -4059,7 +4059,7 @@ mod tests {
 
     /// The screen a terminal of `size` shows after `bytes`, starting blank.
     fn shown_by(bytes: &[u8], size: ratatui::layout::Size) -> String {
-        let mut p = vt100::Parser::new(size.height, size.width, 0);
+        let mut p = crate::host::emulator(size.height, size.width, 0);
         p.process(bytes);
         p.screen().contents()
     }

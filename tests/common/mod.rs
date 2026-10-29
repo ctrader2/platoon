@@ -4,6 +4,7 @@
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
+    num::NonZeroU16,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     sync::{
@@ -16,6 +17,18 @@ use std::{
 
 pub const BIN: &str = env!("CARGO_BIN_EXE_platoon");
 pub const WAIT: Duration = Duration::from_secs(10);
+
+/// The size a terminal of `rows` x `cols` gives its emulator: a zero is one row or column, as platoon takes it.
+pub fn vt_size(rows: u16, cols: u16) -> (NonZeroU16, NonZeroU16) {
+    let at_least_one = |n: u16| NonZeroU16::new(n).unwrap_or(NonZeroU16::MIN);
+    (at_least_one(rows), at_least_one(cols))
+}
+
+/// An emulator of `rows` x `cols` (`vt_size`) that keeps `scrollback` lines above its screen.
+pub fn emulator(rows: u16, cols: u16, scrollback: usize) -> vt100::Parser {
+    let (r, c) = vt_size(rows, cols);
+    vt100::Parser::new(r, c, scrollback)
+}
 
 /// Directories to remove when the test binary exits.
 static AT_EXIT: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
@@ -210,7 +223,7 @@ impl Term {
                 }
             }
         });
-        Self { child, master: pair.master, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new(), stopped }
+        Self { child, master: pair.master, writer, rx, screen: emulator(rows, cols, 200), raw: Vec::new(), stopped }
     }
 
     /// The terminal stops reading what the program writes, as Ghostty does while its window is behind another one: once
@@ -233,7 +246,8 @@ impl Term {
             self.raw.extend_from_slice(&b);
         }
         self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
-        self.screen.screen_mut().set_size(rows, cols);
+        let (r, c) = vt_size(rows, cols);
+        self.screen.screen_mut().set_size(r, c);
     }
 
     /// The program's process id (to stop and continue it, as a computer that stalls would).
@@ -500,7 +514,7 @@ impl Viewer {
                 }
             }
         });
-        let mut v = Self { stream, frames, screen: vt100::Parser::new(rows, cols, 100) };
+        let mut v = Self { stream, frames, screen: emulator(rows, cols, 100) };
         let first = v.frames.recv_timeout(WAIT).expect("no snapshot from the host");
         v.screen.process(&first);
         v
@@ -513,6 +527,14 @@ impl Viewer {
 
     pub fn type_line(&mut self, text: &str) {
         write_frame(&mut self.stream, b'I', format!("{text}\r").as_bytes()).unwrap();
+    }
+
+    /// The window is made `rows` by `cols`: it tells the host, as platoon's window does, and its own screen follows.
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let _ = self.text(); // what came at the old size is taken in at the old size
+        write_frame(&mut self.stream, b'R', &[(rows >> 8) as u8, rows as u8, (cols >> 8) as u8, cols as u8]).unwrap();
+        let (r, c) = vt_size(rows, cols);
+        self.screen.screen_mut().set_size(r, c);
     }
 
     pub fn text(&mut self) -> String {

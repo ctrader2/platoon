@@ -69,6 +69,15 @@ impl Rig {
     fn scrollback(&self) -> usize {
         self.app.client.as_ref().unwrap().parser.lock().unwrap().screen().scrollback()
     }
+
+    /// The rows of the session's screen as the view shows them now.
+    fn rows(&self) -> Vec<String> {
+        self.app.client.as_ref().unwrap().parser.lock().unwrap().screen().rows(0, COLS).collect()
+    }
+}
+
+fn lines(range: std::ops::Range<usize>) -> Vec<String> {
+    range.map(|i| format!("line {i}")).collect()
 }
 
 const TRACKING_SGR: &str = "\x1b[?1000h\x1b[?1006h";
@@ -168,4 +177,27 @@ fn scrolling_back_first_and_then_meeting_a_session_that_wants_the_mouse_shows_th
     r.wheel(true, 9, 4);
     assert_eq!(r.scrollback(), 0, "the view goes back to the live screen, where the session answers");
     assert_eq!(r.sent(), b"\x1b[<64;10;5M");
+}
+
+#[test]
+fn a_shorter_window_keeps_the_lines_that_no_longer_fit_above_it_and_a_taller_one_brings_them_back() {
+    let mut r = rig("", false);
+    r.app.sync_size(80, 24);
+    assert_eq!(r.rows(), lines(37..60));
+    r.wheel(true, 10, 5);
+    assert_eq!(r.scrollback(), 3);
+
+    // 15 rows: the session's screen is 14. The newest lines stay, where the session's cursor is, and the view is on the
+    // live screen again, as a terminal's is after a resize.
+    r.app.sync_size(80, 15);
+    assert_eq!((r.scrollback(), r.rows()), (0, lines(46..60)));
+    // What no longer fits went above the screen, so the wheel finds it.
+    r.wheel(true, 10, 5);
+    assert_eq!(r.rows(), lines(43..57));
+
+    // Taller again: the same lines in the same places, none lost and none twice.
+    r.app.sync_size(80, 24);
+    assert_eq!((r.scrollback(), r.rows()), (0, lines(37..60)));
+    r.wheel(true, 10, 5);
+    assert_eq!(r.rows(), lines(34..57), "and the history above them as it was");
 }

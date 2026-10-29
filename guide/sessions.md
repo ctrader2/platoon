@@ -289,6 +289,10 @@ up again.
 Inside a session, every key goes to Claude Code or Codex but one: the back key, which the line under the session names
 (`ctrl+space back to list`). It can be changed in [`keys.json`](settings-and-keys.md#keys-back-and-quit).
 
+Resizing the window works as in a terminal: made shorter, the newest lines stay in view and the ones that no longer fit
+go up into the session's history, where the wheel scrolls to them; made taller again, they come back where they were. A
+view you had scrolled back with the wheel goes back to the live screen when the window changes size.
+
 ## Copying text from a session
 
 platoon takes over the mouse while you look at a session (that is what makes the wheel scroll it and the

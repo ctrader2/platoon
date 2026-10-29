@@ -1,6 +1,6 @@
 //! Connection from platoon to a session host, plus the emulator screen it draws from.
 
-use crate::host::{F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK, read_frame, size_payload, write_frame};
+use crate::host::{F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK, emulator, read_frame, size_payload, vt_size, write_frame};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{
     io,
@@ -35,7 +35,7 @@ impl Client {
         let stream = UnixStream::connect(sock)?;
         let mut writer = stream.try_clone()?;
         write_frame(&mut writer, F_RESIZE, &size_payload(rows, cols))?;
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+        let parser = Arc::new(Mutex::new(emulator(rows, cols, SCROLLBACK)));
         let closed = Arc::new(AtomicBool::new(false));
         let p = parser.clone();
         read_output(stream.try_clone()?, closed.clone(), move |payload| lock(&p).process(payload));
@@ -47,7 +47,7 @@ impl Client {
     #[cfg(test)]
     pub fn for_test(rows: u16, cols: u16) -> (Self, UnixStream) {
         let (stream, host) = UnixStream::pair().unwrap();
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+        let parser = Arc::new(Mutex::new(emulator(rows, cols, SCROLLBACK)));
         (Self { parser, stream, closed: Arc::new(AtomicBool::new(false)), size: (rows, cols) }, host)
     }
 
@@ -67,7 +67,8 @@ impl Client {
         }
         self.size = (rows, cols);
         let _ = write_frame(&mut self.stream, F_RESIZE, &size_payload(rows, cols));
-        lock(&self.parser).screen_mut().set_size(rows, cols);
+        let (r, c) = vt_size(rows, cols);
+        lock(&self.parser).screen_mut().set_size(r, c);
     }
 
     pub fn scroll(&self, delta: i32) {

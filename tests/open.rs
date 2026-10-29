@@ -78,6 +78,71 @@ fn the_terminal_fits_the_smallest_window_and_grows_back_when_it_leaves() {
     until("host to exit", || !alive(pid));
 }
 
+#[test]
+fn a_window_made_shorter_and_taller_again_shows_every_line_once_and_so_does_a_window_joining_then() {
+    let cache = tmp("shrink");
+    let (pid, sock) = start_host(&cache, "sh");
+    let reap = Reap(pid);
+    let mut w = Viewer::connect(&sock, 24, 80);
+    w.type_line("printf 'row-%02d\\n' $(seq 1 15)");
+    w.wait_for("row-15");
+
+    // Shorter: the lines that no longer fit go above the screen, as in a terminal, and the newest stay (the prompt the
+    // session waits at among them), so a window joining now is shown where the session is.
+    w.resize(8, 80);
+    w.type_line("stty size"); // read after the resize on the same connection: the host is 8 rows by then
+    w.wait_for("8 80");
+    let mut joined = Viewer::connect(&sock, 24, 80); // the smaller window keeps the session at 8 rows
+    let shown = joined.text();
+    assert!(shown.contains("row-15") && shown.contains("8 80") && !shown.contains("row-01"), "{shown}");
+    joined.close();
+
+    // Taller again: the lines that went above come back where they were, none lost and none twice.
+    w.resize(24, 80);
+    w.type_line("stty size");
+    w.wait_for("24 80");
+    let mut late = Viewer::connect(&sock, 24, 80);
+    let shown = late.text();
+    let at: Vec<usize> = (1..=15)
+        .map(|i| {
+            let row = format!("row-{i:02}");
+            assert_eq!(shown.matches(&row).count(), 1, "{row} once:\n{shown}");
+            shown.find(&row).unwrap()
+        })
+        .collect();
+    assert!(at.is_sorted(), "in order:\n{shown}");
+    assert!(shown.contains("8 80") && shown.contains("24 80"), "{shown}");
+
+    drop(reap);
+    until("host to exit", || !alive(pid));
+}
+
+#[test]
+fn a_window_that_says_it_has_no_size_is_shown_the_session_and_breaks_nothing() {
+    let cache = tmp("nosize");
+    let (pid, sock) = start_host(&cache, "sh");
+    let reap = Reap(pid);
+    let mut w = Viewer::connect(&sock, 24, 80);
+    w.type_line("echo before-$((40+2))");
+    w.wait_for("before-42");
+
+    // A terminal that reports no size: the session is made one row and one column for it rather than nothing, and the
+    // window is sent the screen like any other (`connect` waits for it).
+    let mut none = Viewer::connect(&sock, 0, 0);
+    w.retry("stty size", "1 1");
+    none.resize(0, 80);
+    w.retry("stty size", "1 80");
+    none.resize(24, 0);
+    w.retry("stty size", "24 1");
+    none.close();
+    w.retry("stty size", "24 80"); // and back to the other window's size once it has gone
+
+    let log = fs::read_to_string(cache.join("diagnostics.log")).unwrap_or_default();
+    assert!(!log.contains("panic"), "{log}");
+    drop(reap);
+    until("host to exit", || !alive(pid));
+}
+
 /// Ends the stand-in a host of the test's runs (and so the host), even when the test fails.
 struct Reap(u32);
 

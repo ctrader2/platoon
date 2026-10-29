@@ -3754,7 +3754,7 @@ fn vt_color(c: vt100::Color, default: Color, ansi: Option<&[Color; 16]>) -> Colo
 /// top of the session's own colors: on the theme's selection color (see `Theme::selection_bg`), keeping the
 /// text's color unless that would not read on it, or reversed where the theme has no colors of its own.
 fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, selected: Option<(usize, Cells)>) {
-    let (rows, cols) = screen.size();
+    let (rows, cols) = (screen.size().0.get(), screen.size().1.get());
     let selection_bg = t.selection_bg();
     let buf = f.buffer_mut();
     for r in 0..rows.min(area.height) {
@@ -3961,7 +3961,7 @@ mod tests {
 
     /// What a session that printed `bytes` looks like under `theme` (one row per line, 12 columns).
     fn shown(theme: &Theme, bytes: &[u8]) -> Buffer {
-        let mut parser = vt100::Parser::new(4, 12, 0);
+        let mut parser = crate::host::emulator(4, 12, 0);
         parser.process(bytes);
         let mut term = Terminal::new(TestBackend::new(12, 4)).unwrap();
         term.draw(|f| draw_screen(f, theme, parser.screen(), f.area(), None)).unwrap();

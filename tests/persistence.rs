@@ -89,7 +89,7 @@ impl Attached {
                 }
             }
         });
-        Self { stream, frames, screen: vt100::Parser::new(24, 80, 100) }
+        Self { stream, frames, screen: common::emulator(24, 80, 100) }
     }
 
     fn type_line(&mut self, text: &str) {
@@ -182,7 +182,7 @@ fn quitting_the_ui_leaves_the_session_running() {
             }
         }
     });
-    let mut screen = vt100::Parser::new(30, 100, 0);
+    let mut screen = common::emulator(30, 100, 0);
     let mut wait_for = |text: &str| {
         let start = Instant::now();
         while start.elapsed() < WAIT {

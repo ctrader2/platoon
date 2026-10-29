@@ -48,7 +48,7 @@ impl<'a> History<'a> {
         screen.set_scrollback(usize::MAX);
         let kept = screen.scrollback();
         screen.set_scrollback(shown);
-        let (rows, cols) = screen.size();
+        let (rows, cols) = (screen.size().0.get(), screen.size().1.get());
         Self { screen: RefCell::new(screen), shown, kept, rows, cols }
     }
 
@@ -414,7 +414,7 @@ mod tests {
     /// A screen of `rows` x `cols` after the emulator was fed `text` (`\n` is written as a carriage return
     /// and line feed, like a terminal's line discipline).
     fn screen(rows: u16, cols: u16, text: &str) -> vt100::Parser {
-        let mut p = vt100::Parser::new(rows, cols, 100);
+        let mut p = crate::host::emulator(rows, cols, 100);
         p.process(text.replace('\n', "\r\n").as_bytes());
         p
     }
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn lines_are_counted_from_the_oldest_kept_whatever_the_view_shows() {
-        let mut p = vt100::Parser::new(3, 10, 100);
+        let mut p = crate::host::emulator(3, 10, 100);
         for i in 0..8 {
             p.process(format!("line {i}\r\n").as_bytes());
         }
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn reading_lines_out_of_view_puts_the_view_back_where_it_was() {
-        let mut p = vt100::Parser::new(3, 10, 100);
+        let mut p = crate::host::emulator(3, 10, 100);
         for i in 0..20 {
             p.process(format!("line {i}\r\n").as_bytes());
         }
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn a_line_wrapped_above_the_screen_joins_the_one_below_it() {
         // Width 10: "aaaa bbbb cccc" wraps over two rows, and the first one is pushed above the screen.
-        let mut p = vt100::Parser::new(2, 10, 100);
+        let mut p = crate::host::emulator(2, 10, 100);
         p.process(b"aaaa bbbb cccc\r\nend");
         let h = History::new(p.screen_mut());
         assert_eq!((h.lines(), h.top()), (3, 1));

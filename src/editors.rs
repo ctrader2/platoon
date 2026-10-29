@@ -236,7 +236,7 @@ impl Running {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let writer = pair.master.take_writer().map_err(io::Error::other)?;
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows.max(1), cols.max(1), 0)));
+        let parser = Arc::new(Mutex::new(crate::host::emulator(rows, cols, 0)));
         let ended = Arc::new(AtomicBool::new(false));
         let (p, done) = (parser.clone(), ended.clone());
         thread::spawn(move || {
@@ -268,7 +268,8 @@ impl Running {
         }
         self.size = (rows, cols);
         let _ = self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-        lock(&self.parser).screen_mut().set_size(rows, cols);
+        let (r, c) = crate::host::vt_size(rows, cols);
+        lock(&self.parser).screen_mut().set_size(r, c);
     }
 
     /// True once the editor has exited (and its last output has been read).

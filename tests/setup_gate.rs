@@ -176,7 +176,7 @@ fn run_in_terminal_on(claude: &PathBuf, cache: &PathBuf, env: &[(&str, Option<St
             }
         }
     });
-    let mut screen = vt100::Parser::new(24, 90, 0);
+    let mut screen = common::emulator(24, 90, 0);
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(10) {
         if screen.screen().contents().contains(wait_for) {
