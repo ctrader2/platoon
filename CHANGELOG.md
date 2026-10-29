@@ -11,6 +11,12 @@ here.
 - The JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio and
   the Community editions) are in the list of editors `e` offers for a project's notes, a task's text, a squad and the
   system prompts, opened with `--wait` so platoon knows when you close the file.
+- Claude Code's status line now ends with "· /to-tickets turns this into tasks" while a conversation has agreed on work
+  that could become tasks: when the project's notes update finds it has (one more question in the same request, no
+  call of its own), or when you approved a plan in the session. It goes once `/to-tickets` has been used there, when a
+  later notes update says no, or after 30 minutes; never in a task's own session. Claude's own one-line suggestion of
+  `/to-tickets` was easy to miss.
+- The Tasks tab, empty, says that typing `/to-tickets` in a Claude Code session turns the work agreed there into tasks.
 
 ### Changed
 

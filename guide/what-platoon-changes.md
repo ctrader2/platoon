@@ -10,7 +10,7 @@ writes, what it starts, and how to take it out again.
 
 | What | Where in `settings.json` | What it does |
 | --- | --- | --- |
-| Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line |
+| Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line, ending it with the [`/to-tickets` reminder](tasks-and-squads.md#to-tickets-in-a-session) while the conversation has agreed on work (for that it reads the last 256 KB of the conversation's transcript) |
 | Session guard | a `UserPromptSubmit` hook: `<platoon> hook guard` | refuses a message in a second copy of a conversation that is already running, and passes a project's changed notes to a running session |
 | Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted (at most 8,000 characters) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop` | notes that a project's session finished answering, so its notes can be brought up to date later |
@@ -148,6 +148,8 @@ small marks its parts leave for each other.
 - `ai-usage.json`: tokens used per day (numbers only), with `ai-usage.lock` beside it so two writers take turns, and
   `ai-work/`, the empty folder the `claude -p` and `codex exec` calls run in
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
+- `tickets-hint/`: one small file per conversation the notes update last judged for the
+  [`/to-tickets` reminder](tasks-and-squads.md#to-tickets-in-a-session) (yes or no, and when); tidied after 30 minutes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
 - `offer-asked/`, if platoon 1.0 made it: marks of its offer to make tasks. Nothing reads them now; it can be deleted

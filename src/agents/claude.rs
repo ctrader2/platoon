@@ -884,6 +884,89 @@ pub fn helpers(transcript: &Path) -> Vec<Helper> {
     out
 }
 
+/// How much of the end of a transcript `to_tickets_tail` reads: only recent turns matter to the status line's hint,
+/// and the status line runs often.
+pub const TO_TICKETS_TAIL_BYTES: u64 = 256 * 1024;
+
+/// What the end of a conversation says about `/to-tickets`, for the status line's hint (`ticketshint.rs`). Times are
+/// seconds since the epoch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToTicketsTail {
+    /// The latest plan the user approved: an `ExitPlanMode` call whose result is not an error (a rejected plan's is).
+    pub plan_approved: Option<u64>,
+    /// The latest use of `/to-tickets`: typed by the user, or Claude running it with the Skill tool.
+    pub to_tickets_used: Option<u64>,
+}
+
+/// Read the last `TO_TICKETS_TAIL_BYTES` of a transcript for `ToTicketsTail`. Claude Code 2.1.312 writes a plan as an
+/// assistant entry with a `tool_use` block named `ExitPlanMode` and its answer as a user entry with a `tool_result`
+/// for that block's id (`"is_error": true` when the user said no); a typed skill as a user entry of tags (see
+/// `skill_typed`); the Skill tool as a `tool_use` named `Skill` with `{"skill": "to-tickets"}`. Subagents' entries
+/// don't count. A line is parsed only when a substring test says it may matter. An entry without a time takes the
+/// file's. Anything unreadable: nothing found.
+pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
+    let mut out = ToTicketsTail::default();
+    let Ok(mut file) = File::open(path) else { return out };
+    let Ok(meta) = file.metadata() else { return out };
+    let start = meta.len().saturating_sub(TO_TICKETS_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return out;
+    }
+    let mut bytes = Vec::new();
+    if file.take(TO_TICKETS_TAIL_BYTES).read_to_end(&mut bytes).is_err() {
+        return out;
+    }
+    let written = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = text.split('\n');
+    if start > 0 {
+        lines.next(); // the first line was cut by the seek
+    }
+    let mut plans: Vec<String> = Vec::new();
+    for line in lines {
+        let plan_call = line.contains("\"ExitPlanMode\"");
+        let answer = !plans.is_empty() && line.contains("\"tool_result\"") && plans.iter().any(|id| line.contains(id.as_str()));
+        let skill = line.contains("to-tickets");
+        if !(plan_call || answer || skill) || line.contains("\"isSidechain\":true") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v["isSidechain"].as_bool() == Some(true) {
+            continue;
+        }
+        let at = v["timestamp"].as_str().and_then(parse_iso_ms).map_or(written, |ms| ms / 1000);
+        let blocks = v["message"]["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        match v["type"].as_str() {
+            Some("assistant") => {
+                for b in blocks.iter().filter(|b| b["type"].as_str() == Some("tool_use")) {
+                    match b["name"].as_str() {
+                        Some("ExitPlanMode") => plans.extend(b["id"].as_str().filter(|id| !id.is_empty()).map(String::from)),
+                        Some("Skill") if b["input"]["skill"].as_str().map(str::trim) == Some("to-tickets") => {
+                            out.to_tickets_used = Some(at);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some("user") => {
+                for b in blocks.iter().filter(|b| b["type"].as_str() == Some("tool_result")) {
+                    if b["tool_use_id"].as_str().is_some_and(|id| plans.iter().any(|p| p == id)) && b["is_error"].as_bool() != Some(true) {
+                        out.plan_approved = Some(at);
+                    }
+                }
+                if skill
+                    && let Some(p) = real_prompt(&v)
+                    && (p == "/to-tickets" || p.starts_with("/to-tickets "))
+                {
+                    out.to_tickets_used = Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn sum(u: &Usages) -> Spent {
     let mut s = Spent::default();
     for (input, output, cache_read) in u.values() {
@@ -2047,5 +2130,61 @@ mod hidden_tests {
         assert_eq!((both.spent.input, both.spent.output, both.spent.subagents), (11, 22, true));
         assert!(both.last_at.unwrap() >= only.last_at.unwrap());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_end_of_a_transcript_says_when_a_plan_was_approved_and_when_to_tickets_was_used() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-to-tickets-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let p = d.join("s.jsonl");
+        let at = |secs: u64| crate::testkit::iso(secs * 1000);
+        let plan = |id: &str, t: u64, side: bool| {
+            json!({"type":"assistant","isSidechain":side,"timestamp":at(t),"message":{"role":"assistant","content":[
+                {"type":"text","text":"Here is the plan."},
+                {"type":"tool_use","id":id,"name":"ExitPlanMode","input":{"plan":"1. One.\n2. Two.\n"}}]}})
+            .to_string()
+        };
+        let answer = |id: &str, t: u64, error: bool| {
+            let mut b = json!({"tool_use_id":id,"type":"tool_result","content":"User has approved your plan."});
+            if error {
+                b["is_error"] = json!(true);
+            }
+            json!({"type":"user","timestamp":at(t),"message":{"role":"user","content":[b]}}).to_string()
+        };
+        let typed = |text: &str, t: u64| json!({"type":"user","timestamp":at(t),"message":{"role":"user","content":text}}).to_string();
+        let read = |lines: &[String]| {
+            fs::write(&p, lines.join("\n") + "\n").unwrap();
+            to_tickets_tail(&p)
+        };
+        assert_eq!(to_tickets_tail(&d.join("none.jsonl")), ToTicketsTail::default());
+        // Approved, rejected, not answered yet, a subagent's.
+        assert_eq!(read(&[plan("t1", 100, false), answer("t1", 110, false)]).plan_approved, Some(110));
+        assert_eq!(read(&[plan("t1", 100, false), answer("t1", 110, true)]).plan_approved, None);
+        assert_eq!(read(&[plan("t1", 100, false)]).plan_approved, None);
+        assert_eq!(read(&[plan("t1", 100, true), answer("t1", 110, false)]).plan_approved, None);
+        assert_eq!(read(&[answer("t1", 110, false)]).plan_approved, None, "an answer to no plan");
+        // The latest of two; a rejected one after an approved one leaves the approved one's time.
+        let two = read(&[plan("t1", 100, false), answer("t1", 110, false), plan("t2", 200, false), answer("t2", 210, true)]);
+        assert_eq!(two.plan_approved, Some(110));
+        // /to-tickets typed (with words or without), or run with the Skill tool; mentioned in words is not a use.
+        let cmd = |args: &str| format!("<command-message>to-tickets</command-message>\n<command-name>/to-tickets</command-name>{args}");
+        assert_eq!(read(&[typed(&cmd(""), 300)]).to_tickets_used, Some(300));
+        assert_eq!(read(&[typed(&cmd("\n<command-args>just the mails</command-args>"), 300)]).to_tickets_used, Some(300));
+        let tool = json!({"type":"assistant","timestamp":at(400),"message":{"role":"assistant","content":[
+            {"type":"tool_use","id":"t9","name":"Skill","input":{"skill":"to-tickets"}}]}})
+        .to_string();
+        assert_eq!(read(std::slice::from_ref(&tool)).to_tickets_used, Some(400));
+        assert_eq!(read(&[typed("Should I run /to-tickets for this?", 300)]).to_tickets_used, None);
+        let meta = json!({"type":"user","isMeta":true,"timestamp":at(300),"message":{"role":"user","content":"Base directory for this skill: /x/to-tickets"}}).to_string();
+        assert_eq!(read(&[meta]).to_tickets_used, None, "the skill's own text that follows a typed one");
+        // Only the end is read: a plan approved before the last TO_TICKETS_TAIL_BYTES is not seen, one after is.
+        let filler = typed(&"x".repeat(1000), 150);
+        let mut long = vec![plan("t1", 100, false), answer("t1", 110, false)];
+        long.extend(std::iter::repeat_n(filler, (TO_TICKETS_TAIL_BYTES / 1000) as usize + 10));
+        assert_eq!(read(&long).plan_approved, None);
+        long.extend([plan("t3", 500, false), answer("t3", 510, false)]);
+        assert_eq!(read(&long).plan_approved, Some(510));
+        let _ = fs::remove_dir_all(&d);
     }
 }

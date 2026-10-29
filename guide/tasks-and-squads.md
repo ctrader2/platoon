@@ -97,6 +97,21 @@ Claude may also suggest `/to-tickets` itself, once, in a line at the end of a re
 concrete work with several steps. It never interrupts work to ask, and never makes tasks without you typing
 `/to-tickets` and approving the list.
 
+**A reminder in the status line.** While a conversation has agreed on work that could become tasks, platoon's status
+line ends with **· /to-tickets turns this into tasks** (just **/to-tickets** when the line is narrow, nothing when there
+is no room). It asks nothing and adds nothing to the conversation. It appears when:
+
+- the project's [notes update](projects.md#notes-that-keep-themselves-up-to-date) finds that the conversation has agreed
+  on concrete work with several steps or pieces that isn't tasks yet. That is a question added to the same request, not
+  a request of its own, so it only comes for conversations in a project, with **Project notes** on, a few minutes after
+  the conversation goes quiet (**Update notes after**);
+- or you approved a plan in the session (Claude Code's plan mode).
+
+It goes away once `/to-tickets` has been used in that conversation, when a later notes update says the conversation no
+longer qualifies, or 30 minutes after it appeared. New agreed work can bring it back. It shows only where the
+`/to-tickets` skill is installed and platoon's status line is the one Claude Code uses, never in a task's own session
+and never in Codex.
+
 ## Starting a task
 
 `s`, then `enter` on a squad. platoon:

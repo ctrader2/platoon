@@ -221,7 +221,10 @@ you (`e` starts it again).
 since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus its last reply
 (Claude's or Codex's), up to **Read Claude's last reply up to** characters (1500 unless you change it), because what is
 still open in a conversation is usually in the answers. A session that platoon has never read before - a new project, or one you have just added a
-session to - is read in full once: its first message and its last 20.
+session to - is read in full once: its first message and its last 20. Where the `/to-tickets` skill is installed, the same
+request also asks which of those Claude Code conversations (never a task's own) have agreed on work that isn't tasks yet,
+for the [reminder in the status line](tasks-and-squads.md#to-tickets-in-a-session); the answer changes nothing in the
+notes.
 
 ### What it may write
 

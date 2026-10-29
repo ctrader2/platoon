@@ -474,12 +474,30 @@ fn each_list_says_what_it_is_when_it_is_empty() {
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     key(&mut app, KeyCode::Right);
     let shown = draw(&mut term, &app);
-    assert!(shown.contains(crate::board::Shelf::Archived.empty()), "{shown}");
+    assert!(shown.contains(crate::board::Shelf::Archived.empty(false)), "{shown}");
     key(&mut app, KeyCode::Left);
     finished(&w, &project, 1, "cancelled", 2 * DAY);
     app.reload_for_test();
     let shown = draw(&mut term, &app);
     assert!(shown.contains(crate::board::ALL_ARCHIVED), "{shown}");
+}
+
+#[test]
+fn with_no_task_yet_the_tasks_tab_says_how_to_make_one_and_that_to_tickets_turns_a_conversation_into_tasks() {
+    let (_w, mut app, _, _) = lab("tasks-none-yet", &[]);
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    app.set_providers_for_test(crate::agents::Providers {
+        claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+        codex: None,
+        off: Vec::new(),
+    });
+    let shown = draw(&mut term, &app);
+    let words = "No tasks yet. Press n to write one, or type /to-tickets in a session to turn the work you agreed on there into tasks.";
+    assert!(shown.contains(words), "{shown}");
+    // Without Claude Code there is no /to-tickets to type.
+    app.set_providers_for_test(crate::agents::Providers::default());
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("No tasks yet. Press n to write one.") && !shown.contains("/to-tickets"), "{shown}");
 }
 
 #[test]

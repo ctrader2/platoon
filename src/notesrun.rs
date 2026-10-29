@@ -408,6 +408,11 @@ pub fn gather(
     let cap = settings.ai_prompt_chars as usize;
     let mut sessions: Vec<(u64, SessionMaterial)> = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    // Whether a conversation has agreed on work for `/to-tickets` is asked only where the skill is there to use, and
+    // never of a task's own session (`ticketshint.rs`).
+    let skill = root.is_some_and(crate::skill::present);
+    let task_sessions: std::collections::HashSet<String> =
+        if skill { crate::tickets::every_ticket(config).into_iter().filter_map(|(_, t)| t.session).collect() } else { Default::default() };
     for sid in projects.members_of(id) {
         if archive.contains(&sid) {
             continue; // archived sessions are skipped entirely
@@ -452,7 +457,15 @@ pub fn gather(
             .unwrap_or(0);
         sessions.push((
             modified,
-            SessionMaterial { folder: folder_of(&path, agent.transcript_cwd(&path)), messages, reply: read.reply, first_read, agent },
+            SessionMaterial {
+                folder: folder_of(&path, agent.transcript_cwd(&path)),
+                messages,
+                reply: read.reply,
+                first_read,
+                agent,
+                ask_to_tickets: skill && agent == Agent::Claude && !task_sessions.contains(&sid),
+                session: sid,
+            },
         ));
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
@@ -612,7 +625,17 @@ pub fn update_once(env: &Env, id: &str) -> Round {
             Err(AiError::Refused(r)) => return Round::Refused(r.plain()),
             Err(e) => return Round::Failed(e.plain()),
         };
-        let Some(update) = notesupdate::parse_update(&reply) else { return Round::BadReply };
+        // What the first answer says about the conversations asked about for `/to-tickets`: the status line's hint.
+        let to_tickets = if tries == 1 { notesupdate::parse_to_tickets(&reply) } else { None };
+        if tries == 1 {
+            record_to_tickets(&env.cache, &material, to_tickets.as_deref(), now);
+        }
+        // An answer with nothing to change in the notes but that one answer is understood: the notes stay as they are.
+        let update = match notesupdate::parse_update(&reply) {
+            Some(u) => u,
+            None if to_tickets.is_some() => notesupdate::Update::default(),
+            None => return Round::BadReply,
+        };
 
         // What is on disk now is what counts: the user may have written the notes while the call was out, and then
         // the merge is worked out again against what they wrote (and refused if it no longer fits).
@@ -658,6 +681,30 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     }
     let _ = state.save(&env.config, id);
     outcome
+}
+
+/// Mark each conversation of `material` that was asked about for `/to-tickets` with the answer (`numbers`, 1 for the
+/// first of the material): yes for one it names, no for the others, as of `at`, when the material was read. A number
+/// of a conversation that wasn't asked about (a task's, a Codex one) or of none is ignored. No answer (missing, or not
+/// a list of numbers): no mark changes.
+fn record_to_tickets(cache: &Path, material: &Material, numbers: Option<&[usize]>, at: u64) {
+    let Some(numbers) = numbers else { return };
+    let verdicts: Vec<(String, bool)> = material
+        .sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.ask_to_tickets)
+        .map(|(i, s)| (s.session.clone(), numbers.contains(&(i + 1))))
+        .collect();
+    if verdicts.is_empty() {
+        return;
+    }
+    crate::diag::decision(
+        "tickets-hint",
+        "answered",
+        &[("asked", verdicts.len().into()), ("qualify", verdicts.iter().filter(|v| v.1).count().into())],
+    );
+    crate::ticketshint::record(cache, &verdicts, at, usage::now());
 }
 
 // ---- the project's description ------------------------------------------------------------------------------------
@@ -1294,6 +1341,76 @@ mod tests {
         let path = claude::find_transcript(&r.env.root, "s1").unwrap();
         let one = read_session(Agent::Claude, &path, 300).reply.unwrap();
         assert_eq!((one.lines().count(), one.chars().count()), (1, claude::REPLY_CHARS));
+    }
+
+    /// The user's own `/to-tickets` skill in this rig's Claude Code folder.
+    fn with_skill(r: &Rig) {
+        let p = crate::skill::path(&r.env.root);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, "---\nname: to-tickets\ndescription: mine\n---\n").unwrap();
+    }
+
+    /// A task (in no project) whose session is `sid`.
+    fn task_session(r: &Rig, sid: &str) {
+        let v = json!({"next": 2, "tasks": [{"number": 1, "title": "Text mails", "file": "01-text-mails.md", "state": "working",
+            "folder": "/home/u/shop", "squad": "feature", "session": sid, "started": 1, "created": 1, "updated": 1}]});
+        fs::write(r.env.config.join("tasks.json"), v.to_string()).unwrap();
+    }
+
+    #[test]
+    fn the_notes_update_asks_which_conversations_agreed_on_work_and_marks_them_for_the_status_line() {
+        let r = Rig::new("to-tickets");
+        with_skill(&r);
+        let id = r.project(NOTES);
+        r.session(&id, "s-free", &["Plan the plain-text mails with me"], "Agreed: three steps.");
+        r.session(&id, "s-task", &["Build the plain-text part"], "Working on it.");
+        task_session(&r, "s-task");
+        // Whatever numbers the answer gives (one too many, too), only the session that was asked about is marked.
+        r.fake.reply(1, r#"{"summary":"A sock shop.","to_tickets":[1,2,7]}"#);
+        let before = usage::now();
+        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 1, decisions: 0 });
+        let sent = r.fake.stdin(1);
+        let asked: Vec<&str> = sent.lines().filter(|l| l.starts_with("One more question, about ")).collect();
+        assert_eq!(asked.len(), 1, "{sent}");
+        assert!(
+            asked[0].starts_with("One more question, about [1] only") || asked[0].starts_with("One more question, about [2] only"),
+            "{sent}"
+        );
+        let free = |n: &str| sent.contains(&format!("{n} folder: work")) as usize;
+        assert_eq!(free("[1]") + free("[2]"), 2, "both are in the material: {sent}");
+        let mark = crate::ticketshint::read(&r.env.cache, "s-free").unwrap();
+        assert!(mark.qualifies && mark.at >= before && mark.at <= usage::now(), "{mark:?}");
+        assert_eq!(crate::ticketshint::read(&r.env.cache, "s-task"), None, "a task's session is never marked");
+
+        // A later pass that says none: no, and an answer with only that in it changes nothing and is no bad reply.
+        r.session(&id, "s-free", &["Plan the plain-text mails with me", "Actually, let's just talk it over"], "Sure.");
+        r.fake.reply(2, r#"{"to_tickets":[]}"#);
+        assert_eq!(update_once(&r.env, &id), Round::Unchanged);
+        assert!(!crate::ticketshint::read(&r.env.cache, "s-free").unwrap().qualifies);
+        // A malformed answer, or none: the marks stay as they were, and the notes are updated as ever.
+        for (n, reply) in
+            [(3, r#"{"summary":"A sock shop, with mails.","to_tickets":"yes"}"#), (4, r#"{"summary":"A sock shop, mails too."}"#)]
+        {
+            crate::ticketshint::record(&r.env.cache, &[("s-free".into(), true)], usage::now(), usage::now());
+            let more: Vec<String> = (0..n).map(|k| format!("Message {k} about the mails")).collect();
+            r.session(&id, "s-free", &more.iter().map(String::as_str).collect::<Vec<_>>(), "Fine.");
+            r.fake.reply(n, reply);
+            assert_eq!(update_once(&r.env, &id), Round::Written { sections: 1, decisions: 0 }, "{reply}");
+            assert!(crate::ticketshint::read(&r.env.cache, "s-free").unwrap().qualifies, "{reply}");
+        }
+        assert_eq!(r.fake.calls(), 4);
+    }
+
+    #[test]
+    fn without_the_skill_the_notes_update_asks_nothing_about_to_tickets() {
+        let r = Rig::new("to-tickets-none");
+        let id = r.project(NOTES);
+        r.session(&id, "s-free", &["Plan the plain-text mails with me"], "Agreed: three steps.");
+        r.fake.reply(1, r#"{"summary":"A sock shop.","to_tickets":[1]}"#);
+        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 1, decisions: 0 });
+        assert!(!r.fake.stdin(1).contains("to_tickets"), "{}", r.fake.stdin(1));
+        assert_eq!(crate::ticketshint::read(&r.env.cache, "s-free"), None);
+        assert!(!r.env.cache.join("tickets-hint").exists());
     }
 
     #[test]

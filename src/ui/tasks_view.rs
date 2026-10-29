@@ -252,7 +252,7 @@ pub(super) fn draw_board(f: &mut Frame, app: &App, area: Rect, counts: &[usize])
         } else if shelf == Shelf::Active && count(Shelf::Archived) > 0 {
             board::ALL_ARCHIVED
         } else {
-            shelf.empty()
+            shelf.empty(app.providers().claude.is_some())
         };
         let lines: Vec<Line> =
             wrap(msg, area.width.saturating_sub(4) as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(hint_fg(t)))).collect();

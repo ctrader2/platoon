@@ -105,6 +105,12 @@ pub fn state(root: &Path) -> Result<State, String> {
     }
 }
 
+/// Is a skill of that name there for Claude Code to run, platoon's copy or the user's own? (One that can't be read
+/// counts as not there.)
+pub fn present(root: &Path) -> bool {
+    matches!(state(root), Ok(State::Ours(_) | State::NotOurs))
+}
+
 /// What `install` did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Installed {

@@ -103,7 +103,7 @@ fn shown_once_put_away_by_a_key_or_a_click_and_never_again_for_the_same_reason()
     app.look_for_setup_news();
     app.refresh();
     assert_eq!(app.news_showing(), NONE);
-    assert!(!words(&shown(&app, 110, 24)).contains("/to-tickets"));
+    assert!(!words(&shown(&app, 110, 24)).contains("New: /to-tickets"), "the notice; the empty Tasks tab names /to-tickets itself");
     assert!(!state.exists(), "not said before it has shown");
     // On a list: it shows, and is remembered as said.
     app.top = TOP_SESSIONS;

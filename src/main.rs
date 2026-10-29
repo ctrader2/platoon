@@ -107,6 +107,7 @@ mod testkit;
 mod textbox;
 mod theme;
 mod tickets;
+mod ticketshint;
 #[cfg(test)]
 mod tokens_app_tests;
 mod ui;
@@ -357,14 +358,22 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly. Every session's usage
 /// figures are recorded; a task's session (its task in its environment) shows the task's line, the figures at its end.
+/// Any other session's figures end with the `/to-tickets` hint while its conversation has agreed on work
+/// (`ticketshint.rs`); a task's session never gets it, whichever line it shows.
 fn statusline() -> io::Result<()> {
     let mut input = String::new();
     io::Read::read_to_string(&mut io::stdin(), &mut input)?;
     let now = usage::now();
-    let figures = usage::record(&input, &usage::cache_dir(), now);
-    let task = std::env::var_os(agents::TASK_ENV).filter(|t| !t.is_empty());
-    let line = task.and_then(|_| taskrun::status_line(&input, &archive::config_dir(), &figures, status_width(), now));
-    println!("{}", line.unwrap_or(figures));
+    let (config, cache) = (archive::config_dir(), usage::cache_dir());
+    let figures = usage::record(&input, &cache, now);
+    let line = if std::env::var_os(agents::TASK_ENV).is_some_and(|t| !t.is_empty()) {
+        taskrun::status_line(&input, &config, &figures, status_width(), now).unwrap_or(figures)
+    } else {
+        let root = agents::claude::claude_root();
+        let at = ticketshint::Places { config: &config, cache: &cache, claude_root: &root };
+        if ticketshint::wanted(&input, &at, now) { ticketshint::with_hint(&figures, status_width()) } else { figures }
+    };
+    println!("{line}");
     Ok(())
 }
 
@@ -1139,7 +1148,7 @@ mod tests {
         // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '3');
         assert!(app.top == 2 && app.board_showing() && app.selected_session().is_none());
-        assert!(flat(&draw(&mut term, &app)).contains(crate::board::Shelf::Active.empty()));
+        assert!(flat(&draw(&mut term, &app)).contains(crate::board::Shelf::Active.empty(app.providers().claude.is_some())));
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
