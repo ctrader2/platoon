@@ -373,8 +373,8 @@ fn a_conversation_started_with_a_skill_is_named_and_a_built_in_command_is_not_a_
             && sent.contains("Claude's last reply: Which part of the billing retry should we sharpen first?"),
         "{sent}"
     );
-    for secret in ["SKILL-BODY", "LOCAL-OUTPUT", "ANSWER-SECRET", "/model", "sonnet please"] {
-        assert!(!sent.contains(secret), "{secret}: {sent}");
+    for left_out in ["SKILL-BODY", "LOCAL-OUTPUT", "ANSWER-SECRET", "/model", "sonnet please"] {
+        assert!(!sent.contains(left_out), "{left_out}: {sent}");
     }
     assert_eq!(row(&app, "bare").name_source, NameSource::Generated);
     assert_eq!(row(&app, "worded").name_source, NameSource::Generated);
