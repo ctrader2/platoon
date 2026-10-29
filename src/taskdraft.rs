@@ -32,7 +32,7 @@ pub const CHECKS_MAX: usize = 8;
 /// for tasks from a conversation").
 pub const GUIDANCE: &str = "You turn a conversation into tasks: pieces of work someone will start later, each in a fresh session that has never seen this conversation.
 - Only the work the conversation agreed on and left for later: nothing new, nothing already done in it. Usually one to four tasks.
-- One thin, complete piece per task, one that fits in one fresh session. Say what should work when it is done, as behaviour, not which files change.
+- One thin, complete piece per task, one that fits in one fresh session. Say what should work when it is done, as behavior, not which files change.
 - Done when: two to five checks, each something that can be shown and that would fail before the work.
 - No file paths and no code: the session finds those itself.
 - Each task is done by one squad (the squads and what each is for are listed): keep a coding part apart from a documentation part, and suggest the squad that fits each task.

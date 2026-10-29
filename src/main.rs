@@ -1845,7 +1845,7 @@ mod tests {
         app.selected = row_of(&app, BG_ID);
         ch(&mut app, 'a');
         assert!(matches!(app.mode, Mode::List), "no dialog either: there is nothing to confirm");
-        assert!(alive(pid), "Claude's own process must not be signalled");
+        assert!(alive(pid), "Claude's own process must not be signaled");
         assert!(w.archive_file().is_none(), "and nothing is archived");
         assert!(
             app.notice.as_ref().is_some_and(|(m, ..)| m.contains("runs in the background") && m.contains("can't archive it")),
@@ -3505,7 +3505,7 @@ mod tests {
     }
 
     #[test]
-    fn the_arrow_keys_on_the_theme_row_save_the_neighbouring_theme_at_once() {
+    fn the_arrow_keys_on_the_theme_row_save_the_neighboring_theme_at_once() {
         let w = theme_world("tl-arrows");
         let mut app = w.app();
         ch(&mut app, 's');

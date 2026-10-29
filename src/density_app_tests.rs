@@ -98,7 +98,7 @@ fn the_selection_and_the_hover_cover_both_lines_of_a_row_and_nothing_else() {
         assert!(lines[y].contains('▎'), "the marker on both lines: {}", lines[y]);
     }
     for y in [name - 1, name + 2] {
-        assert_eq!(bg(&term, x, y), t.bg, "line {y}, a neighbour's, is not\n{}", lines.join("\n"));
+        assert_eq!(bg(&term, x, y), t.bg, "line {y}, a neighbor's, is not\n{}", lines.join("\n"));
         assert!(!lines[y].contains('▎'), "{}", lines[y]);
     }
     // The mouse over the second line of another row lights both of that row's lines, as one row.
@@ -185,7 +185,7 @@ fn the_context_column_says_how_full_each_conversation_is_and_warns_above_80_perc
     };
     assert_eq!(figure("sixty ", "60%"), t.subtext);
     assert_eq!(figure("edge ", "80%"), t.subtext, "80% is not above 80%");
-    assert_eq!(figure("full ", "85%"), t.warn, "above 80%: the warning colour");
+    assert_eq!(figure("full ", "85%"), t.warn, "above 80%: the warning color");
 }
 
 /// The tab strip of the settings popup, at the top of its border: the line under "╭ Settings".

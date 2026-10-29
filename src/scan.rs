@@ -407,7 +407,7 @@ mod tests {
         let fake = AiFake::new("sc-yes");
         let (outcome, shown) = run(&w, &fake, "\n", true, &never);
         assert_eq!(outcome, ScanOutcome::Done { named: 3 });
-        // The local estimate first, labelled as one, in plain words.
+        // The local estimate first, labeled as one, in plain words.
         assert!(
             shown.contains("Smart names: 3 active sessions to name, about ")
                 && shown.contains("tokens, roughly 1 call (an estimate, made on this computer)."),

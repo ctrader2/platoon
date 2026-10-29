@@ -1,6 +1,6 @@
 //! Projects at the level of the app: the tabs, the Projects tab and its keys, the project picker (`m`), badges on
 //! session rows, a project's screen, the scoped search and what archiving, restoring and deleting a project does.
-//! Every directory is a temp dir (`World`); the only processes signalled are the tests' own stand-ins.
+//! Every directory is a temp dir (`World`); the only processes signaled are the tests' own stand-ins.
 
 use crate::app::{App, AssignOpt, Confirm, FIND_KIND, Hit, Mode, Pane};
 use crate::host::HostInfo;
@@ -1195,7 +1195,7 @@ fn a_project_with_sessions_and_no_notes_file_says_platoon_starts_them_unless_the
     assert!(f.contains("No notes yet"), "{f}");
     assert!(f.contains(&format!("{} Or press e to start them now from a short template.", ui::NOTES_START_THEMSELVES)), "{f}");
     assert!(f.contains("They live in") && !f.contains("Press e to start them from"), "{f}");
-    // The same colours as the lines it replaces: the heading quiet, what to do in the text colour, where they live dim.
+    // The same colors as the lines it replaces: the heading quiet, what to do in the text color, where they live dim.
     let t = app.effective_theme();
     let lines = cells(&term);
     let fg = |needle: &str| {

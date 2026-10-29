@@ -1,6 +1,6 @@
 //! Archiving a conversation something is running: the row leaves at once, the process is stopped in the background,
 //! and the archive is written only once it has really exited. Every process here is one the test started itself
-//! (a shell script that takes a while to end on SIGTERM, or ignores it): nothing else is ever signalled.
+//! (a shell script that takes a while to end on SIGTERM, or ignores it): nothing else is ever signaled.
 
 use crate::app::{App, Confirm, Mode};
 use crate::host::HostInfo;

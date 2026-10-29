@@ -15,7 +15,7 @@
 # Flags: --all (also delete your projects, notes, tasks and settings, without asking), --stop-sessions (stop the
 # sessions platoon runs without asking), --help.
 #
-# It honours the variables platoon does (HOME, CLAUDE_CONFIG_DIR, PLATOON_CONFIG_DIR, PLATOON_CACHE_DIR,
+# It honors the variables platoon does (HOME, CLAUDE_CONFIG_DIR, PLATOON_CONFIG_DIR, PLATOON_CACHE_DIR,
 # XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, CARGO_HOME, ZDOTDIR), so tests run it in made-up folders.
 # Test knobs: PLATOON_UNINSTALL_TTY (a file the answers are read from instead of /dev/tty) and
 # PLATOON_UNINSTALL_TEST_HOME (refuse to run unless every folder is inside it).

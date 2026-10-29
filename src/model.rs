@@ -22,7 +22,7 @@ pub struct Proc {
     /// showing it (running `claude attach`), so opening the row joins that host.
     pub hosted: bool,
     /// Set for a background session (run by Claude's own service, not by platoon or a terminal); holds the id
-    /// `claude attach` takes. Such a process is only ever attached to: never signalled, never counted as a
+    /// `claude attach` takes. Such a process is only ever attached to: never signaled, never counted as a
     /// copy that could fall out of sync.
     pub background: Option<String>,
     /// This process must not write to the conversation any more: its memory can't be trusted to match it.

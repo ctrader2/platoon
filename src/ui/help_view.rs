@@ -109,7 +109,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));
         out.push(Entry::Note(
-            "62% on a session's row: how full its context is, of its model's window. Above 80% it is in the warning colour: time to start fresh or let the session compact it.".into(),
+            "62% on a session's row: how full its context is, of its model's window. Above 80% it is in the warning color: time to start fresh or let the session compact it.".into(),
         ));
     }
     if app.open_project().is_some() {

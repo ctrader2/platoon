@@ -198,7 +198,7 @@ fn as_the_table_narrows_branch_then_model_then_context_then_dir_go() {
     }
 }
 
-/// Every pair of neighbouring columns has at least one blank cell between them, in the titles and in the rows,
+/// Every pair of neighboring columns has at least one blank cell between them, in the titles and in the rows,
 /// at every width: a long name, a long path, a long branch and a long model each fill their column to the end.
 #[test]
 fn no_two_columns_ever_touch_at_any_width() {

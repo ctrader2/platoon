@@ -1,5 +1,5 @@
 //! The Squads tab (`4`) at the level of the app: the list with where each squad comes from and "needs fixing" in the
-//! warning colour, the pane beside it from `TWO_PANES_FROM` (one pane below it, enter opening the squad), `e` on a
+//! warning color, the pane beside it from `TWO_PANES_FROM` (one pane below it, enter opening the squad), `e` on a
 //! built-in (the copy written, kept when changed, taken away when not), `n` (the name box, the template, the editor),
 //! `d` (asked first, a `.bak` kept, a replaced built-in back), and the help. Every directory is a temp dir (`World`);
 //! the only editor is a stand-in script with a window of its own.
@@ -109,14 +109,14 @@ fn the_tab_lists_every_squad_with_where_it_comes_from_and_the_picked_one_beside_
         assert!(text.contains(want), "{want}\n{shown}");
     }
     let t = app.effective_theme().clone();
-    assert_eq!(fg_of(&term, "needs fixing"), t.warn, "needs fixing is in the warning colour");
+    assert_eq!(fg_of(&term, "needs fixing"), t.warn, "needs fixing is in the warning color");
     assert_ne!(fg_of(&term, "built in"), t.warn);
     // Beside the list: Feature, picked first.
     for want in ["Model Opus", "Verdict model Fable", "Plans first yes, then waits for your yes", "Steps", "1. Learn how"] {
         assert!(text.contains(want), "{want}\n{shown}");
     }
     assert!(!text.contains("Needs fixing"), "nothing wrong with Feature");
-    // The broken one says what is wrong, one line each, in the warning colour.
+    // The broken one says what is wrong, one line each, in the warning color.
     pick(&mut app, "sloppy");
     let shown = draw(&mut term, &app);
     let text = flat(&shown);

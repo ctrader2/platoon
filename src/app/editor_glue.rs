@@ -11,9 +11,9 @@
 //! In the attached view every key is Claude's: the back key (ctrl+space) to the list first, then `v`. Typed into a box, `v` is
 //! a letter (those modes never reach here).
 //!
-//! Which editor: `v` opens the favourite (`files_editor` in the settings; the first editor found until the user picks
+//! Which editor: `v` opens the favorite (`files_editor` in the settings; the first editor found until the user picks
 //! one, and instead of one no longer installed, said once), or, with "Always ask which editor" on, the list with the
-//! favourite starred and picked (picking another makes it the favourite). platoon installs no editor: with none found,
+//! favorite starred and picked (picking another makes it the favorite). platoon installs no editor: with none found,
 //! `v` says so (`NO_EDITOR`). Everything else is the same for every editor: the session-still-working question, bringing
 //! a removed worktree back, the folder picker. An editor that draws in the terminal (Helix, the user's own Neovim) is
 //! handed platoon's terminal (`main.rs`); one with a window of its own starts beside platoon, and a task's worktree
@@ -53,7 +53,7 @@ struct Flow {
 pub struct FilePick {
     pub options: Vec<FileEditor>,
     pub selected: usize,
-    /// The favourite's id: the one with the star.
+    /// The favorite's id: the one with the star.
     pub starred: String,
 }
 
@@ -65,7 +65,7 @@ pub struct EdState {
     pub fpick: FilePick,
     /// A terminal editor, ready to open on these folders: the event loop takes it (`take_own_editor_request`).
     own: Option<(FileEditor, Vec<String>)>,
-    /// The favourite that isn't installed, once it has been said (said once per run).
+    /// The favorite that isn't installed, once it has been said (said once per run).
     said_missing: Option<String>,
     /// Said once the editor that has the terminal closes (what it left out).
     note: Option<String>,
@@ -142,24 +142,24 @@ impl App {
     }
 
     pub(super) fn start_editor(&mut self, target: EdTarget) {
-        let Some(favourite) = self.files_favourite() else {
+        let Some(favorite) = self.files_favorite() else {
             self.notify(NO_EDITOR);
             return;
         };
         if self.settings.get().files_editor_ask {
-            let selected = self.ed.files.iter().position(|e| e.id == favourite.id).unwrap_or(0);
-            self.ed.fpick = FilePick { options: self.ed.files.clone(), selected, starred: favourite.id };
+            let selected = self.ed.files.iter().position(|e| e.id == favorite.id).unwrap_or(0);
+            self.ed.fpick = FilePick { options: self.ed.files.clone(), selected, starred: favorite.id };
             self.ed.flow = Some(Flow { target, warned: false, editor: None });
             self.mode = Mode::PickFileEditor;
             return;
         }
-        self.ed.flow = Some(Flow { target, warned: false, editor: Some(favourite) });
+        self.ed.flow = Some(Flow { target, warned: false, editor: Some(favorite) });
         self.editor_continue();
     }
 
-    /// The favourite editor for `v`, if this computer has it; else the first one found (said once when the favourite
+    /// The favorite editor for `v`, if this computer has it; else the first one found (said once when the favorite
     /// was a choice of the user's: the setting stays, in case it comes back). None: this computer has none.
-    fn files_favourite(&mut self) -> Option<FileEditor> {
+    fn files_favorite(&mut self) -> Option<FileEditor> {
         let id = self.settings.get().files_editor;
         if let Some(e) = fileeditors::by_id(&self.ed.files, &id) {
             return Some(e.clone());
@@ -178,7 +178,7 @@ impl App {
         Some(first)
     }
 
-    /// Enter in `v`'s list: that editor, which becomes the favourite.
+    /// Enter in `v`'s list: that editor, which becomes the favorite.
     pub(super) fn take_file_editor_pick(&mut self) {
         self.mode = Mode::List;
         let Some(e) = self.ed.fpick.options.get(self.ed.fpick.selected).cloned() else {

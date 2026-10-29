@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both are analysed from the source, with no build ("none").
+        # Both are analyzed from the source, with no build ("none").
         language: [rust, actions]
     steps:
       - name: Is code scanning available?

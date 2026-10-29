@@ -138,7 +138,7 @@ use Pick::{P, X};
 /// - Kanagawa Dragon: busy is the theme's dragon orange (not in the palette); its violet sat too close to the
 ///   blue accent.
 /// - Solarized Dark: Solarized's accents are all a middle lightness that reads under 4.5:1 on its background, and
-///   lifting them toward its grey text washes them out, so accent (violet) and err (red) are Solarized's own
+///   lifting them toward its gray text washes them out, so accent (violet) and err (red) are Solarized's own
 ///   violet and red made lighter by hand. Violet rather than blue: a blue selection turns too light in 256 colors.
 ///   The body text is lifted, as for every theme whose foreground reads under 7:1.
 /// - Flexoki Dark: busy is Flexoki's purple (the palette has magenta but no purple); accent is its cyan, because
@@ -632,7 +632,7 @@ const SPECS: &[Spec] = &[
     },
     // Claude Code's own dark palette (taken from its binary). The 16 colors are built around it: red is its
     // error rose, green its success green, yellow its warning amber, blue its periwinkle, magenta its purple
-    // (the auto-accept color) and cyan its teal (plan mode); black/white/bright-black are the brand greys.
+    // (the auto-accept color) and cyan its teal (plan mode); black/white/bright-black are the brand grays.
     Spec {
         id: "claude",
         name: "Claude",
@@ -795,7 +795,7 @@ impl Theme {
     }
 
     /// The background of selected text in an attached session: the theme's background moved part of the way
-    /// to its accent, so it is recognisably this theme's and clearly not the background, then darkened as far
+    /// to its accent, so it is recognizably this theme's and clearly not the background, then darkened as far
     /// as it takes for the theme's text to keep `SELECTION_TEXT_CONTRAST` on it. None when the theme has no
     /// colors of its own to mix (Terminal colors), where selected cells are drawn reversed instead.
     pub fn selection_bg(&self) -> Option<Color> {
@@ -809,7 +809,7 @@ impl Theme {
     /// everything else, so this follows the terminal's theme. Limits: the terminal decides how far apart these
     /// are, and a terminal theme whose black is the same as its background shows no selection band (the
     /// accent marker beside the selected row still does). Bright black is dim text and borders: on the
-    /// usual dark themes it is a mid grey, distinct from both the background and black. Nothing here is a
+    /// usual dark themes it is a mid gray, distinct from both the background and black. Nothing here is a
     /// fixed color, so it is also what a terminal with 16 colors gets, and `ansi` is `None`: the session's
     /// colors are the terminal's already.
     pub fn terminal() -> Theme {

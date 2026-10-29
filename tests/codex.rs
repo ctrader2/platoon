@@ -123,7 +123,7 @@ fn a_codex_conversation_open_elsewhere_is_never_opened_a_second_time() {
     t.wait_for_flat("is open in another Codex window. Close it there to open it here.");
     assert!(!w.base.join("codex-args").exists(), "nothing was started");
     assert!(find_host(&w.cache).is_none());
-    assert!(running(holder.id()), "never signalled");
+    assert!(running(holder.id()), "never signaled");
     let _ = holder.kill();
     let _ = holder.wait();
 }
@@ -144,7 +144,7 @@ fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_docu
     let script = fake.join("claude");
     fs::write(&script, include_str!("fake-claude.sh").replace("@DIR@", &fake.to_string_lossy())).unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(fake.join("reply.default"), r#"{"summary":"The colour is known: teal.","next":["Write it down."]}"#).unwrap();
+    fs::write(fake.join("reply.default"), r#"{"summary":"The color is known: teal.","next":["Write it down."]}"#).unwrap();
     let mut env = w.env();
     env.push(("PLATOON_CLAUDE_BIN", script.to_string_lossy().into()));
     env.push(("PLATOON_NOTES_HELPER", "off".into()));
@@ -158,7 +158,7 @@ fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_docu
         "# Session hand-off: work",
         &format!("- Previous session id: {FINISHED} (`codex resume"),
         "17,690 sent to Codex and 48 written by Codex, plus 24,576",
-        "The colour is known: teal.",
+        "The color is known: teal.",
         "ctrl+s start the new session",
     ]);
     let sent = fs::read_to_string(fake.join("calls/1.stdin")).unwrap();

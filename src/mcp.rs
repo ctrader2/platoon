@@ -4,7 +4,7 @@
 //! Before an idle stop the host records everything under the agent that is not a command the agent started (`idle::under`:
 //! the MCP servers, whatever launched them, and their own children), with what proves it is the same process later
 //! (`Tracked`). Once the agent has exited, those still running get a moment to leave by themselves and are then asked to
-//! (SIGTERM), each only if it is still the process that was recorded. Nothing else is ever signalled.
+//! (SIGTERM), each only if it is still the process that was recorded. Nothing else is ever signaled.
 
 use crate::procs;
 use std::time::{Duration, Instant};
@@ -37,7 +37,7 @@ pub fn terminate_if_same(t: &Tracked) -> bool {
 }
 
 /// Wait up to `wait` for `claude` to exit, and only then clean up after it (see `end_leftovers`). While it is
-/// still running its MCP servers are in use, so if it never goes nothing is signalled.
+/// still running its MCP servers are in use, so if it never goes nothing is signaled.
 pub fn end_leftovers_after(claude: u32, tracked: &[Tracked], wait: Duration, grace: Duration) {
     let started = Instant::now();
     let running = || procs::table().is_none_or(|rows| rows.iter().any(|r| r.pid == claude && !r.zombie));
@@ -73,7 +73,7 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    // --- signalling leftovers ------------------------------------------------------------------------------
+    // --- signaling leftovers ------------------------------------------------------------------------------
     //
     // Every wait here is for something to happen, with a deadline far longer than it ever takes, so a loaded
     // machine is slow but never fails; only "nothing happened" (`still_running`) has to be a fixed pause.
@@ -128,20 +128,20 @@ mod tests {
         false
     }
 
-    /// Still there after a pause: what "not signalled" looks like (it would have ended within the pause).
+    /// Still there after a pause: what "not signaled" looks like (it would have ended within the pause).
     fn still_running(c: &mut Kid) -> bool {
         std::thread::sleep(Duration::from_millis(300));
         c.0.try_wait().unwrap().is_none()
     }
 
     #[test]
-    fn only_the_recorded_process_is_signalled() {
+    fn only_the_recorded_process_is_signaled() {
         let (mut mine, mut bystander) = (spawn("641"), spawn("641"));
         let t = tracked(mine.id());
         assert!(terminate_if_same(&t));
         assert!(wait_gone(&mut mine));
         assert!(still_running(&mut bystander), "same command line, different process: untouched");
-        // The process is gone: signalling it again does nothing (its pid could be anybody's by now).
+        // The process is gone: signaling it again does nothing (its pid could be anybody's by now).
         assert!(!terminate_if_same(&t));
     }
 
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_signalled_while_claude_is_still_running_and_leftovers_are_ended_once_it_is_gone() {
+    fn nothing_is_signaled_while_claude_is_still_running_and_leftovers_are_ended_once_it_is_gone() {
         let (mut claude, mut server) = (spawn("644"), spawn("644"));
         let list = vec![tracked(server.id())];
         end_leftovers_after(claude.id(), &list, Duration::from_millis(400), Duration::from_millis(50));

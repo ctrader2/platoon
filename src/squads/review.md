@@ -19,7 +19,7 @@ plan or a diff) and take the verdict back to that step.
    intent, do not question it, challenge how well the code achieves it; here is the diff. Look through whichever of
    these lenses apply:
    correctness (edge cases, errors swallowed, concurrency, what happens if it runs twice or crashed halfway), root
-   cause or symptom, fit with the system around it, whether it is verified by tests of behaviour, complexity that
+   cause or symptom, fit with the system around it, whether it is verified by tests of behavior, complexity that
    isn't earned, and security (trace each input to its sink). For each finding give a severity (critical, warning or
    nit), the location, what is wrong, the evidence, and a suggestion only when you have a concrete one. No praise.
    "No findings" is a valid review.

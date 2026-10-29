@@ -38,7 +38,7 @@ impl Default for IdleState {
 
 impl App {
     /// Take in the last look at the older hosts, and start another once a minute while there are any and idle stop is
-    /// on. Called on every refresh; nothing is read or signalled on the UI thread.
+    /// on. Called on every refresh; nothing is read or signaled on the UI thread.
     pub(super) fn poll_older_hosts(&mut self) {
         if let Some(rx) = &self.idle.rx {
             match rx.try_recv() {

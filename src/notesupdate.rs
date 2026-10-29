@@ -2082,7 +2082,7 @@ My own notes, in my own words.
         assert_eq!(strip_leading_date("2026-09-24"), "");
         assert_eq!(strip_leading_date("2026-09-24:"), "");
         assert!(parse_update(r#"{"decisions":["2026-09-24:"]}"#).is_none(), "nothing left to say");
-        // A dated repeat of something already in Decisions is still recognised as a repeat.
+        // A dated repeat of something already in Decisions is still recognized as a repeat.
         let up = parse_update(r#"{"decisions":["2026-09-24: Use Postgres","Ship on Friday"]}"#).unwrap();
         let merged = merge("# Decisions\n\n- 2026-09-20: Use Postgres\n", &State::default(), &up, now);
         assert_eq!(merged.added, [format!("- {today}: Ship on Friday")]);

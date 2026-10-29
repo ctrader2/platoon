@@ -579,7 +579,7 @@ pub fn alias_name(id: &str) -> String {
 }
 
 /// `claude-sonnet-5` -> `Sonnet 5`, `claude-fable-5-1` -> `Fable 5.1`, `claude-haiku-4-5-20251001` -> `Haiku 4.5`.
-/// Handles the older `claude-3-5-sonnet-...` ordering too. Anything unrecognised is shown as-is.
+/// Handles the older `claude-3-5-sonnet-...` ordering too. Anything unrecognized is shown as-is.
 pub fn pretty_model(id: &str) -> String {
     let (base, ext) = match id.split_once('[') {
         Some((b, rest)) => (b, Some(rest.trim_end_matches(']').to_uppercase())),

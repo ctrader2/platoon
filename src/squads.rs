@@ -7,7 +7,7 @@
 //! ```text
 //! ---
 //! name: Feature
-//! description: New or changed behaviour in code.
+//! description: New or changed behavior in code.
 //! model: opus
 //! verdict_model: fable
 //! plan_first: true
@@ -553,7 +553,7 @@ mod tests {
         ] {
             assert!(incident.body.contains(want), "{want}");
         }
-        for not in ["Stabilise", "Write a test", "commit it", "test command you ran"] {
+        for not in ["Stabilize", "Write a test", "commit it", "test command you ran"] {
             assert!(!incident.body.contains(not), "{not}");
         }
         // Every squad that changes code runs the repo's tests where it verifies, and names them at the end.

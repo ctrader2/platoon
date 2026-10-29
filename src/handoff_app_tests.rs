@@ -546,10 +546,10 @@ fn a_git_that_fails_just_leaves_the_git_facts_out() {
 
 /// A long answer: a summary that wraps many times, and many steps.
 fn long_brief() -> String {
-    let summary = "The basket page shows every item with its size, colour and price, and the totals at the foot of it now \
+    let summary = "The basket page shows every item with its size, color and price, and the totals at the foot of it now \
                    add up across currencies once the rates are fetched, which happens when the page first loads.";
     let next: Vec<String> = (1..=handoff::NEXT_MAX)
-        .map(|i| format!("\"Step number {i} of the plan, written out long enough to need several rows in a narrow box: check the totals, the sizes, the colours and the prices before the next one\""))
+        .map(|i| format!("\"Step number {i} of the plan, written out long enough to need several rows in a narrow box: check the totals, the sizes, the colors and the prices before the next one\""))
         .collect();
     format!(r#"{{"summary":"{summary}","next":[{}]}}"#, next.join(","))
 }
@@ -590,7 +590,7 @@ fn a_long_document_wraps_at_the_box_edge_and_scrolls_with_the_cursor_and_says_wh
     // No row of the box runs past its edge: every word of the long summary is on screen whole, over several rows.
     let rows = body(&screen);
     let inside = rows.join(" ");
-    for word in "The basket page shows every item with its size, colour and price, and the totals at the foot".split(' ') {
+    for word in "The basket page shows every item with its size, color and price, and the totals at the foot".split(' ') {
         assert!(inside.split_whitespace().any(|x| x == word), "{word:?} is not whole on screen:\n{joined}");
     }
     let (width, _) = app.handoff.view.get();

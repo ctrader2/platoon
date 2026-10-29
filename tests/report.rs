@@ -102,7 +102,7 @@ impl World {
     }
 
     /// The running "session" a host's file names: `sh` with a token in its arguments and a `sleep` under it. Its host
-    /// is this test's own process (alive, and never signalled by a report).
+    /// is this test's own process (alive, and never signaled by a report).
     fn start_session(&mut self) -> u32 {
         let agent = Command::new("sh")
             .args(["-c", "sleep 120; : done", "sh", "--token", "PLANTED-arg-token"])

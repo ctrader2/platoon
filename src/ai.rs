@@ -733,7 +733,7 @@ pub struct Outcome {
     pub cost_usd: f64,
 }
 
-/// The one folder every call runs in, under platoon's cache folder. Defined here only: whatever must recognise or
+/// The one folder every call runs in, under platoon's cache folder. Defined here only: whatever must recognize or
 /// hide the runner's own sessions asks for it.
 pub fn work_dir(cache: &Path) -> PathBuf {
     cache.join("ai-work")
@@ -860,7 +860,7 @@ impl Runner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Its own process group: what it starts dies with it, and nothing else is ever signalled.
+            // Its own process group: what it starts dies with it, and nothing else is ever signaled.
             .process_group(0);
         // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
         // to carry (which ones, and why: `claude::SESSION_MARKERS`).

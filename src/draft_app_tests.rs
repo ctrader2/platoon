@@ -1,6 +1,6 @@
 //! Tasks drafted from a conversation at the level of the app: `t` on a session's row asks a stand-in `claude -p`
 //! (testkit's `AiFake`) in the background while the row says "Drafting tasks…"; the popup at 120x40 and 80x24 with one
-//! and three tasks (cell colours too); `enter` makes them Not started, each with the squad suggested for it and the
+//! and three tasks (cell colors too); `enter` makes them Not started, each with the squad suggested for it and the
 //! session it came from, in its project or in none; `esc` makes nothing; `x` and `e`; the refusals, each one line; a
 //! draft ready while the user is in a session. Every directory is a temp dir (`World`); no session is ever started; the
 //! only editor is a stand-in script.

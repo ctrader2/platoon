@@ -176,7 +176,7 @@ impl Drop for Rig {
 #[test]
 fn a_quiet_idle_session_nobody_watches_is_stopped_after_the_threshold_and_only_that_one() {
     let mut r = Rig::new("idle-happy", 1);
-    let mut bystander = Command::new("sleep").arg("60").spawn().unwrap(); // not the host's: must never be signalled
+    let mut bystander = Command::new("sleep").arg("60").spawn().unwrap(); // not the host's: must never be signaled
     let pid = r.start("sleep", &["600"]);
     r.register(pid, "idle");
     let started = Instant::now();
@@ -445,7 +445,7 @@ fn mcp_servers_however_launched_do_not_keep_a_session_alive_and_the_ones_that_ou
         wait_gone(&format!("{what} to be ended"), p);
     }
     assert!(r.host.as_mut().unwrap().wait().unwrap().success());
-    assert!(bystander.try_wait().unwrap().is_none(), "a look-alike outside the session was signalled");
+    assert!(bystander.try_wait().unwrap().is_none(), "a look-alike outside the session was signaled");
     let _ = bystander.kill();
     let _ = bystander.wait();
 }

@@ -38,7 +38,7 @@ Each task is one thin, complete piece of work:
 
 - It fits in one fresh session. Whoever picks it up has never seen this conversation, so the task carries what they
   need: why the work is wanted, what was decided and why, and what is out of scope.
-- It says what should work when it is finished, as behaviour someone can see, not a list of file changes.
+- It says what should work when it is finished, as behavior someone can see, not a list of file changes.
 - Its "Done when" boxes are checks anyone can make. Each one fails before the work and passes after it, and none
   depends on another task's work. platoon's check of the finished work reads these boxes, so make them exact.
 - No file paths, function names or code, because they go stale. The exception is a short snippet that records a
@@ -55,7 +55,7 @@ Each task's text has this shape (platoon's own template):
 ```markdown
 ## What it should do
 
-<the behaviour, and the context a newcomer needs>
+<the behavior, and the context a newcomer needs>
 
 ## Done when
 

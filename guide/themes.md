@@ -98,7 +98,7 @@ Claude Code picks some colors of its own: with a light theme in platoon, choose 
 
 `terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
 whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the background and
-a bright black that reads as grey; if your terminal theme's black is the same as its background, the highlighted row is
+a bright black that reads as gray; if your terminal theme's black is the same as its background, the highlighted row is
 shown only by the marker beside it. It assumes a dark terminal theme: on a light one the highlighted row is a black band
 that is hard to read, so pick one of the light themes instead.
 

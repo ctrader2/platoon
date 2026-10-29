@@ -1231,7 +1231,7 @@ mod tests {
         want.sort();
         assert_eq!(pids(&d), want);
         let Decision::Stop(tracked) = d else { unreachable!() };
-        assert!(tracked.iter().all(|t| t.start != 0 && t.argv.is_some()), "each is recorded so it can be recognised again");
+        assert!(tracked.iter().all(|t| t.start != 0 && t.argv.is_some()), "each is recorded so it can be recognized again");
     }
 
     #[test]
@@ -1339,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn a_process_that_is_already_gone_counts_as_stopped_and_pid_zero_and_one_are_never_signalled() {
+    fn a_process_that_is_already_gone_counts_as_stopped_and_pid_zero_and_one_are_never_signaled() {
         let mut gone = Command::new("true").spawn().unwrap();
         let dead = gone.id();
         gone.wait().unwrap();

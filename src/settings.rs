@@ -146,12 +146,12 @@ pub struct Settings {
     /// been used yet. platoon remembers the last choice here; an id this computer no longer has is simply not
     /// starred and stays in the file until another editor is used.
     pub notes_editor: String,
-    /// The favourite editor of `v` (a ticket's or a session's files): the id of an editor of this computer's
+    /// The favorite editor of `v` (a ticket's or a session's files): the id of an editor of this computer's
     /// (`fileeditors.rs`), or empty while none has been chosen (`v` opens the first one found). One that is no longer
     /// installed is kept here, and `v` opens the first one found instead (saying so). The `platoon` an older platoon
     /// wrote (its own editor, gone) reads as none chosen.
     pub files_editor: String,
-    /// `v` shows the list of editors every time (the favourite starred and picked) instead of opening the favourite.
+    /// `v` shows the list of editors every time (the favorite starred and picked) instead of opening the favorite.
     pub files_editor_ask: bool,
     /// How long a project must be quiet before platoon brings its notes up to date, in minutes.
     pub notes_quiet_minutes: u64,
@@ -787,7 +787,7 @@ fn instructions_item(id: &'static str) -> Item {
     }
 }
 
-/// The two programs platoon can use, then everyday behaviour: the colors, the two automatic clean-ups and the check for
+/// The two programs platoon can use, then everyday behavior: the colors, the two automatic clean-ups and the check for
 /// a newer platoon.
 fn general_items() -> Vec<Item> {
     let program = |name, explain, agent| Item {
@@ -1475,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn stepping_goes_to_the_neighbouring_choice_from_a_step_or_from_between_steps() {
+    fn stepping_goes_to_the_neighboring_choice_from_a_step_or_from_between_steps() {
         let idle = &general()[1];
         assert_eq!(idle.step(120, Step::Next), 240);
         assert_eq!(idle.step(120, Step::Prev), 60);

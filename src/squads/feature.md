@@ -1,6 +1,6 @@
 ---
 name: Feature
-description: New or changed behaviour in code, planned first and built in small checked steps.
+description: New or changed behavior in code, planned first and built in small checked steps.
 model: opus
 verdict_model: fable
 plan_first: true
@@ -12,7 +12,7 @@ You own the design: plan it, build it, verify it.
    all at once, asking each for the components it found (name, file, one sentence), the flow step by step, the
    boundaries, and anything surprising; otherwise take the angles one at a time yourself. Check what they report
    against the code.
-2. Name the data shape first: the types, and the structure that organises them. Prefer a state machine to scattered
+2. Name the data shape first: the types, and the structure that organizes them. Prefer a state machine to scattered
    flags, a table to a chain of branches, a typed model to the same shape assumed in several files.
 3. Write the plan: the shape, the files you will touch, the order of small steps that each end in a check, and how
    you will prove the whole works. If the design is contested, follow the Review squad on the plan first. Present
@@ -24,7 +24,7 @@ You own the design: plan it, build it, verify it.
 6. If you hand code-writing to a helper, give it an exact scope: the files, the data shape, what success looks like.
    Review its diff yourself and run the checks yourself. Its report is a claim, not proof.
 7. Prove it works on the real thing: run the feature the way a user would. "It compiles" and "the tests pass" are not
-   proof that the behaviour is there. If you could not check something, say so. Then find how this repo runs its
+   proof that the behavior is there. If you could not check something, say so. Then find how this repo runs its
    tests (its CLAUDE.md, README, or build files) and run them all; fix what fails.
 8. Before you finish, follow the Review squad on your diff. Fix what it puts under "Act on"; mention the rest.
 9. Reply with what you built, what you chose and why, how you checked each "Done when" box, the test command you

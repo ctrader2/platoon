@@ -10,7 +10,7 @@
 //! The "claude" here is one small script wearing two hats: asked with `-p` it answers like `claude -p` (from
 //! `$FAKE_DIR/reply`); started without it, it writes its arguments down, registers itself the way Claude does, prints
 //! a line and gives a shell. A real `claude` is never run, every directory is a temp dir, and the only processes
-//! signalled are the ones these tests started.
+//! signaled are the ones these tests started.
 
 mod common;
 use common::*;

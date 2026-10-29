@@ -1003,9 +1003,9 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
     #[test]
     fn a_question_needs_you_with_its_words_until_it_is_answered() {
         let (d, p, n) = world("question");
-        let q = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which page?", "header": "Page", "options": []}, {"question": "Which colour?"}]}});
+        let q = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which page?", "header": "Page", "options": []}, {"question": "Which color?"}]}});
         hook("task-question", &input("PreToolUse", q), &d);
-        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Which page? / Which colour?".into())));
+        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Which page? / Which color?".into())));
         hook("task-tool", &input("PostToolUse", json!({"tool_name": "Bash"})), &d);
         assert!(state(&d, &p, n).needs_you(), "another tool isn't the answer");
         hook("task-tool", &input("PostToolUse", json!({"tool_name": "AskUserQuestion"})), &d);

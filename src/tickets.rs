@@ -35,7 +35,7 @@ pub const WHY_MAX: usize = 600;
 pub const TEMPLATE: &str = "\
 ## What it should do
 
-What should work when this is finished, as behaviour, not a list of changes.
+What should work when this is finished, as behavior, not a list of changes.
 
 ## Done when
 
@@ -1624,13 +1624,13 @@ mod tests {
         let mut v = saved(&d);
         v.as_object_mut().unwrap().insert("future".into(), json!({"a": 1}));
         let o = v["tasks"][0].as_object_mut().unwrap();
-        o.insert("colour".into(), json!("blue"));
+        o.insert("color".into(), json!("blue"));
         o.get_mut("worktree").unwrap().as_object_mut().unwrap().insert("extra".into(), json!(true));
         fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
         let mut t = Tickets::open(&d, "p1");
         set(&mut t, n, State::Done);
         let v = saved(&d);
-        assert_eq!((v["future"]["a"].as_u64(), v["tasks"][0]["colour"].as_str()), (Some(1), Some("blue")));
+        assert_eq!((v["future"]["a"].as_u64(), v["tasks"][0]["color"].as_str()), (Some(1), Some("blue")));
         assert_eq!(v["tasks"][0]["worktree"]["extra"], true);
         assert_eq!((v["tasks"][0]["squad"].as_str(), v["tasks"][0]["session"].as_str()), (Some("feature"), Some("s-1")));
     }

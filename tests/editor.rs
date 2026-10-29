@@ -340,23 +340,23 @@ impl Lab {
 }
 
 #[test]
-fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_starts_beside_platoon() {
+fn always_ask_lists_the_editors_with_the_favorite_starred_and_a_window_editor_starts_beside_platoon() {
     let lab = Lab::new("ed-term-list");
     let docs = lab.base.join("docs");
     fs::create_dir_all(&docs).unwrap();
     lab.session(&[s(&docs)]);
     let mut env = lab.own_editors(json!({"files_editor_ask": true, "files_editor": "code"}));
-    // Colours as a terminal without NO_COLOR has them.
+    // Colors as a terminal without NO_COLOR has them.
     env.push(("NO_COLOR", String::new()));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for_all(&["╭ Open in editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
+    t.wait_for_all(&["╭ Open in editor", "★ VS Code", "Helix", "Choosing another makes it the favorite"]);
     let shown = t.stable();
     let rows: Vec<&str> = shown.lines().filter(|l| l.contains("VS Code") || l.contains("Helix")).collect();
     assert_eq!(rows.len(), 2, "{shown}");
     assert!(rows[0].contains("VS Code") && rows[1].contains("Helix"), "in the order found:\n{shown}");
-    assert!(rows[0].contains("★") && !rows[1].contains("★"), "only the favourite is starred:\n{shown}");
+    assert!(rows[0].contains("★") && !rows[1].contains("★"), "only the favorite is starred:\n{shown}");
     assert!(
         rows[0].contains("▎") && rows[0].contains("in its own window") && rows[1].contains("here in platoon's terminal"),
         "and picked:\n{shown}"

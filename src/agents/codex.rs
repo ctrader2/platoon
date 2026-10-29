@@ -12,7 +12,7 @@
 //! - `session_index.jsonl`: the names Codex gives conversations, one line per change (the latest line wins).
 //! - `thread-writer-locks/<id>.lock`: held while a conversation is open. Codex keeps one writer per conversation
 //!   itself, so the holder of the lock is the one process running it (sometimes Codex's shared background server,
-//!   which runs many and is never signalled). A new conversation's lock is taken as soon as the session opens (after
+//!   which runs many and is never signaled). A new conversation's lock is taken as soon as the session opens (after
 //!   Codex's own update and folder-trust questions), before any message and so before its rollout exists: such a
 //!   conversation is `Live::unsaved`, its folder the holder's own (`procs::cwd`).
 //! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `hooks`).

@@ -36,7 +36,7 @@ Each conversation takes two lines, its name line and its prompt line; the select
 says `/land the parser fix` on its prompt line. Conversations that only ever held Claude Code's own commands (`/model`,
 `/clear`, `/add-dir` and the like) are hidden.
 
-**CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning colour
+**CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning color
 above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has
 reported one, else platoon's: the last reply's input (what it read from the cache, what it wrote to it, and the rest)
 over the window. The window is 1,000,000 tokens for the models Claude Code gives 1M (Opus 4.7 and newer, Sonnet 5.5,
@@ -390,9 +390,9 @@ settings.
 Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offered here; they stay in the
 [notes' list](projects.md#editing-the-notes) (`e`).
 
-Which one opens: your **favourite**, the first one found until you choose one (Settings, Editors: "Editor for folders (v)").
-With "Always ask which editor" on, `v` shows the list every time, the favourite starred and picked (enter opens it);
-choosing another there makes it the favourite. A favourite that is no longer installed opens the first one found instead,
+Which one opens: your **favorite**, the first one found until you choose one (Settings, Editors: "Editor for folders (v)").
+With "Always ask which editor" on, `v` shows the list every time, the favorite starred and picked (enter opens it);
+choosing another there makes it the favorite. A favorite that is no longer installed opens the first one found instead,
 and platoon says so once. Sessions keep running meanwhile. A few things happen first when needed, whichever
 editor it is:
 

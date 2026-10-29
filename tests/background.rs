@@ -140,7 +140,7 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
         t.text()
     );
 
-    // The status is drawn in the theme's accent (Catppuccin Mocha lavender), not the idle grey or working purple.
+    // The status is drawn in the theme's accent (Catppuccin Mocha lavender), not the idle gray or working purple.
     let (row, col) = find(&mut t, "Background");
     let accent = vt100::Color::Rgb(0xb4, 0xbe, 0xfe);
     for i in 0..10 {
@@ -289,7 +289,7 @@ fn a_parked_session_says_it_moved_away_and_enter_opens_the_background_session_it
     t.wait_for("enter open");
     t.send(b"q");
     t.wait_exit();
-    assert!(parked.alive(), "the parked process is never signalled");
+    assert!(parked.alive(), "the parked process is never signaled");
     assert!(w.service_alive());
     w.cleanup();
 }
@@ -305,6 +305,6 @@ fn platoon_open_on_a_parked_session_opens_the_background_session_it_moved_to() {
     t.send(&[0]);
     assert_eq!(t.wait_exit(), 0);
     assert_eq!(w.launches(), ["attach feedf00d"]);
-    assert!(parked.alive(), "the parked process is never signalled");
+    assert!(parked.alive(), "the parked process is never signaled");
     w.cleanup();
 }

@@ -3,7 +3,7 @@
 //! exited, and quitting must neither hang nor archive a conversation whose process still runs.
 //!
 //! The "claude" here is a shell script the test starts itself (it is registered the way Claude registers a session
-//! but is not a real one), so the only process ever signalled is one of ours. Every directory is a temp dir.
+//! but is not a real one), so the only process ever signaled is one of ours. Every directory is a temp dir.
 
 mod common;
 use common::*;

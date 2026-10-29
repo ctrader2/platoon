@@ -2,7 +2,7 @@
 # The daily version watch (.github/workflows/version-watch.yml runs it once for each program). For one coding agent
 # platoon works with, it reads the latest version from the npm registry and, when it is newer than the one in
 # checked-with/, opens one issue asking for it to be checked: "Check support for Claude Code X.Y.Z" or "Check support
-# for Codex X.Y.Z", labelled claude-code-update or codex-update, assigned to the maintainer. Never twice for the same
+# for Codex X.Y.Z", labeled claude-code-update or codex-update, assigned to the maintainer. Never twice for the same
 # version: an issue with that title, open or closed, means there is nothing to do. It only reports: it never commits,
 # pushes or changes a file.
 #
@@ -150,7 +150,7 @@ if [ "$DRY_RUN" = 1 ]; then
         no) echo "Dry run: the label \"$LABEL\" is there already." ;;
         *) echo "Dry run: would create the label \"$LABEL\" if it is missing." ;;
     esac
-    echo "Dry run: would open issue \"$title\", labelled $LABEL, assigned to $ASSIGNEE, with this text:"
+    echo "Dry run: would open issue \"$title\", labeled $LABEL, assigned to $ASSIGNEE, with this text:"
     echo "----"
     printf '%s\n' "$body"
     echo "----"

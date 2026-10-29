@@ -82,9 +82,9 @@ Welcome. Many of platoon's own commits were written with Claude Code, and the re
 - **Say in the pull request that AI helped, and how much**, for example "written with Claude Code, reviewed and tested
   by me" or "Copilot completions only".
 
-## Licence
+## License
 
-platoon is under the [MIT licence](LICENSE). By contributing you agree that your contribution is under the same licence
+platoon is under the [MIT license](LICENSE). By contributing you agree that your contribution is under the same license
 (inbound = outbound); there is no CLA and no sign-off to add.
 
 ## Where to ask

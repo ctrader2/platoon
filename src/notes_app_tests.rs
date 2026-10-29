@@ -487,7 +487,7 @@ fn typing_in_the_editor_reaches_it_and_ctrl_space_gets_out_of_a_wedged_one() {
 }
 
 #[test]
-fn notes_past_the_cap_are_warned_about_in_the_warning_colour() {
+fn notes_past_the_cap_are_warned_about_in_the_warning_color() {
     let (w, app, id) = on_the_notes("notes-cap");
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     set_notes(&w, &id, "# Summary\n\nA shop.\n");
@@ -507,7 +507,7 @@ fn notes_past_the_cap_are_warned_about_in_the_warning_colour() {
     });
     let (x, y) = found.expect("the warning is on one line");
     for dx in 0.."Notes are 12,400".len() as u16 {
-        assert_eq!(buf[(x + dx, y)].fg, warn, "in the warning colour");
+        assert_eq!(buf[(x + dx, y)].fg, warn, "in the warning color");
     }
 }
 

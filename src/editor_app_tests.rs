@@ -371,7 +371,7 @@ fn notice(app: &App) -> String {
 }
 
 #[test]
-fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
+fn v_goes_straight_to_the_favorite_when_always_ask_is_off() {
     let w = World::new("fe-straight");
     let main = w.base.join("repos/app");
     repo(&main);
@@ -389,7 +389,7 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
     assert_eq!(opened(&mut app), vec![s(&main), s(&docs)]);
     app.editor_closed(Ok(()));
 
-    // VS Code the favourite: started beside platoon with both folders in one window, and platoon stays as it was.
+    // VS Code the favorite: started beside platoon with both folders in one window, and platoon stays as it was.
     with_settings(&w, |s| s.files_editor = "code".into());
     app.reload_for_test();
     v(&mut app);
@@ -398,7 +398,7 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
     assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {} {}", s(&main), s(&docs))]);
     assert_eq!(notice(&app), "Opened in VS Code, in a window of its own.");
 
-    // Helix the favourite: handed the terminal (by the event loop) on the first folder; it says what it left out
+    // Helix the favorite: handed the terminal (by the event loop) on the first folder; it says what it left out
     // once it has closed.
     with_settings(&w, |s| s.files_editor = "helix".into());
     app.reload_for_test();
@@ -414,7 +414,7 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
 }
 
 #[test]
-fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_choice_becomes_the_favourite() {
+fn always_ask_shows_the_list_with_the_favorite_starred_and_picked_and_another_choice_becomes_the_favorite() {
     let w = World::new("fe-ask");
     let main = w.base.join("repos/app");
     repo(&main);
@@ -434,7 +434,7 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
     assert!(matches!(app.mode, Mode::List) && app.editor_flow_for_test().is_none());
     assert!(app.take_own_editor_request().is_none());
 
-    // Down to VS Code, enter: it opens, and is the favourite from now on.
+    // Down to VS Code, enter: it opens, and is the favorite from now on.
     v(&mut app);
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
@@ -446,7 +446,7 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
     key(&mut app, KeyCode::Enter);
     assert_eq!(calls(&bin, "code", 2).len(), 2);
 
-    // Back up to Helix: it opens in the terminal, and is the favourite now.
+    // Back up to Helix: it opens in the terminal, and is the favorite now.
     v(&mut app);
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
@@ -455,7 +455,7 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
 }
 
 #[test]
-fn a_favourite_no_longer_installed_opens_the_first_one_found_and_says_so_once() {
+fn a_favorite_no_longer_installed_opens_the_first_one_found_and_says_so_once() {
     let w = World::new("fe-gone");
     let main = w.base.join("repos/app");
     repo(&main);

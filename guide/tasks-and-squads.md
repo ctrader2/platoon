@@ -298,10 +298,10 @@ committed at each stop, and the work is checked before it is Done.
 
 | Squad | For | Model | Plans first |
 | --- | --- | --- | --- |
-| **Feature** | new or changed behaviour, planned first and built in small checked steps | opus | yes |
+| **Feature** | new or changed behavior, planned first and built in small checked steps | opus | yes |
 | **Bug fix** | a defect to reproduce, trace to its root cause and fix with evidence | opus | yes |
 | **Incident** | something broken in production: find what is causing it from the evidence, changing nothing (no fix, no rollback) | opus | no |
-| **Refactor** | a change of structure that keeps the behaviour exactly as it is | opus | yes |
+| **Refactor** | a change of structure that keeps the behavior exactly as it is | opus | yes |
 | **Explain** | a read-only question about how code works or which option to pick | opus | no |
 | **Review** | an adversarial review of a change or a plan, with a verdict | opus | no |
 | **Docs** | documentation to write or improve | sonnet | no |

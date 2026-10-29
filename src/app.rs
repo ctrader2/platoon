@@ -89,7 +89,7 @@ const QUIT_WAITS_FOR_STOPS: Duration = Duration::from_secs(3);
 /// A conversation whose process is being stopped in the background because the user archived it.
 struct Stopping {
     name: String,
-    /// The processes signalled: exactly this conversation's own, never a background session's.
+    /// The processes signaled: exactly this conversation's own, never a background session's.
     pids: Vec<u32>,
 }
 
@@ -2326,7 +2326,7 @@ impl App {
         self.report_save(saved);
     }
 
-    /// `←` and `→` on the Theme row: the neighbouring theme in list order, saved at once, no preview.
+    /// `←` and `→` on the Theme row: the neighboring theme in list order, saved at once, no preview.
     fn step_theme(&mut self, step: Step) {
         let list = self.themes.all();
         let at = list.iter().position(|t| t.id == self.theme.id).unwrap_or(0);

@@ -778,7 +778,7 @@ fn project_lines(app: &App, tasks: usize) -> Vec<PLine> {
     out
 }
 
-/// A task's state on a project's list, in the words and colours the Tasks tab gives it: "Needs you", "Working",
+/// A task's state on a project's list, in the words and colors the Tasks tab gives it: "Needs you", "Working",
 /// "Starting", "Not started", "Done".
 pub(crate) fn task_state_look(app: &App, project: &str, x: &crate::tickets::Ticket) -> (&'static str, Color) {
     let t = app.effective_theme();
@@ -935,7 +935,7 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         }
         top_lines.push(Line::raw(""));
     }
-    // Notes past the cap reach sessions cut: said plainly, in the warning colour.
+    // Notes past the cap reach sessions cut: said plainly, in the warning color.
     if let Some(warning) = notes.as_deref().and_then(crate::notes::over_cap_warning) {
         for line in wrap(&warning, area.width as usize) {
             top_lines.push(Line::styled(line, Style::new().fg(t.warn)));
@@ -1351,7 +1351,7 @@ const CONTEXT_FROM: usize = 64;
 const DIR_FROM: usize = 44;
 /// The CONTEXT column: its title and a space (the figure, `100%` at most, is narrower).
 const CONTEXT_W: usize = "CONTEXT".len() + 1;
-/// Above this share of its window a conversation's context figure is drawn in the warning colour.
+/// Above this share of its window a conversation's context figure is drawn in the warning color.
 pub const CONTEXT_WARN_ABOVE: u8 = 80;
 
 /// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for
@@ -1541,7 +1541,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
         gap(c.pad.status, base),
     ]);
-    // How full the conversation's context is, as a share of its model's window: `62%`, in the warning colour above
+    // How full the conversation's context is, as a share of its model's window: `62%`, in the warning color above
     // `CONTEXT_WARN_ABOVE`. Where nothing is known yet (no figure from Claude, and nothing to estimate from), blank.
     if c.context > 0 {
         if context_known(s) {
@@ -1579,7 +1579,7 @@ fn context_text(pct: u8) -> String {
     format!("{pct}%")
 }
 
-/// The colour of a context figure: the warning colour above `CONTEXT_WARN_ABOVE`, quiet otherwise (dim when archived).
+/// The color of a context figure: the warning color above `CONTEXT_WARN_ABOVE`, quiet otherwise (dim when archived).
 fn context_color(t: &Theme, pct: u8, archived: bool) -> Color {
     match (archived, pct > CONTEXT_WARN_ABOVE) {
         (true, _) => t.dim,
@@ -3170,7 +3170,7 @@ fn draw_agent_pick(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// `v`'s list of editors ("Always ask which editor" on): platoon's own first, then the ones this computer has that open
-/// a folder. The favourite is starred and picked, so enter opens it; another becomes the favourite.
+/// a folder. The favorite is starred and picked, so enter opens it; another becomes the favorite.
 fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     use crate::fileeditors::{Runs, Several};
     let t = app.effective_theme();
@@ -3209,7 +3209,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
     }
-    let foot_note = format!("{} your favourite. Choosing another makes it the favourite.", app.star());
+    let foot_note = format!("{} your favorite. Choosing another makes it the favorite.", app.star());
     f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(hint_fg(t))), note);
     let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);

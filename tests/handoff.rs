@@ -5,7 +5,7 @@
 //! The "claude" here is one small script wearing two hats: asked with `-p` it answers like `claude -p` (from a file
 //! the test writes), and started without it, it registers itself the way Claude does, prints how it was started and
 //! then gives a shell. A real `claude` is never run, every directory is a temp dir, and the only processes
-//! signalled are ones these tests started.
+//! signaled are ones these tests started.
 
 mod common;
 use common::*;
@@ -299,12 +299,12 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
     let lab = Lab::new("handoff-long");
     lab.save("sess-1", "Add a basket page to the shop");
     lab.project("sess-1");
-    let summary = "The basket page shows every item with its size, colour and price, and the totals at the foot of it \
+    let summary = "The basket page shows every item with its size, color and price, and the totals at the foot of it \
                    now add up across currencies once the exchange rates are fetched when the page first loads.";
     let steps: Vec<String> = (1..=8)
         .map(|i| {
             format!(
-                "Step {i}: check the totals, the sizes, the colours and the prices on the basket page before moving on to step {}",
+                "Step {i}: check the totals, the sizes, the colors and the prices on the basket page before moving on to step {}",
                 i + 1
             )
         })

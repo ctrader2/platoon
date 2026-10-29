@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn an_ugly_file_is_made_readable() {
-        // Dark grey text on a near-black background, every palette color the same murky grey, black-on-black
+        // Dark gray text on a near-black background, every palette color the same murky gray, black-on-black
         // extremes: the worst a sloppy file can do.
         let mut ugly = String::from("background = #0a0a0a\nforeground = #1c1c1c\n");
         for n in 0..16 {

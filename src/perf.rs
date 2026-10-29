@@ -1,5 +1,5 @@
 //! Scale checks with thousands of synthetic transcripts, some huge. The bounds are deliberately generous
-//! (they run in an unoptimised test build, possibly alongside other tests): they catch a scan that reads
+//! (they run in an unoptimized test build, possibly alongside other tests): they catch a scan that reads
 //! everything on every refresh, or state that grows without limit, not small regressions.
 
 use crate::index::{Indexer, Scanner};

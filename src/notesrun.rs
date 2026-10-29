@@ -1244,7 +1244,7 @@ mod tests {
                 let stop = stop.clone();
                 thread::spawn(move || {
                     while !stop.load(std::sync::atomic::Ordering::SeqCst) {
-                        // Ours, started here and waited for here; nothing else is ever signalled.
+                        // Ours, started here and waited for here; nothing else is ever signaled.
                         let _ = Command::new("true").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
                     }
                 })

@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Clicks closer together than this, on the same or a neighbouring cell, are one multi-click.
+/// Clicks closer together than this, on the same or a neighboring cell, are one multi-click.
 pub const MULTI_CLICK: Duration = Duration::from_millis(400);
 
 /// A cell of the session's text: a line of its `History` (0 is the oldest one kept) and a column.
@@ -205,7 +205,7 @@ pub struct Click {
     pub count: u8,
 }
 
-/// Which click this is: 1, 2 or 3. A click soon enough after the last one, on the same or a neighbouring
+/// Which click this is: 1, 2 or 3. A click soon enough after the last one, on the same or a neighboring
 /// cell, continues it; a fourth starts over at one (like most terminals).
 pub fn click_count(prev: Option<Click>, now: Instant, point: Point) -> u8 {
     let Some(p) = prev else { return 1 };
@@ -734,7 +734,7 @@ mod tests {
     // --- clicks --------------------------------------------------------------------------------------
 
     #[test]
-    fn clicks_in_quick_succession_on_the_same_or_a_neighbouring_cell_count_up_to_three_then_start_over() {
+    fn clicks_in_quick_succession_on_the_same_or_a_neighboring_cell_count_up_to_three_then_start_over() {
         let t0 = Instant::now();
         let mut prev = None;
         let mut counts = Vec::new();

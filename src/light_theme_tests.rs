@@ -211,7 +211,7 @@ fn every_theme_file_still_reads_in_256_colors() {
         let bg = q(t.bg);
         assert_ne!(q(t.surface), bg, "{name}: the selected row stands out");
         assert_ne!(q(t.selection_bg().unwrap()), bg, "{name}: selected text stands out");
-        // 256 colors are coarse, and a light background becomes the grey ramp's lightest (#eeeeee): a little is
+        // 256 colors are coarse, and a light background becomes the gray ramp's lightest (#eeeeee): a little is
         // lost, as for the built-ins (whose lowest role is 3.7:1 there), but everything still reads.
         assert!(contrast(q(t.text), bg) >= 5.0, "{name}: text {:.2}", contrast(q(t.text), bg));
         // (4.1:1 at the least, Rosé Pine Dawn: the clearer selection fill costs a little here, like selected text.)

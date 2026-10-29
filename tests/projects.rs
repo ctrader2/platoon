@@ -4,7 +4,7 @@
 //!
 //! The "claude" is a small script: it registers itself the way Claude does, prints how it was started and what
 //! `PLATOON_PROJECT` it got, can run the hook the way Claude would, and then gives a shell. A real `claude` is never
-//! started, and every directory is a temp dir; the only processes signalled are ones these tests started.
+//! started, and every directory is a temp dir; the only processes signaled are ones these tests started.
 
 mod common;
 use common::*;

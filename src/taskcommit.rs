@@ -54,7 +54,7 @@ fn run(program: &str, dir: &Path, args: &[&str], deadline: Instant) -> (bool, St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Its own process group: a hook git runs ends with it when time is up, and nothing else is ever signalled.
+        // Its own process group: a hook git runs ends with it when time is up, and nothing else is ever signaled.
         .process_group(0);
     let mut child = match crate::ai::spawn_retrying(&mut cmd) {
         Ok(c) => c,

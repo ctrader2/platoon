@@ -332,7 +332,7 @@ fn an_idle_codex_conversation_is_resumed_and_one_its_host_just_started_is_joined
 
 /// A process of the test's own holds a conversation's writer lock, as another Codex window (or Codex's background
 /// server) does: the row is running, opening it says where it is and does nothing else, archiving it is refused, and
-/// nothing is ever signalled. Linux: the holder is read from `/proc/locks`.
+/// nothing is ever signaled. Linux: the holder is read from `/proc/locks`.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_conversation_open_in_another_codex_window_is_shown_running_and_never_opened_twice_or_stopped() {
@@ -366,7 +366,7 @@ fn a_conversation_open_in_another_codex_window_is_shown_running_and_never_opened
     assert!(app.active_notice().is_some_and(|n| n.contains("Close it there to archive it")), "{:?}", app.active_notice());
     assert_eq!(app.stops_pending(), 0);
     assert_eq!(app.archive_writes_for_test(), 0);
-    assert!(crate::testkit::alive(holder.id()), "never signalled");
+    assert!(crate::testkit::alive(holder.id()), "never signaled");
     let _ = holder.kill();
     let _ = holder.wait();
     app.refresh_for_test();

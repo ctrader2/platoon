@@ -12,6 +12,10 @@ here.
   writes `/to-tasks` and deletes platoon's `/to-tickets` copy (one you changed is kept, and setup says so). Until then
   `/to-tickets` keeps working, platoon names it in the status line's reminder and on the empty Tasks tab, and a line
   above the key hints says to run setup. Uninstall removes platoon's copy under either name.
+- US spelling throughout: what platoon shows, its guide, the built-in squads and its AI instructions now say "color",
+  "favorite", "behavior". Your own squads and system prompts are kept as they are. If you changed the system prompt
+  for tasks from a conversation, the settings show it as "User Modified · default updated": that default's only change
+  is the spelling of one word.
 
 ## [1.3.0] - 2026-10-29
 

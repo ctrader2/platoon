@@ -48,7 +48,7 @@ sessions and tasks on the left and its notes on the right.
 The left pane has two sections. **Sessions** lists the project's conversations that are not a task's session (active
 ones first, then an `Archived (N)` group, dimmed), each with how full its context is and when it was last active.
 **Tasks** lists the project's tasks, all but the cancelled ones, open ones first and Done last: `#N`, the title and its
-state in the words and colours of the [Tasks tab](tasks-and-squads.md#the-tasks-tab) (Needs you, Working, Not started,
+state in the words and colors of the [Tasks tab](tasks-and-squads.md#the-tasks-tab) (Needs you, Working, Not started,
 Done). A section with nothing in it says so in one line. A task's session is counted and listed as its task, here and
 in the project's numbers (it isn't on the Sessions tab either). This list has every task but the cancelled ones,
 whichever list of the Tasks tab it is on.
@@ -88,7 +88,7 @@ These notes go to every session in this project; 2 of 3 have the latest version.
 
 **At most 8,000 characters go to a session** (about 2,000 tokens). The updates keep the notes under that (see
 [Kept short](#kept-short)). Notes you write past it are sent cut at the last line end before 8,000 characters, with one
-line saying they were cut, and the notes pane says so in the warning colour:
+line saying they were cut, and the notes pane says so in the warning color:
 
 ```
 Notes are 12,400 characters; only the first 8,000 go to sessions.

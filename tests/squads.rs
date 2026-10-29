@@ -1,5 +1,5 @@
 //! The Squads tab end to end, in a real terminal with the real binary: `4` lists every squad with where it comes from
-//! ("needs fixing" in the warning colour) and the picked one beside the list; `e` on a built-in writes its text to the
+//! ("needs fixing" in the warning color) and the picked one beside the list; `e` on a built-in writes its text to the
 //! user's squads folder and opens it in the notes' editors, and a change makes it the user's; `d` deletes it after a yes
 //! (kept as `.md.bak`) and the built-in is back; `n` makes a new squad from the template and opens it.
 //!

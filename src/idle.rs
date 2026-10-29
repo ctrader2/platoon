@@ -399,7 +399,7 @@ fn window_open(opens: &[(u32, Vec<String>)], host_parent: Option<u32>, session: 
 
 /// Apply the rules to each older host, stop the sessions they say to stop, and say why each other one is kept. Stopping
 /// is SIGTERM to the agent's process, and only when it is still the direct child of that host (a pid used again since
-/// is never touched); nothing else is signalled. Blocks for the reads: run it off the UI thread.
+/// is never touched); nothing else is signaled. Blocks for the reads: run it off the UI thread.
 pub fn check_older(hosts: &[OldHost], rules: &Rules) -> Vec<(u32, Option<Kept>)> {
     let rows = procs::table();
     let argv_of = |p: u32| procs::cmdline(p);
@@ -751,7 +751,7 @@ mod tests {
             attached: Some(pid),
         };
         assert_eq!(check_older(&hosts, &rules), [(pid, Some(Kept::Window))], "the app has it open");
-        // A host that isn't its parent: never signalled, whatever the rules say.
+        // A host that isn't its parent: never signaled, whatever the rules say.
         rules.attached = None;
         let stranger = [OldHost { info: HostInfo { host_pid: 1, ..info.clone() }, session: info.session() }];
         assert_eq!(check_older(&stranger, &rules), [(pid, None)]);
