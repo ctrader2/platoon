@@ -11,8 +11,7 @@ https://github.com/user-attachments/assets/5580075d-726e-4ca6-86f3-c4a2b029b9b3
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
-list, and everything below works with each, but for the status line and the names of a task's helpers at work, which
-only Claude Code has. With both installed, either can be switched off in platoon's settings.
+list, and everything below works with each. With both installed, either can be switched off in platoon's settings.
 → [Switching a program off](guide/settings-and-keys.md#switching-a-program-off)
 
 ## What it does
