@@ -551,6 +551,18 @@ mod tests {
     }
 
     #[test]
+    fn cursor_from_a_bundle_with_only_bin_code_is_offered_and_asked_to_wait() {
+        let w = World::new("mac-cursor");
+        w.program("Applications/Cursor.app/Contents/Resources/app/bin/code");
+        let list = w.list(true);
+        let cursor = by_id(&list, "cursor").expect("Cursor from its bundle");
+        assert_eq!(
+            (cursor.program.clone(), cursor.args.clone(), cursor.terminal),
+            (w.at("Applications/Cursor.app/Contents/Resources/app/bin/code"), vec!["--wait".to_string()], false)
+        );
+    }
+
+    #[test]
     fn jetbrains_ides_are_found_in_toolbox_scripts_opt_snaps_and_local_bin_on_linux() {
         let w = World::new("jb-linux");
         w.program("home/u/.local/share/JetBrains/Toolbox/scripts/pycharm");

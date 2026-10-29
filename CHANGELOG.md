@@ -31,6 +31,8 @@ here.
 
 ### Fixed
 
+- Cursor installed only as a Mac app (some builds ship its tool as `bin/code`), and IntelliJ IDEA installed from the
+  snap (its command is `intellij-idea`), are now found by `v` and `e`.
 - Making the window shorter while you look at a session no longer cuts off the session's newest lines. As in a terminal,
   the lines that no longer fit now go up into the session's history, where the wheel scrolls to them, and come back where
   they were when the window is taller again. Before, the lines at the bottom (the prompt among them) were dropped, and a

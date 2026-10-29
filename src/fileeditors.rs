@@ -70,12 +70,22 @@ pub struct FileEditor {
 /// What starts an editor that comes as a macOS app bundle, inside the bundle.
 #[derive(Clone, Copy)]
 enum Inside {
-    /// Its command line tool, which both lists run (`v` here, the notes' list in `editors.rs`). "" for an editor that
-    /// has no bundle.
-    Tool(&'static str),
+    /// Its command line tool, which both lists run (`v` here, the notes' list in `editors.rs`): the paths it may be at,
+    /// the first that runs wins (some builds ship the tool under another name). None for an editor that has no bundle.
+    Tool(&'static [&'static str]),
     /// A JetBrains IDE's launcher. `v` starts the bundle with `open -na`, as a Mac app is started; the notes' list runs
     /// the launcher itself with `--wait`, since `open` returns at once and platoon must know when the file is closed.
     Launcher(&'static str),
+}
+
+impl Inside {
+    /// The paths in the bundle to try, in order.
+    fn paths(&self) -> &[&'static str] {
+        match self {
+            Inside::Tool(paths) => paths,
+            Inside::Launcher(launcher) => std::slice::from_ref(launcher),
+        }
+    }
 }
 
 /// An editor platoon knows how to find and start.
@@ -100,7 +110,7 @@ const fn window(
     commands: &'static [&'static str],
     args: &'static [&'static str],
     apps: &'static [&'static str],
-    tool: &'static str,
+    tool: &'static [&'static str],
 ) -> Known {
     Known { id, name, commands, args, runs: Runs::Window, several: Several::OneWindow, apps, inside: Inside::Tool(tool) }
 }
@@ -124,18 +134,25 @@ const fn jetbrains(
 /// the terminal.
 const KNOWN: &[Known] = &[
     // `--new-window` with several folders: one window with each as a root (an untitled multi-root workspace).
-    window("code", "VS Code", &["code"], &["--new-window"], &["Visual Studio Code.app"], "Contents/Resources/app/bin/code"),
-    window("cursor", "Cursor", &["cursor"], &["--new-window"], &["Cursor.app"], "Contents/Resources/app/bin/cursor"),
+    window("code", "VS Code", &["code"], &["--new-window"], &["Visual Studio Code.app"], &["Contents/Resources/app/bin/code"]),
+    window(
+        "cursor",
+        "Cursor",
+        &["cursor"],
+        &["--new-window"],
+        &["Cursor.app"],
+        &["Contents/Resources/app/bin/cursor", "Contents/Resources/app/bin/code"],
+    ),
     // `zed --new a b`: a new workspace holding both folders. Some Linux packages call it `zeditor`.
-    window("zed", "Zed", &["zed", "zeditor"], &["--new"], &["Zed.app"], "Contents/MacOS/cli"),
+    window("zed", "Zed", &["zed", "zeditor"], &["--new"], &["Zed.app"], &["Contents/MacOS/cli"]),
     // `subl --new-window a b`: a new window with both folders in its sidebar.
-    window("subl", "Sublime Text", &["subl"], &["--new-window"], &["Sublime Text.app"], "Contents/SharedSupport/bin/subl"),
+    window("subl", "Sublime Text", &["subl"], &["--new-window"], &["Sublime Text.app"], &["Contents/SharedSupport/bin/subl"]),
     // `kate --new a b`: a Kate of its own with both folders (its Projects view).
-    window("kate", "Kate", &["kate"], &["--new"], &[], ""),
+    window("kate", "Kate", &["kate"], &["--new"], &[], &[]),
     jetbrains(
         "idea",
         "IntelliJ IDEA",
-        &["idea", "idea.sh", "intellij-idea-ultimate"],
+        &["idea", "idea.sh", "intellij-idea", "intellij-idea-ultimate"],
         &["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app"],
         "Contents/MacOS/idea",
     ),
@@ -181,7 +198,7 @@ const KNOWN: &[Known] = &[
         runs: Runs::Terminal,
         several: Several::First,
         apps: &[],
-        inside: Inside::Tool(""),
+        inside: Inside::Tool(&[]),
     },
     // Only with a config folder of the user's own: that is what "your setup" means (plain nvim is not a file-tree
     // editor).
@@ -193,7 +210,7 @@ const KNOWN: &[Known] = &[
         runs: Runs::Terminal,
         several: Several::First,
         apps: &[],
-        inside: Inside::Tool(""),
+        inside: Inside::Tool(&[]),
     },
 ];
 
@@ -299,8 +316,11 @@ pub fn detect_in(places: &Places) -> Vec<FileEditor> {
         if let Some(b) = bundle(k, places) {
             match k.inside {
                 Inside::Launcher(_) => out.push(of("open".into(), vec!["-na".into(), b.to_string_lossy().into_owned(), "--args".into()])),
-                Inside::Tool(tool) if runnable(&b.join(tool)) => out.push(of(b.join(tool).to_string_lossy().into_owned(), args())),
-                Inside::Tool(_) => {}
+                Inside::Tool(paths) => {
+                    if let Some(tool) = paths.iter().map(|p| b.join(p)).find(|p| runnable(p)) {
+                        out.push(of(tool.to_string_lossy().into_owned(), args()));
+                    }
+                }
             }
         }
     }
@@ -314,9 +334,9 @@ pub fn detect_in(places: &Places) -> Vec<FileEditor> {
 pub fn file_program(id: &str, places: &Places) -> Option<String> {
     let k = KNOWN.iter().find(|k| k.id == id)?;
     places.find(k.commands).or_else(|| {
-        let (Inside::Tool(inside) | Inside::Launcher(inside)) = k.inside;
-        let program = bundle(k, places)?.join(inside);
-        runnable(&program).then(|| program.to_string_lossy().into_owned())
+        let bundle = bundle(k, places)?;
+        let program = k.inside.paths().iter().map(|p| bundle.join(p)).find(|p| runnable(p))?;
+        Some(program.to_string_lossy().into_owned())
     })
 }
 
@@ -617,6 +637,36 @@ mod tests {
         assert_eq!(cmds[0].1, vec!["-na".to_string(), w.at("Applications/IntelliJ IDEA CE.app"), "--args".into(), "/r/a".into()]);
         // Linux places are not macOS ones.
         assert_eq!(w.ids(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn cursor_in_its_bundle_is_found_by_bin_cursor_or_else_bin_code() {
+        let w = World::new("mac-cursor");
+        // Homebrew's cask links the tool from `bin/code`: some builds ship it only so.
+        w.program("Applications/Cursor.app/Contents/Resources/app/bin/code");
+        let places = w.places(true);
+        let code = w.at("Applications/Cursor.app/Contents/Resources/app/bin/code");
+        let list = detect_in(&places);
+        let cursor = by_id(&list, "cursor").unwrap();
+        assert_eq!((cursor.program.as_str(), cursor.args.clone()), (code.as_str(), vec!["--new-window".to_string()]));
+        assert_eq!(file_program("cursor", &places), Some(code));
+        // With both, `bin/cursor` wins.
+        w.program("Applications/Cursor.app/Contents/Resources/app/bin/cursor");
+        let first = w.at("Applications/Cursor.app/Contents/Resources/app/bin/cursor");
+        assert_eq!(by_id(&detect_in(&places), "cursor").unwrap().program, first);
+        assert_eq!(file_program("cursor", &places), Some(first));
+        // VS Code's bundle is never taken for Cursor's.
+        let v = World::new("mac-cursor-not-code");
+        v.program("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code");
+        assert_eq!(file_program("cursor", &v.places(true)), None);
+    }
+
+    #[test]
+    fn intellij_idea_is_found_by_its_snaps_command() {
+        let w = World::new("idea-snap");
+        w.program("snap/bin/intellij-idea");
+        let list = w.list();
+        assert_eq!(by_id(&list, "idea").unwrap().program, w.at("snap/bin/intellij-idea"));
     }
 
     #[test]
