@@ -164,7 +164,7 @@ newer it says so once, in a line above the key hints:
 
 ```
 Claude Code 2.2.0 is newer than this platoon was checked with (2.1.312). If something looks wrong, update platoon.
-Codex 0.165.0 is newer than this platoon was checked with (0.164.0). If something looks wrong, update platoon.
+Codex 0.166.0 is newer than this platoon was checked with (0.165.0). If something looks wrong, update platoon.
 ```
 
 When both are newer, it is one line that names both. `platoon setup` prints the same each time it runs.
