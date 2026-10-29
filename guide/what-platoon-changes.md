@@ -223,7 +223,7 @@ sessions under `sessions/`, the names in `session_index.jsonl`, which conversati
 `thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`). It never writes Codex's conversations, and never edits `config.toml` itself
 (Codex writes the trust records for platoon's hooks, see [above](#in-codexs-hooks)). These files are
 not a documented interface, so **a Claude Code or Codex update can break platoon**. It was last checked with Claude
-Code 2.1.310 and Codex 0.164.0. When your Claude Code or Codex is newer than that, platoon says so once (it runs
+Code 2.1.312 and Codex 0.164.0. When your Claude Code or Codex is newer than that, platoon says so once (it runs
 `claude --version` and `codex --version` when it starts, each where it is installed), and `platoon setup` says so each
 time it runs.
 
