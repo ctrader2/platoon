@@ -1538,13 +1538,28 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_answer_changes_nothing_and_what_it_read_is_not_sent_again() {
+        let r = Rig::new("empty-answer");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        // Nothing in the conversation belongs in the notes: the usual answer.
+        r.fake.reply(1, "{}");
+        assert_eq!(update_once(&r.env, &id), Round::Unchanged);
+        assert_eq!(r.notes(&id), NOTES, "nothing written");
+        assert!(crate::notes::versions(&r.env.config, &id).is_empty(), "no copy kept either");
+        // It was understood, so the material counts as read and isn't paid for again.
+        assert_eq!(State::load(&r.env.config, &id).seen.get("s1"), Some(&1));
+        assert_eq!(update_once(&r.env, &id), Round::NothingNew);
+        assert_eq!(r.fake.calls(), 1);
+    }
+
+    #[test]
     fn a_reply_that_makes_no_sense_changes_nothing() {
         let r = Rig::new("bad");
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
-        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"summary":""}"#, r#"{"sections":[{"heading":"Status"}]}"#]
-            .iter()
-            .enumerate()
+        for (n, bad) in
+            ["I am afraid I cannot help with that.", "[]", r#"{"summary":""}"#, r#"{"sections":[{"heading":"Status"}]}"#].iter().enumerate()
         {
             r.fake.reply(n + 1, bad);
             assert_eq!(update_once(&r.env, &id), Round::BadReply, "{bad}");

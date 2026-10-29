@@ -153,21 +153,34 @@ so and only the first 8,000 characters are sent (see [The notes reach every sess
 
 ## The shape of the notes
 
+**What the notes are for.** They are the project's memory: what every new session of the project starts with, whatever
+part of it that session works on. What the project is, how it works or how it is set up, the rules and limits, what
+has been found out and ruled out, lessons learned the hard way, how you like the work done, where it is heading, and
+the decisions taken with their reasons. They change slowly. They are **not a progress report**: what one session is in
+the middle of goes to the next session through the [hand-off](#handing-work-on-to-a-new-session) (`h`), not into the
+notes. A project doesn't have to be software: an investigation, a move to new servers or a data analysis has notes of
+its own shape. The question for every line is: would a session starting next week, on another part of this project,
+need it, and will it still be true then? Most conversations change nothing that belongs here, and then platoon leaves
+the notes as they are.
+
 Three parts of `project.md` have a fixed place (the template starts with the first and the last; Open questions comes the
 first time something is open), and everything else fits the work:
 
-- **Summary**, at the top: a few lines saying what this project is and where it stands, so a new session (and you) can
-  read it in ten seconds.
-- **Open questions**, right after the summary: only what is **still open** - questions nobody has answered yet and
-  matters not settled yet - grouped under subheadings that fit the project (by area, or "Waiting on the user",
-  "Undecided"), plain bullets, nothing tagged onto them. It is not a to-do list. When a question is answered or a matter
-  settled, it is **taken out** (not ticked) and the answer appears as a new entry in Decisions. A notes file that already
-  had an Open questions section somewhere in the middle has it moved up here, word for word, the next time platoon writes;
-  one without it gets it when something first comes up.
-- **Decisions**, at the end: dated entries, added one at a time and never rewritten.
-- **In between, whatever the project needs.** Requirements and Status while something is being built; Symptoms, Ruled out
-  and Leads while a problem is being chased; Questions and Findings while something is being looked into. When the work
-  changes, the headings change with it: platoon may add one, rename one, fold two into one or put them in another order.
+- **Summary**, at the top: what this project is, and one line on the stage it is at ("1.2 is out; idle stop is being
+  reworked"), so a new session (and you) can read it in ten seconds. It changes only when the project itself has.
+- **Open questions**, right after the summary: only what is **still open** and waiting for your decision - grouped under
+  subheadings that fit the project, plain bullets, nothing tagged onto them. It is not a to-do list. When a question is
+  answered or a matter settled, it is **taken out** (not ticked) and the answer appears as a new entry in Decisions. A
+  notes file that already had an Open questions section somewhere in the middle has it moved up here, word for word, the
+  next time platoon writes; one without it gets it when something first comes up.
+- **Decisions**, at the end: dated entries, added one at a time and never rewritten. Each is a choice that settles how
+  the project works or what it does, with its reason ("Prices include VAT, because most buyers are in the EU").
+  Something that was done, finished or released is not a decision.
+- **In between, whatever the project needs**, and the headings change rarely. For something being built: What it is, How
+  it works, Rules, Lessons learned, Direction. For a problem being chased: Symptoms, Ruled out, Leads, Findings. For a
+  move to new servers: Scope, Inventory (which parts have moved and which haven't), Cutover plan, Rollback, Risks. For a
+  data analysis: Question, Data sources, Definitions, Findings, Dead ends. platoon may add a heading, rename one, fold
+  two into one or put them in another order.
 
 **How it is written.** The file is Markdown: short bullets with one fact each, indented bullets for detail, `##`
 subheadings to group things inside a section, bold now and then, and short paragraphs only in the summary. A section
@@ -176,9 +189,12 @@ headings without their `#`, bullets as `•` with wrapped lines lined up under t
 styled, links as their words (the address stays in the file). On the Linux console, or with `PLATOON_GLYPHS=plain`,
 bullets are `-` and `*`.
 
-**Nothing is ever deleted by a change of heading.** A section platoon doesn't mention stays exactly where it is, word for
-word. A heading can only go away by being carried into the one that replaces it, and everything of yours that was under it
-has to come across with it or the change is thrown away (see [What it may write](#what-it-may-write)).
+**platoon may correct or take out what it wrote itself, never what you wrote.** When something platoon wrote is no
+longer true, it may correct the line or take it out, and it may take out a whole section that holds only its own
+lines. A section it doesn't mention stays exactly where it is, word for word. A line of yours never goes: a section
+with one in it, or a heading you made, can't be taken out, and when a heading is renamed or two are folded into one,
+everything of yours under them has to come across or the change is thrown away (see [What it may write](#what-it-may-write)).
+The one exception is an open question that has been answered. `c` shows what an update changed, and `u` undoes it.
 
 ## Notes that keep themselves up to date
 
@@ -212,9 +228,9 @@ session to - is read in full once: its first message and its last 20.
 | Part | What an update may do |
 | --- | --- |
 | Summary | rewrite it, keeping it short; it is added at the top if it isn't there |
-| The sections in between | add one, reword **what platoon itself wrote** in one, rename one, fold two into one, put them in another order |
+| The sections in between | add one, correct or take out **what platoon itself wrote** in one, take out a section that holds **only** platoon's own lines, rename one, fold two into one, put them in another order |
 | Open questions | rewrite it; take out what has been answered. **A line of yours there may only go in the same update that adds its answer to Decisions**; it may move to another subheading |
-| Decisions | append dated entries; nothing already there is changed, except when the notes are over 8,000 characters: then older entries may be merged into fewer dated lines, and **every line of yours there** (one that doesn't start with `- ` and a date) has to come back word for word. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
+| Decisions | append dated entries, each one once; nothing already there is changed, except when the notes are over 8,000 characters: then older entries may be merged into fewer dated lines, and **every line of yours there** (one that doesn't start with `- ` and a date) has to come back word for word. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
 
 platoon remembers exactly which sentences it wrote itself, under which heading, so every other line of a section is yours.
 If an answer comes back without one of your lines in it, word for word, that section is **left exactly as it was** - and

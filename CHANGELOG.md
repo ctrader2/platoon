@@ -12,6 +12,23 @@ here.
   the Community editions) are in the list of editors `e` offers for a project's notes, a task's text, a squad and the
   system prompts, opened with `--wait` so platoon knows when you close the file.
 
+### Changed
+
+- **A project's notes are now its memory, not a progress report.** The automatic updates keep what a session starting
+  next week would need and what will still be true then: what the project is, how it works, its rules, what was found
+  and learned, your preferences, where it is heading, and decisions with their reasons. What one session is in the
+  middle of (branches, test counts, "being built", "running now") stays out: that is what the hand-off (`h`) is for.
+  The Summary says what the project is and the stage it is at in one line, and changes only when the project does; the
+  suggested sections no longer include a Status section; an investigation, a migration or a data analysis gets
+  sections of its own kind. Most conversations now leave the notes as they are, and lines are no longer reworded when
+  their meaning hasn't changed. If you changed "System prompt for project notes" yourself, yours is kept (Settings shows
+  "default updated").
+- platoon may now **correct or take out what it wrote itself** when it is no longer true, line by line or a whole
+  section of its own; before, nothing was ever deleted, so notes said things that had stopped being true. A line of
+  yours is still never changed or removed, and a section with one in it, or a heading you made, is never taken out.
+- Decisions are choices with their reasons; an event ("pushed", "released") is no longer one, and the same decision
+  given twice in one update is added once.
+
 ### Fixed
 
 - Making the window shorter while you look at a session no longer cuts off the session's newest lines. As in a terminal,
@@ -22,6 +39,8 @@ here.
   installed itself (JetBrains Toolbox's scripts, `~/.local/bin`, snaps, `/opt/<app>/bin`, and on macOS the apps in
   `/Applications` and `~/Applications`). Before, VS Code on a Mac was missing from the list unless you had run its
   "Install 'code' command in PATH".
+- An update that found nothing to change used to count as an answer platoon couldn't read, so the same conversation
+  was sent again at the next update; it is now taken as "nothing to change" and not sent again.
 
 ## [1.2.0] - 2026-10-28
 
