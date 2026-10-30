@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-29
+
 ### Changed
 
 - **`/to-tickets` is now `/to-tasks`**, to match what platoon calls the work everywhere else. Run `platoon setup`: it
@@ -185,7 +187,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/ctrader2/platoon/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/ctrader2/platoon/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ctrader2/platoon/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ctrader2/platoon/compare/v1.0.1...v1.1.0
