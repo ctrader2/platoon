@@ -93,11 +93,12 @@ impl World {
         serde_json::from_str(&fs::read_to_string(self.claude().join("settings.json")).unwrap()).unwrap()
     }
 
-    /// platoon 1.3's copy of the skill, under its old name `/to-tickets`, as its setup wrote it (its own last line, with
-    /// the cksum of the lines above): left by a setup that kept it, or put back. Returns its path.
-    fn old_platoon_skill(&self) -> PathBuf {
-        let p = self.claude().join("skills/to-tickets/SKILL.md");
-        let body = "---\nname: to-tickets\n---\n\nTurn the work into tasks.\n";
+    /// An earlier platoon's copy of the skill, under its old name `name` (`to-tasks` in 1.4, `to-tickets` through 1.3), as
+    /// its setup wrote it (its own last line, with the cksum of the lines above): left by a setup that kept it, or put
+    /// back. Returns its path.
+    fn old_platoon_skill(&self, name: &str) -> PathBuf {
+        let p = self.claude().join(format!("skills/{name}/SKILL.md"));
+        let body = format!("---\nname: {name}\n---\n\nTurn the work into tasks.\n");
         let mut c = Command::new("cksum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         std::io::Write::write_all(&mut c.stdin.take().unwrap(), body.as_bytes()).unwrap();
         let sum = String::from_utf8(c.wait_with_output().unwrap().stdout).unwrap();
@@ -170,9 +171,9 @@ fn uninstall_takes_out_exactly_what_the_real_setup_added_and_a_second_run_finds_
     w.set_up(&user);
     let set_up = fs::read_to_string(w.claude().join("settings.json")).unwrap();
     assert!(set_up.contains("hook guard") && set_up.contains("hook session-start") && set_up.contains(" statusline"), "{set_up}");
-    let skill = w.claude().join("skills/to-tasks/SKILL.md");
+    let skill = w.claude().join("skills/hand-to-squad/SKILL.md");
     assert!(fs::read_to_string(&skill).unwrap().contains(&format!("{BIN} task add")), "setup wrote the skill, naming itself");
-    let old = w.old_platoon_skill();
+    let (old, older) = (w.old_platoon_skill("to-tasks"), w.old_platoon_skill("to-tickets"));
 
     let out = w.command(BIN, &[], Some("n\n")).arg("uninstall").output().unwrap();
     let said = text(&out);
@@ -184,8 +185,9 @@ fn uninstall_takes_out_exactly_what_the_real_setup_added_and_a_second_run_finds_
         "Also delete your projects, notes, tasks and settings? [y/N]",
         "Removed:",
         "the status line, the session guard hook, the project notes hook, the notes updates hook",
-        &format!("the /to-tasks skill ({})", skill.display()),
-        &format!("the /to-tickets skill ({})", old.display()),
+        &format!("the /hand-to-squad skill ({})", skill.display()),
+        &format!("the /to-tasks skill ({})", old.display()),
+        &format!("the /to-tickets skill ({})", older.display()),
         "platoon's cache folder",
         "Kept:",
         "To delete them later: rm -rf",
@@ -202,20 +204,22 @@ fn uninstall_takes_out_exactly_what_the_real_setup_added_and_a_second_run_finds_
     assert!(said.contains("there was no terminal to ask in; --all deletes it"), "{said}");
     assert_eq!(w.settings(), user);
     assert!(!skill.parent().unwrap().exists() && w.claude().join("skills").is_dir(), "only the skill's own folder went");
-    assert!(!old.parent().unwrap().exists(), "and the old name's");
+    assert!(!old.parent().unwrap().exists() && !older.parent().unwrap().exists(), "and the old names'");
 }
 
 #[test]
-fn uninstall_and_the_script_keep_a_skill_platoon_did_not_write_under_either_name() {
+fn uninstall_and_the_script_keep_a_skill_platoon_did_not_write_under_any_name() {
     for (sh, with_platoon) in [("sh", true)].into_iter().chain(shells().into_iter().map(|s| (s, false))) {
         let w = World::new(&format!("own-skill-{sh}-{with_platoon}"));
         w.set_up(&json!({}));
-        let skill = w.claude().join("skills/to-tasks/SKILL.md");
+        let skill = w.claude().join("skills/hand-to-squad/SKILL.md");
         let mine = fs::read_to_string(&skill).unwrap().replace("Fewer is better", "Fewer is nicer");
         fs::write(&skill, &mine).unwrap();
-        let old = w.old_platoon_skill();
-        let old_mine = fs::read_to_string(&old).unwrap().replace("the work", "my work");
+        let (old, older) = (w.old_platoon_skill("to-tasks"), w.old_platoon_skill("to-tickets"));
+        let (old_mine, older_mine) =
+            (fs::read_to_string(&old).unwrap().replace("the work", "my work"), "---\nname: to-tickets\n---\nMine.\n");
         fs::write(&old, &old_mine).unwrap();
+        fs::write(&older, older_mine).unwrap();
         let out = if with_platoon {
             w.command(BIN, &[], Some("n\n")).arg("uninstall").output().unwrap()
         } else {
@@ -225,7 +229,8 @@ fn uninstall_and_the_script_keep_a_skill_platoon_did_not_write_under_either_name
         assert_eq!(out.status.code(), Some(0), "{sh}: {said}");
         assert_eq!(fs::read_to_string(&skill).unwrap(), mine, "{sh}: {said}");
         assert_eq!(fs::read_to_string(&old).unwrap(), old_mine, "{sh}: {said}");
-        for (name, at) in [("/to-tasks", &skill), ("/to-tickets", &old)] {
+        assert_eq!(fs::read_to_string(&older).unwrap(), older_mine, "{sh}: {said}");
+        for (name, at) in [("/hand-to-squad", &skill), ("/to-tasks", &old), ("/to-tickets", &older)] {
             let line = format!(
                 "the {name} skill at {}: platoon didn't write it (or it was changed since), so it is yours and stays",
                 at.display()
@@ -438,8 +443,8 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         assert_eq!(out.status.code(), Some(1), "{sh}: {said}");
         assert!(said.contains("No platoon program was found") && said.contains("Left them running. Nothing was changed."), "{said}");
         assert!(common::alive(pid) && w.cache().exists() && w.config().exists());
-        let skill = w.claude().join("skills/to-tasks/SKILL.md");
-        let old = w.old_platoon_skill();
+        let skill = w.claude().join("skills/hand-to-squad/SKILL.md");
+        let (old, older) = (w.old_platoon_skill("to-tasks"), w.old_platoon_skill("to-tickets"));
         assert!(skill.is_file(), "{sh}: untouched after a no");
 
         // Yes and yes: the session stops, the folders go, the worktree is listed and kept.
@@ -454,11 +459,14 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         assert!(said.contains(&format!("git -C {repo_s} worktree remove {}", wt.display())), "{sh}: {said}");
         assert!(said.contains(&format!("git -C {repo_s} branch -D task/4")), "{sh}: {said}");
         assert!(wt.join("a").exists(), "never deleted");
-        // The skill setup wrote is told apart with `cksum` alone, and goes with its folder; so does platoon 1.3's
-        // copy under the old name.
-        assert!(said.contains(&format!("the /to-tasks skill ({})", skill.display())), "{sh}: {said}");
-        assert!(said.contains(&format!("the /to-tickets skill ({})", old.display())), "{sh}: {said}");
-        assert!(!skill.parent().unwrap().exists() && !old.parent().unwrap().exists(), "{sh}");
+        // The skill setup wrote is told apart with `cksum` alone, and goes with its folder; so do platoon 1.4's and
+        // 1.3's copies under the old names.
+        assert!(said.contains(&format!("the /hand-to-squad skill ({})", skill.display())), "{sh}: {said}");
+        assert!(said.contains(&format!("the /to-tasks skill ({})", old.display())), "{sh}: {said}");
+        assert!(said.contains(&format!("the /to-tickets skill ({})", older.display())), "{sh}: {said}");
+        for at in [&skill, &old, &older] {
+            assert!(!at.parent().unwrap().exists(), "{sh}: {}", at.display());
+        }
         // Claude Code's settings can't be taken out without platoon: said, with how.
         assert!(said.contains("Claude Code's settings still mention platoon") && said.contains("platoon hook guard"), "{said}");
         assert!(w.settings().to_string().contains("hook guard"));

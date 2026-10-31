@@ -1,5 +1,5 @@
 //! The setup notice in the app (`setupnotice.rs`, `App::news_showing`): `platoon setup` has something to add outside
-//! the start-up gate (the `/to-tasks` skill missing, platoon's copy out of date or only under its old name), said once on its own line above
+//! the start-up gate (the `/hand-to-squad` skill missing, platoon's copy out of date or only under an old name), said once on its own line above
 //! the footer of the Sessions and Projects lists, where the version notice shows, and put away by the next key or click
 //! like it; remembered once it has shown, gone by itself once the skill is in, and never for a skill of the user's or
 //! where Claude Code isn't in use. Drawn the way a terminal shows it (TestBackend). Every folder is a temp dir
@@ -16,9 +16,8 @@ use ratatui::{
 };
 use std::fs;
 
-const NEW: &str = "New: /to-tasks in Claude Code sessions — run `platoon setup` to add it";
-const UPDATE: &str = "platoon's /to-tasks skill has an update — run `platoon setup`";
-const RENAMED: &str = "/to-tickets is now called /to-tasks — run `platoon setup` to rename it";
+const NEW: &str = "New: /hand-to-squad in Claude Code sessions — run `platoon setup` to add it";
+const UPDATE: &str = "platoon's /hand-to-squad skill has an update — run `platoon setup`";
 const VERSION: &str = "Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). If something looks wrong, update platoon.";
 const NONE: [&str; 0] = [];
 
@@ -74,7 +73,7 @@ fn a_missing_skill_is_said_on_its_own_line_just_above_the_footer_whole_at_110_an
     for width in [110u16, 80] {
         let lines = shown(&app, width, 24);
         println!("{width}x24:\n{}\n", lines.join("\n"));
-        let at = line_of(&lines, "New: /to-tasks");
+        let at = line_of(&lines, "New: /hand-to-squad");
         assert_eq!(at, lines.len() - 2, "{width}: the line just above the footer");
         assert_eq!(lines[at].trim(), NEW, "{width}: whole, on one line");
         assert!(lines[lines.len() - 1].contains("? help"), "{width}: the footer is still there");
@@ -90,25 +89,55 @@ fn platoons_older_copy_is_said_as_an_update() {
     let app = looked(&w);
     assert_eq!(app.news_showing(), [UPDATE]);
     let lines = shown(&app, 80, 24);
-    assert_eq!(lines[line_of(&lines, "platoon's /to-tasks")].trim(), UPDATE);
+    assert_eq!(lines[line_of(&lines, "platoon's /hand-to-squad")].trim(), UPDATE);
+}
+
+/// platoon's own unchanged copy under the old name `old` (its text matters not: its last line does).
+fn old_copy(w: &World, old: &str) -> std::path::PathBuf {
+    let at = skill::old_path(&w.root, old);
+    fs::create_dir_all(at.parent().unwrap()).unwrap();
+    fs::write(&at, skill::text("/an/older/platoon")).unwrap();
+    at
 }
 
 #[test]
-fn platoons_copy_under_the_old_name_is_said_as_a_rename_until_setup_renames_it() {
-    let w = world("sn-renamed");
-    // platoon's own unchanged copy at the old /to-tickets place (its text matters not: its last line does).
-    let old = skill::old_path(&w.root);
-    fs::create_dir_all(old.parent().unwrap()).unwrap();
-    fs::write(&old, skill::text("/an/older/platoon")).unwrap();
-    let mut app = looked(&w);
-    assert_eq!(app.news_showing(), [RENAMED]);
-    let lines = shown(&app, 80, 24);
-    assert_eq!(lines[line_of(&lines, "/to-tickets is now")].trim(), RENAMED, "whole, on one line at 80 columns");
-    // Setup run: /to-tasks in, the old copy gone; the notice goes with its reason.
-    skill::install(&w.root, &exe());
-    assert_eq!(skill::retire_old(&w.root), skill::Retired::Removed(old));
-    app.refresh();
-    assert_eq!(app.news_showing(), NONE);
+fn platoons_copy_under_an_old_name_is_said_as_a_rename_until_setup_renames_it() {
+    for (old, other) in [("/to-tasks", "/to-tickets"), ("/to-tickets", "/to-tasks")] {
+        let w = world(&format!("sn-renamed{}", old.replace('/', "-")));
+        let at = old_copy(&w, old);
+        let renamed = format!("{old} is now called /hand-to-squad — run `platoon setup` to rename it");
+        let mut app = looked(&w);
+        assert_eq!(app.news_showing(), [renamed.as_str()]);
+        let lines = shown(&app, 80, 24);
+        assert_eq!(lines[line_of(&lines, &format!("{old} is now"))].trim(), renamed, "whole, on one line at 80 columns");
+        // Setup run: /hand-to-squad in, the old copy gone; the notice goes with its reason.
+        skill::install(&w.root, &exe());
+        let retired = skill::retire_old(&w.root);
+        assert!(
+            retired.contains(&(old, skill::Retired::Removed(at))) && retired.contains(&(other, skill::Retired::NotThere)),
+            "{retired:?}"
+        );
+        app.refresh();
+        assert_eq!(app.news_showing(), NONE);
+    }
+}
+
+#[test]
+fn a_user_told_of_the_rename_to_to_tasks_is_told_of_this_one_once() {
+    // What platoon 1.4 remembered after saying "/to-tickets is now called /to-tasks" (or "New: /to-tasks"): the same
+    // step, a reason naming its own skill's text (the cksum of 1.4's src/skills/to-tasks/SKILL.md).
+    for (said_by_14, old) in
+        [("renamed 1741090795", "/to-tickets"), ("missing 1741090795", "/to-tasks"), ("renamed 1741090795", "/to-tasks")]
+    {
+        let w = world("sn-told-by-14");
+        fs::write(w.cache.join("setup-notice.json"), format!(r#"{{"said": {{"to-tickets": "{said_by_14}"}}}}"#)).unwrap();
+        old_copy(&w, old);
+        let renamed = format!("{old} is now called /hand-to-squad — run `platoon setup` to rename it");
+        let mut app = looked(&w);
+        assert_eq!(app.news_showing(), [renamed.as_str()], "{said_by_14} {old}");
+        key(&mut app, 'j');
+        assert_eq!(looked(&w).news_showing(), NONE, "once");
+    }
 }
 
 #[test]
@@ -122,7 +151,7 @@ fn shown_once_put_away_by_a_key_or_a_click_and_never_again_for_the_same_reason()
     app.look_for_setup_news();
     app.refresh();
     assert_eq!(app.news_showing(), NONE);
-    assert!(!words(&shown(&app, 110, 24)).contains("New: /to-tasks"), "the notice; the empty Tasks tab names /to-tasks itself");
+    assert!(!words(&shown(&app, 110, 24)).contains("New: /hand-to-squad"), "the notice; the empty Tasks tab names /hand-to-squad itself");
     assert!(!state.exists(), "not said before it has shown");
     // On a list: it shows, and is remembered as said.
     app.top = TOP_SESSIONS;
@@ -197,7 +226,7 @@ fn gone_by_itself_once_the_skill_is_in() {
 fn nothing_for_a_skill_of_the_users() {
     let w = world("sn-theirs");
     fs::create_dir_all(skill::path(&w.root).parent().unwrap()).unwrap();
-    fs::write(skill::path(&w.root), "---\nname: to-tasks\n---\nMy own.\n").unwrap();
+    fs::write(skill::path(&w.root), "---\nname: hand-to-squad\n---\nMy own.\n").unwrap();
     assert_eq!(looked(&w).news_showing(), NONE);
     // platoon's copy, changed by the user: theirs too.
     let edited = skill::text(&exe()).replace("Fewer is better", "Fewer is nicer");
@@ -262,7 +291,7 @@ fn with_a_version_notice_both_show_each_on_its_own_lines_and_one_key_puts_both_a
     for (width, height) in [(110u16, 24u16), (80, 24)] {
         let lines = shown(&app, width, height);
         println!("{width}x{height}:\n{}\n", lines.join("\n"));
-        let at = line_of(&lines, "New: /to-tasks");
+        let at = line_of(&lines, "New: /hand-to-squad");
         assert_eq!(lines[at].trim(), NEW, "{width}");
         assert!(lines[at + 1].trim_start().starts_with("Claude Code 2.2.0 is newer"), "{width}: the version notice starts the next line");
         assert_eq!(words(&lines[at + 1..lines.len() - 1]), VERSION, "{width}: whole, just above the footer");
@@ -271,7 +300,7 @@ fn with_a_version_notice_both_show_each_on_its_own_lines_and_one_key_puts_both_a
     // A short terminal: one line each, the longer one cut.
     let lines = shown(&app, 80, 14);
     println!("80x14:\n{}\n", lines.join("\n"));
-    let at = line_of(&lines, "New: /to-tasks");
+    let at = line_of(&lines, "New: /hand-to-squad");
     assert_eq!(at, lines.len() - 3);
     assert!(lines[at + 1].trim_end().ends_with('…'), "{:?}", lines[at + 1]);
     key(&mut app, 'j');

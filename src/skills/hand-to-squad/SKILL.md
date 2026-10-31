@@ -1,6 +1,6 @@
 ---
-name: to-tasks
-description: "Turn work agreed in this conversation, or a plan the user points at, into platoon tasks that a squad will do; the user approves the list before anything is made. The user runs it by typing /to-tasks. When the conversation has settled on concrete work with several steps, you may suggest it once, in one line at the end of a reply (\"/to-tasks turns this into platoon tasks for a squad.\"). Never interrupt work in progress to suggest it, never run it unasked, and don't suggest it again in this conversation."
+name: hand-to-squad
+description: "Turn work agreed in this conversation, or a plan the user points at, into platoon tasks that a squad will do; the user approves the list before anything is made. The user runs it by typing /hand-to-squad. When the conversation has settled on concrete work with several steps, you may suggest it once, in one line at the end of a reply (\"/hand-to-squad sends this work to a platoon squad.\"). Never interrupt work in progress to suggest it, never run it unasked, and don't suggest it again in this conversation."
 argument-hint: "[what to turn into tasks: a plan file, or a part of the conversation]"
 allowed-tools:
   - "Bash({{platoon}} task squads:*)"

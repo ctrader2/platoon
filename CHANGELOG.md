@@ -6,6 +6,15 @@ here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`/to-tasks` is now `/hand-to-squad`**: it hands the work agreed in a conversation to a platoon squad, as one or more
+  tasks, the same way as before. Run `platoon setup`: it writes `/hand-to-squad` and deletes platoon's copy under the
+  old name, `/to-tasks` or `/to-tickets` from before 1.4 (one you changed is kept, and setup says so). Until then the
+  old command keeps working, platoon names it in the status line's reminder (which now reads "/hand-to-squad sends
+  this work to a squad") and on the empty Tasks tab, and a line above the key hints says to run setup. Uninstall
+  removes platoon's copy under any of the three names.
+
 ### Fixed
 
 - Selecting text in Claude Code's full-screen mode (`/tui fullscreen`): dragging past the top or bottom of the session

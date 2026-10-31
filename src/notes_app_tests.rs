@@ -515,7 +515,7 @@ fn notes_past_the_cap_are_warned_about_in_the_warning_color() {
 fn the_help_says_where_the_notes_cap_and_the_ways_to_make_tasks_apply() {
     let (_w, mut app, _id) = on_the_notes("notes-cap-help");
     let mut term = Terminal::new(TestBackend::new(150, 70)).unwrap();
-    let skill = "In a Claude Code session, type /to-tasks to turn the work agreed there into tasks for a squad";
+    let skill = "In a Claude Code session, type /hand-to-squad to turn the work agreed there into tasks for a squad";
     let t = "t on a session's row drafts tasks from its conversation";
     key(&mut app, KeyCode::Char('?'));
     let shown = flat(&draw(&mut term, &app));

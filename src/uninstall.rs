@@ -3,9 +3,9 @@
 //!
 //! What it does, in this order, so a "no" leaves everything as it was:
 //! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes) and in
-//!    Codex's `hooks.json` (`setup::take_out_codex`), the `/to-tasks` skill and its copy under the old name,
-//!    `/to-tickets` (`skill::state`, `skill::old_state`), the sessions platoon's hosts are running, the worktrees tasks
-//!    recorded, and the folders.
+//!    Codex's `hooks.json` (`setup::take_out_codex`), the `/hand-to-squad` skill and its copies under the old names,
+//!    `/to-tasks` and `/to-tickets` (`skill::state`, `skill::old_state`), the sessions platoon's hosts are running, the
+//!    worktrees tasks recorded, and the folders.
 //! 2. Ask: whether to stop the running sessions (no: stop here, nothing changed; `--stop-sessions` says yes), then
 //!    whether to delete the config folder (the user's projects, notes, tasks and settings: default keep; `--all`
 //!    deletes it without asking). Answers come from the terminal (`/dev/tty`, so `curl ... | sh` can still ask); with
@@ -15,7 +15,7 @@
 //!    (`setup::forget_codex_trust`, through Codex's app-server: Codex's other records stay, and when Codex can't be
 //!    asked they are left and said to be harmless) and take them out of `hooks.json`, have Codex forget its trust in
 //!    the folders of tasks' worktrees platoon had it trust (`codex_server::forget_folders`, only those the tasks
-//!    record), delete the `/to-tasks` and `/to-tickets` skills when each is the copy platoon wrote
+//!    record), delete the `/hand-to-squad`, `/to-tasks` and `/to-tickets` skills when each is the copy platoon wrote
 //!    (`skill::remove_at`; one of the user's stays, and is said), delete the cache folder, the config folder when asked, and older platoons' leftovers.
 //! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
@@ -269,10 +269,10 @@ pub struct Plan {
     /// The task worktrees' folders platoon had Codex trust and that its task records still name (`codex_trust_left`).
     codex_trust: Vec<String>,
     config_there: bool,
-    /// What is at the `/to-tasks` skill's place in Claude Code's folder.
+    /// What is at the `/hand-to-squad` skill's place in Claude Code's folder.
     skill: Result<crate::skill::State, String>,
-    /// What is at the place of its copy under its old name, `/to-tickets`.
-    old_skill: Result<crate::skill::State, String>,
+    /// What is at the place of its copy under each old name (`skill::OLD_COMMANDS`).
+    old_skills: Vec<(&'static str, Result<crate::skill::State, String>)>,
 }
 
 /// The folders platoon had Codex trust for tasks' worktrees, as the tasks in `config` record them, while those records
@@ -327,7 +327,7 @@ pub fn look(places: &Places, git: &str) -> Plan {
         codex_trust: codex_trust_left(&places.config),
         config_there: places.config.exists(),
         skill: crate::skill::state(&places.root),
-        old_skill: crate::skill::old_state(&places.root),
+        old_skills: crate::skill::OLD_COMMANDS.into_iter().map(|old| (old, crate::skill::old_state(&places.root, old))).collect(),
     }
 }
 
@@ -553,11 +553,9 @@ pub fn run(
         }
     }
 
-    // The /to-tasks skill and its copy under the old name, /to-tickets: only a copy platoon wrote and nobody changed.
-    let skills = [
-        ("/to-tasks", &plan.skill, crate::skill::path(&places.root)),
-        ("/to-tickets", &plan.old_skill, crate::skill::old_path(&places.root)),
-    ];
+    // The /hand-to-squad skill and its copies under the old names: only a copy platoon wrote and nobody changed.
+    let olds = plan.old_skills.iter().map(|(old, state)| (*old, state, crate::skill::old_path(&places.root, old)));
+    let skills = std::iter::once((crate::skill::COMMAND, &plan.skill, crate::skill::path(&places.root))).chain(olds);
     for (name, state, at) in skills {
         match state {
             Ok(crate::skill::State::Missing) => {}

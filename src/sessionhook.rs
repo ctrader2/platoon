@@ -8,7 +8,7 @@
 //! `startup` or `clear`) that is in no project yet is placed in that one here, before platoon itself has seen it.
 //!
 //! Codex's own hook gets the same variables from the process platoon started it in, and fires with the first message.
-//! Nothing about making tasks is said here: that is the `/to-tasks` skill (`skill.rs`) and `t` in platoon.
+//! Nothing about making tasks is said here: that is the `/hand-to-squad` skill (`skill.rs`) and `t` in platoon.
 //!
 //! It must never get in a session's way: it is quick, prints nothing unless it has notes to give, and exits 0
 //! whatever happens.
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_session_platoon_started_is_given_its_notes_and_nothing_about_making_tasks() {
-        // Making tasks is the /to-tasks skill's and `t`'s: nothing of it at the start, Claude Code's or Codex's.
+        // Making tasks is the /hand-to-squad skill's and `t`'s: nothing of it at the start, Claude Code's or Codex's.
         let r = Rig::new("no-offer");
         let mut p = Projects::open(&r.config);
         let id = p.create("Web shop").unwrap();

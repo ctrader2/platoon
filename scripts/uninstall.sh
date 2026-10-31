@@ -4,11 +4,11 @@
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh -s -- --all
 #
-# 1. When a platoon is found, `platoon uninstall` takes platoon's status line, hooks and /to-tasks skill (and its old name's, /to-tickets) out of Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
+# 1. When a platoon is found, `platoon uninstall` takes platoon's status line, hooks and /hand-to-squad skill (and its old names', /to-tasks and /to-tickets) out of Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
 #    asks before stopping the sessions it runs (a "no" there stops everything, with nothing changed).
 #    When none is found (or one too old to have `uninstall`), this script asks the same questions and deletes the same
-#    folders itself (and the /to-tasks skill, and /to-tickets as platoon 1.3 and before called it, each when it is
-#    platoon's unchanged copy), and says how to take the entries out of Claude Code's settings by hand.
+#    folders itself (and the /hand-to-squad skill, and /to-tasks and /to-tickets as platoon 1.4 and 1.3 called it, each
+#    when it is platoon's unchanged copy), and says how to take the entries out of Claude Code's settings by hand.
 # 2. Then it removes the program the way it was installed: Homebrew, cargo, or the install script (its receipt in
 #    ~/.config/platoon-tui says where it put platoon). Anything else: it says where the program is.
 #
@@ -236,9 +236,9 @@ without_platoon() {
     return 0
 }
 
-# The skill platoon setup wrote, named $1 (to-tasks, or to-tickets as platoon 1.3 and before called it): only while
-# its last line is setup's and carries the cksum of the lines above it (src/skill.rs writes that line: change both
-# together). Anything else there is the user's and stays.
+# The skill platoon setup wrote, named $1 (hand-to-squad, or to-tasks and to-tickets as platoon 1.4 and 1.3 called
+# it): only while its last line is setup's and carries the cksum of the lines above it (src/skill.rs writes that line:
+# change both together). Anything else there is the user's and stays.
 remove_skill() {
     f="$CLAUDE_ROOT/skills/$1/SKILL.md"
     if [ -L "$f" ]; then
@@ -448,6 +448,7 @@ main() {
         fi
         open_tty
         without_platoon || return 1
+        remove_skill hand-to-squad
         remove_skill to-tasks
         remove_skill to-tickets
         remove_program

@@ -1,4 +1,4 @@
-//! The `/to-tasks` hint at the end of Claude Code's status line (`platoon statusline`): a few words, shown only while
+//! The `/hand-to-squad` hint at the end of Claude Code's status line (`platoon statusline`): a few words, shown only while
 //! a conversation has agreed on work that could become platoon tasks, never a question and never anything sent into
 //! the conversation.
 //!
@@ -10,10 +10,10 @@
 //! - **An approved plan**: an `ExitPlanMode` the user said yes to, near the end of the transcript
 //!   (`claude::to_tickets_tail`).
 //!
-//! It goes away once the skill is used in the conversation after the signal (`/to-tasks`, or its old name
-//! `/to-tickets`), when a later notes verdict about it is no, and `LIFE_SECS` after the signal. Never in a task's
-//! session (`PLATOON_TASK` set: the caller doesn't ask, and a session a task records is refused here too), never
-//! without the skill installed for Claude Code, never in Codex. It names the skill as installed (`skill::command`).
+//! It goes away once the skill is used in the conversation after the signal (`/hand-to-squad`, or an old name,
+//! `/to-tasks` or `/to-tickets`), when a later notes verdict about it is no, and `LIFE_SECS` after the signal. Never in
+//! a task's session (`PLATOON_TASK` set: the caller doesn't ask, and a session a task records is refused here too),
+//! never without the skill installed for Claude Code, never in Codex. It names the skill as installed (`skill::command`).
 
 use crate::agents::claude::ToTicketsTail;
 use std::{
@@ -25,7 +25,7 @@ use std::{
 pub const LIFE_SECS: u64 = 30 * 60;
 
 /// The hint, as the status line ends with it, after the skill's command (`skill::command`: the one installed).
-pub const HINT: &str = "turns this into tasks";
+pub const HINT: &str = "sends this work to a squad";
 
 const DIR: &str = "tickets-hint";
 
@@ -171,15 +171,17 @@ mod tests {
     #[test]
     fn the_hint_gives_way_first_when_the_line_is_narrow() {
         let line = "5h 12% · 7d 40%";
-        let hinted = format!("{line} · /to-tasks turns this into tasks");
-        assert_eq!(with_hint(line, "/to-tasks", 120), hinted);
+        let hinted = format!("{line} · /hand-to-squad sends this work to a squad");
+        assert_eq!(with_hint(line, "/hand-to-squad", 120), hinted);
         let full = hinted.chars().count();
-        assert_eq!(with_hint(line, "/to-tasks", full), hinted);
-        assert_eq!(with_hint(line, "/to-tasks", full - 1), format!("{line} · /to-tasks"));
-        assert_eq!(with_hint(line, "/to-tasks", line.chars().count() + 3), line, "no room even for the short one");
-        assert_eq!(with_hint("", "/to-tasks", 120), "/to-tasks turns this into tasks", "no usage figures: the hint alone");
-        // The skill by its old name while only that is installed.
-        assert_eq!(with_hint(line, "/to-tickets", 120), format!("{line} · /to-tickets turns this into tasks"));
+        assert_eq!(with_hint(line, "/hand-to-squad", full), hinted);
+        assert_eq!(with_hint(line, "/hand-to-squad", full - 1), format!("{line} · /hand-to-squad"));
+        assert_eq!(with_hint(line, "/hand-to-squad", line.chars().count() + 3), line, "no room even for the short one");
+        assert_eq!(with_hint("", "/hand-to-squad", 120), "/hand-to-squad sends this work to a squad", "no usage figures: the hint alone");
+        // The skill by an old name while only that is installed.
+        for old in ["/to-tasks", "/to-tickets"] {
+            assert_eq!(with_hint(line, old, 120), format!("{line} · {old} sends this work to a squad"));
+        }
     }
 
     #[test]

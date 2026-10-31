@@ -211,7 +211,7 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
 - `diagnostics_log` is `true` or `false`; anything else there means the default (`false`): see
   [Reporting a problem](troubleshooting.md#reporting-a-problem).
 - `offer_tasks`, which platoon 1.0 wrote for its offer to make tasks, does nothing now and stays in the file as it is
-  (the offer is the [`/to-tasks`](tasks-and-squads.md#to-tasks-in-a-session) skill).
+  (the offer is the [`/hand-to-squad`](tasks-and-squads.md#hand-to-squad-in-a-session) skill).
 - `tokens_enabled` is the master switch for the smart features (`false` unless you said yes), and `token_features` has
   one switch per feature (`names`, `find`, `project_notes`, `project_description`). `tokens_asked` is `true` once
   `platoon setup` has asked whether platoon may use your plan, so it doesn't ask again.

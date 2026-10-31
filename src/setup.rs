@@ -7,9 +7,10 @@
 //! block starting platoon. Codex runs a hook only once it is trusted: setup has Codex itself trust exactly the hooks it
 //! wrote (`trust_codex`), and uninstall has it forget them (`forget_codex_trust`).
 //!
-//! Where Claude Code is, setup also writes the `/to-tasks` skill (`skill.rs`, `SKILL_STEP`): reported like a step,
+//! Where Claude Code is, setup also writes the `/hand-to-squad` skill (`skill.rs`, `SKILL_STEP`): reported like a step,
 //! never part of the start-up gate (`check`), so a platoon upgraded without running setup again still starts. platoon's
-//! unchanged copy under the skill's old name, `/to-tickets`, goes once the new one is in (`skill::retire_old`).
+//! unchanged copy under each of the skill's old names, `/to-tasks` and `/to-tickets`, goes once the new one is in
+//! (`skill::retire_old`).
 
 use crate::agents::{Agent, codex, codex_server};
 use crate::{ai, settings};
@@ -48,18 +49,19 @@ pub const STEPS: [Step; 4] = [
     },
 ];
 
-/// The `/to-tasks` skill (`skill::install`), shown after `STEPS` in setup's report. Not in `check`: it never
+/// The `/hand-to-squad` skill (`skill::install`), shown after `STEPS` in setup's report. Not in `check`: it never
 /// blocks starting platoon.
 pub const SKILL_STEP: Step = Step {
-    name: "/to-tasks",
-    what: "a skill: type /to-tasks in a session to turn the work agreed there into tasks",
+    name: "/hand-to-squad",
+    what: "a skill: type /hand-to-squad in a session to turn the work agreed there into tasks",
     blocking: false,
     missing_note: "",
 };
 
-/// The skill under its old name, shown only when setup leaves a copy of it in place (`skill::retire_old`).
-const OLD_SKILL_STEP: Step =
-    Step { name: "/to-tickets", what: "the skill's old name: /to-tasks replaces it", blocking: false, missing_note: "" };
+/// The skill under its old name `old`, shown only when setup leaves a copy of it in place (`skill::retire_old`).
+fn old_skill_step(old: &'static str) -> Step {
+    Step { name: old, what: "the skill's old name: /hand-to-squad replaces it", blocking: false, missing_note: "" }
+}
 
 /// The steps for Codex, each one or more of its hooks (`CODEX_STEP_HOOKS`, in `codex::hooks` order). None of them
 /// blocks starting platoon.
@@ -159,7 +161,7 @@ pub fn log_report(r: &Report) {
         };
         crate::diag::decision("setup", "skill", &[("outcome", outcome.into())]);
     }
-    if let Some(k) = &r.old_skill {
+    for (old, k) in &r.old_skills {
         let outcome = match k {
             crate::skill::Retired::NotThere => "not-there",
             crate::skill::Retired::Removed(_) => "removed",
@@ -167,7 +169,7 @@ pub fn log_report(r: &Report) {
             crate::skill::Retired::Kept(_) => "kept",
             crate::skill::Retired::Failed(_) => "failed",
         };
-        crate::diag::decision("setup", "old-skill", &[("outcome", outcome.into())]);
+        crate::diag::decision("setup", "old-skill", &[("name", (*old).into()), ("outcome", outcome.into())]);
     }
     if let Some(c) = &r.codex {
         for (step, o) in CODEX_STEPS.iter().zip(&c.outcomes) {
@@ -199,10 +201,11 @@ pub struct Report {
     pub codex: Option<CodexReport>,
     /// The programs installed but switched off in platoon's settings: skipped, and said so.
     pub off: Vec<Agent>,
-    /// What became of the `/to-tasks` skill, when setup put it in (`skill::install`).
+    /// What became of the `/hand-to-squad` skill, when setup put it in (`skill::install`).
     pub skill: Option<crate::skill::Installed>,
-    /// What became of the skill's copy under its old name, `/to-tickets`, after that (`skill::retire_old`).
-    pub old_skill: Option<crate::skill::Retired>,
+    /// What became of the skill's copy under each old name, `/to-tasks` and `/to-tickets`, after that
+    /// (`skill::retire_old`; empty when setup didn't put the skill in).
+    pub old_skills: Vec<(&'static str, crate::skill::Retired)>,
 }
 
 /// What setup did in Codex's `hooks.json`.
@@ -630,7 +633,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None, off: Vec::new(), skill: None, old_skill: None })
+    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None, off: Vec::new(), skill: None, old_skills: Vec::new() })
 }
 
 impl Report {
@@ -645,7 +648,7 @@ impl Report {
             codex: None,
             off: Vec::new(),
             skill: None,
-            old_skill: None,
+            old_skills: Vec::new(),
         }
     }
 }
@@ -968,11 +971,9 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         });
     }
     if let Some(s) = &r.skill {
-        out.push(skill_row(s, r.old_skill.as_ref(), color));
+        out.push(skill_row(s, &r.old_skills, color));
     }
-    if let Some(row) = r.old_skill.as_ref().and_then(|o| old_skill_row(o, color)) {
-        out.push(row);
-    }
+    out.extend(r.old_skills.iter().filter_map(|(old, o)| old_skill_row(old, o, color)));
     out.push(String::new());
     if r.saved.is_some() {
         out.push(saved_line(&root.join("settings.json"), r.backed_up.then_some("settings.json.platoon-bak")));
@@ -983,7 +984,7 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         .as_ref()
         .is_some_and(|c| c.saved.is_some() || matches!(&c.trust, Some(Trust::Asked(each)) if each.contains(&HookTrust::Now)));
     let skill_written = matches!(r.skill, Some(crate::skill::Installed::Added | crate::skill::Installed::Updated))
-        || matches!(r.old_skill, Some(crate::skill::Retired::Removed(_)));
+        || r.old_skills.iter().any(|(_, o)| matches!(o, crate::skill::Retired::Removed(_)));
     if r.saved.is_none() && !codex_changed && !skill_written {
         out.push("Nothing to change.".into());
     }
@@ -999,14 +1000,19 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
 }
 
 /// The skill's line in setup's report: what became of it, and, when a file platoon didn't write is in its place, that
-/// it was left alone and how to have platoon's instead. platoon's old `/to-tickets` copy taken out after it (`old`) makes
-/// it a rename.
-fn skill_row(s: &crate::skill::Installed, old: Option<&crate::skill::Retired>, color: bool) -> String {
+/// it was left alone and how to have platoon's instead. platoon's copies under old names taken out after it (`old`)
+/// make it a rename, of those names.
+fn skill_row(s: &crate::skill::Installed, old: &[(&'static str, crate::skill::Retired)], color: bool) -> String {
     use crate::skill::Installed;
-    let renamed = matches!(old, Some(crate::skill::Retired::Removed(_)));
+    let renamed: Vec<&str> = old.iter().filter(|(_, o)| matches!(o, crate::skill::Retired::Removed(_))).map(|(n, _)| *n).collect();
     match s {
-        Installed::Added | Installed::Updated | Installed::AlreadyDone if renamed => {
-            row(Some(true), &SKILL_STEP, "renamed /to-tickets to /to-tasks: platoon's copy under the old name is gone", color)
+        Installed::Added | Installed::Updated | Installed::AlreadyDone if !renamed.is_empty() => {
+            let gone = if renamed.len() == 1 {
+                "platoon's copy under the old name is gone"
+            } else {
+                "platoon's copies under the old names are gone"
+            };
+            row(Some(true), &SKILL_STEP, &format!("renamed {} to {}: {gone}", renamed.join(" and "), crate::skill::COMMAND), color)
         }
         Installed::Added => row(Some(true), &SKILL_STEP, "added", color),
         Installed::Updated => row(Some(true), &SKILL_STEP, "updated to this platoon's copy", color),
@@ -1024,9 +1030,9 @@ fn skill_row(s: &crate::skill::Installed, old: Option<&crate::skill::Retired>, c
     }
 }
 
-/// The old `/to-tickets` copy's line in setup's report, when one is left in place: why, in one line. Nothing when there
-/// was none, or when it went (the skill's own line says it was renamed).
-fn old_skill_row(o: &crate::skill::Retired, color: bool) -> Option<String> {
+/// The line in setup's report of the copy under the old name `old`, when one is left in place: why, in one line. Nothing
+/// when there was none, or when it went (the skill's own line says it was renamed).
+fn old_skill_row(old: &'static str, o: &crate::skill::Retired, color: bool) -> Option<String> {
     use crate::skill::Retired;
     let detail = match o {
         Retired::NotThere | Retired::Removed(_) => return None,
@@ -1034,10 +1040,10 @@ fn old_skill_row(o: &crate::skill::Retired, color: bool) -> Option<String> {
             "left alone: {} was changed since platoon wrote it (or isn't platoon's), so it is yours; delete its folder when you no longer want it",
             p.display()
         ),
-        Retired::Kept(p) => format!("kept: {} is platoon's, and stays while /to-tasks isn't platoon's copy", p.display()),
+        Retired::Kept(p) => format!("kept: {} is platoon's, and stays while /hand-to-squad isn't platoon's copy", p.display()),
         Retired::Failed(why) => format!("left alone: {why}"),
     };
-    Some(row(None, &OLD_SKILL_STEP, &detail, color))
+    Some(row(None, &old_skill_step(old), &detail, color))
 }
 
 /// What setup says of a program switched off in platoon's settings: skipped, and what it added before is left in place.
@@ -1343,7 +1349,7 @@ mod tests {
         let mut r = run(&root).unwrap();
         r.skill = Some(Installed::Added);
         let shown = render_report(&r, &root, false);
-        assert!(shown.contains("[✓] /to-tasks      a skill: type /to-tasks in a session"), "{shown}");
+        assert!(shown.contains("[✓] /hand-to-squad a skill: type /hand-to-squad in a session"), "{shown}");
         assert!(shown.lines().any(|l| l.trim() == "added"), "{shown}");
         // Only the skill written: still a change.
         let mut again = run(&root).unwrap();
@@ -1354,56 +1360,77 @@ mod tests {
         again.skill = Some(Installed::AlreadyDone);
         assert!(render_report(&again, &root, false).contains("Nothing to change."));
         // Someone else's: one plain line, no cross.
-        let theirs = root.join("skills/to-tasks/SKILL.md");
+        let theirs = root.join("skills/hand-to-squad/SKILL.md");
         again.skill = Some(Installed::NotOurs(theirs.clone()));
         let shown = render_report(&again, &root, false);
         let line = format!(
             "left alone: {} wasn't written by platoon (delete its folder and run `platoon setup` again for platoon's)",
             theirs.display()
         );
-        assert!(shown.contains("[–] /to-tasks") && shown.contains(&line) && !shown.contains('✗'), "{shown}");
+        assert!(shown.contains("[–] /hand-to-squad") && shown.contains(&line) && !shown.contains('✗'), "{shown}");
         // The gate knows nothing of it: done is done, skill or not.
         assert_eq!(check(&root).len(), STEPS.len());
-        assert!(ready(&check(&root)) && !render_blocked(&check(&root), false).contains("to-tasks"));
+        assert!(ready(&check(&root)) && !render_blocked(&check(&root), false).contains("hand-to-squad"));
     }
 
     #[test]
-    fn the_old_skill_renamed_or_left_is_said_in_one_line() {
+    fn the_old_skills_renamed_or_left_are_said_in_one_line_each() {
         use crate::skill::{Installed, Retired};
         let root = tmp("old-skill-report");
-        let old = root.join("skills/to-tickets/SKILL.md");
+        let (tasks, tickets) = (root.join("skills/to-tasks/SKILL.md"), root.join("skills/to-tickets/SKILL.md"));
         run(&root).unwrap();
         let mut r = run(&root).unwrap();
         assert!(r.saved.is_none(), "settings done before: only the skill changes");
-        // platoon's old copy taken out once the new one is in: a rename, and a change.
+        // platoon's 1.4 copy taken out once the new one is in: a rename, and a change.
         r.skill = Some(Installed::Added);
-        r.old_skill = Some(Retired::Removed(old.clone()));
+        r.old_skills = vec![("/to-tasks", Retired::Removed(tasks.clone())), ("/to-tickets", Retired::NotThere)];
         let shown = render_report(&r, &root, false);
-        assert!(shown.contains("[✓] /to-tasks") && shown.contains("renamed /to-tickets to /to-tasks"), "{shown}");
-        assert!(!shown.contains("[–] /to-tickets") && !shown.lines().any(|l| l.trim() == "added"), "{shown}");
+        assert!(
+            shown.contains("[✓] /hand-to-squad")
+                && shown.contains("renamed /to-tasks to /hand-to-squad: platoon's copy under the old name is gone"),
+            "{shown}"
+        );
+        assert!(!shown.contains("[–] /to-") && !shown.lines().any(|l| l.trim() == "added"), "{shown}");
         r.skill = Some(Installed::AlreadyDone);
         assert!(!render_report(&r, &root, false).contains("Nothing to change."), "the old copy's removal is a change");
-        // An old copy the user changed: kept, said.
+        // Straight from 1.3: from /to-tickets.
+        r.old_skills = vec![("/to-tasks", Retired::NotThere), ("/to-tickets", Retired::Removed(tickets.clone()))];
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains("renamed /to-tickets to /hand-to-squad: platoon's copy under the old name is gone"), "{shown}");
+        // Both.
+        r.old_skills = vec![("/to-tasks", Retired::Removed(tasks.clone())), ("/to-tickets", Retired::Removed(tickets.clone()))];
+        let shown = render_report(&r, &root, false);
+        assert!(
+            shown.contains("renamed /to-tasks and /to-tickets to /hand-to-squad: platoon's copies under the old names are gone"),
+            "{shown}"
+        );
+        // An old copy the user changed: kept, said; platoon's other one renamed.
         r.skill = Some(Installed::Added);
-        r.old_skill = Some(Retired::NotOurs(old.clone()));
+        r.old_skills = vec![("/to-tasks", Retired::Removed(tasks.clone())), ("/to-tickets", Retired::NotOurs(tickets.clone()))];
         let shown = render_report(&r, &root, false);
         let line = format!(
             "left alone: {} was changed since platoon wrote it (or isn't platoon's), so it is yours; delete its folder when you no longer want it",
-            old.display()
+            tickets.display()
         );
-        assert!(shown.contains("[–] /to-tickets    the skill's old name") && shown.contains(&line), "{shown}");
-        assert!(shown.lines().any(|l| l.trim() == "added") && !shown.contains('✗'), "{shown}");
-        // platoon's old copy kept beside the user's own /to-tasks.
-        r.skill = Some(Installed::NotOurs(root.join("skills/to-tasks/SKILL.md")));
-        r.old_skill = Some(Retired::Kept(old.clone()));
+        assert!(shown.contains("[–] /to-tickets    the skill's old name: /hand-to-squad replaces it") && shown.contains(&line), "{shown}");
+        assert!(shown.contains("renamed /to-tasks to /hand-to-squad") && !shown.contains("[–] /to-tasks"), "{shown}");
+        assert!(!shown.contains('✗'), "{shown}");
+        // platoon's old copies kept beside the user's own /hand-to-squad, each said.
+        r.skill = Some(Installed::NotOurs(root.join("skills/hand-to-squad/SKILL.md")));
+        r.old_skills = vec![("/to-tasks", Retired::Kept(tasks.clone())), ("/to-tickets", Retired::Kept(tickets.clone()))];
         let shown = render_report(&r, &root, false);
-        assert!(
-            shown.contains(&format!("kept: {} is platoon's, and stays while /to-tasks isn't platoon's copy", old.display())),
-            "{shown}"
-        );
-        // None there: no line about it.
-        r.old_skill = Some(Retired::NotThere);
-        assert!(!render_report(&r, &root, false).contains("to-tickets"));
+        for (name, p) in [("/to-tasks", &tasks), ("/to-tickets", &tickets)] {
+            assert!(shown.contains(&format!("[–] {name:<15}the skill's old name")), "{name}: {shown}");
+            assert!(
+                shown.contains(&format!("kept: {} is platoon's, and stays while /hand-to-squad isn't platoon's copy", p.display())),
+                "{shown}"
+            );
+        }
+        assert!(!shown.contains("renamed"), "{shown}");
+        // None there: no line about them.
+        r.old_skills = vec![("/to-tasks", Retired::NotThere), ("/to-tickets", Retired::NotThere)];
+        let shown = render_report(&r, &root, false);
+        assert!(!shown.contains("to-tickets") && !shown.contains("to-tasks"), "{shown}");
     }
 
     #[test]
@@ -1660,7 +1687,7 @@ mod tests {
                 codex: Some(r),
                 off: Vec::new(),
                 skill: None,
-                old_skill: None,
+                old_skills: Vec::new(),
             };
             let shown = render_report(&report, &codex, false);
             assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
@@ -1679,7 +1706,7 @@ mod tests {
             codex: None,
             off: Vec::new(),
             skill: None,
-            old_skill: None,
+            old_skills: Vec::new(),
         };
         let shown = render_report(&claude_only, &root, false);
         assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
@@ -1849,7 +1876,7 @@ mod tests {
                 codex: Some(report),
                 off: Vec::new(),
                 skill: None,
-                old_skill: None,
+                old_skills: Vec::new(),
             },
             &codex,
             false,
@@ -1880,7 +1907,7 @@ mod tests {
                 codex: Some(again),
                 off: Vec::new(),
                 skill: None,
-                old_skill: None,
+                old_skills: Vec::new(),
             },
             &codex,
             false,

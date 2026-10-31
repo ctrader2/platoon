@@ -32,7 +32,7 @@ impl Shelf {
     }
 
     /// What the list says when nothing is on it. `skill`: where Claude Code is in use, the command that makes tasks from
-    /// a conversation there (`skill::command`: `/to-tasks`, or the old name while only that is installed).
+    /// a conversation there (`skill::command`: `/hand-to-squad`, or an old name while only that is installed).
     pub fn empty(self, skill: Option<&str>) -> String {
         match (self, skill) {
             (Shelf::Active, Some(command)) => {

@@ -1745,7 +1745,7 @@ mod tests {
         let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
         assert_eq!(all.len(), unique.len());
         assert_eq!(find_item("Share for archived"), Some((TAB_SESSIONS, 6)));
-        assert_eq!(find_item("Offer tasks before starting work"), None, "the offer is the /to-tasks skill now");
+        assert_eq!(find_item("Offer tasks before starting work"), None, "the offer is the /hand-to-squad skill now");
         assert_eq!(find_item("no such thing"), None);
     }
 

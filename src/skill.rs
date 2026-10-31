@@ -1,12 +1,13 @@
-//! The `/to-tasks` skill platoon ships for Claude Code: typed in a session, it turns the work agreed there into
-//! platoon tasks for a squad (`src/skills/to-tasks/SKILL.md`, compiled in). `platoon setup` writes it to
-//! `<claude root>/skills/to-tasks/SKILL.md` (`install`), never as part of the start-up gate, and `platoon uninstall`
-//! takes it out again (`remove_at`).
+//! The `/hand-to-squad` skill platoon ships for Claude Code: typed in a session, it turns the work agreed there into
+//! platoon tasks for a squad (`src/skills/hand-to-squad/SKILL.md`, compiled in). `platoon setup` writes it to
+//! `<claude root>/skills/hand-to-squad/SKILL.md` (`install`), never as part of the start-up gate, and `platoon
+//! uninstall` takes it out again (`remove_at`).
 //!
-//! Through platoon 1.3 it was called `/to-tickets` (`<claude root>/skills/to-tickets/`, `old_path`). Setup renames
-//! platoon's copy: once platoon's `/to-tasks` is in place, platoon's unchanged old copy is deleted (`retire_old`); an
-//! old copy the user changed is kept. Until setup runs, the old one keeps working, so whatever tells the user to type
-//! the skill names the one that is there (`command`), and either counts as installed (`present`).
+//! It had other names before (`OLD_COMMANDS`): `/to-tasks` in platoon 1.4, `/to-tickets` through 1.3, each in its own
+//! folder (`old_path`). Setup renames platoon's copy: once platoon's `/hand-to-squad` is in place, platoon's unchanged
+//! copy under each old name is deleted (`retire_old`); an old copy the user changed is kept. Until setup runs, an old
+//! one keeps working, so whatever tells the user to type the skill names the one that is there (`command`), and any of
+//! the names counts as installed (`present`).
 //!
 //! Only a file platoon wrote is ever replaced or removed. Each copy setup writes ends in a line that says so and carries
 //! the POSIX `cksum` of everything above it (`trailer`): a copy is platoon's while that line is there and matches
@@ -23,7 +24,7 @@ use std::{
 };
 
 /// The skill as shipped, with `PROGRAM` where platoon's path goes.
-const TEMPLATE: &str = include_str!("skills/to-tasks/SKILL.md");
+const TEMPLATE: &str = include_str!("skills/hand-to-squad/SKILL.md");
 
 /// Where the template names platoon.
 const PROGRAM: &str = "{{platoon}}";
@@ -33,19 +34,25 @@ const PROGRAM: &str = "{{platoon}}";
 const TRAILER_START: &str = "<!-- platoon setup wrote this file and keeps it up to date; once you change it, platoon leaves it alone.";
 
 /// The command the user types for the skill.
-pub const COMMAND: &str = "/to-tasks";
+pub const COMMAND: &str = "/hand-to-squad";
 
-/// What the skill was called through platoon 1.3: still what is typed where setup hasn't run since.
-pub const OLD_COMMAND: &str = "/to-tickets";
+/// What the skill was called before, newest first: `/to-tasks` in platoon 1.4, `/to-tickets` through 1.3. Still what is
+/// typed where setup hasn't run since.
+pub const OLD_COMMANDS: [&str; 2] = ["/to-tasks", "/to-tickets"];
 
 /// The skill's file under Claude Code's folder `root`.
 pub fn path(root: &Path) -> PathBuf {
-    root.join("skills").join("to-tasks").join("SKILL.md")
+    place(root, COMMAND)
 }
 
-/// Where platoon 1.3 and before wrote the skill, as `/to-tickets`.
-pub fn old_path(root: &Path) -> PathBuf {
-    root.join("skills").join("to-tickets").join("SKILL.md")
+/// Where an earlier platoon wrote the skill under its old name `old` (one of `OLD_COMMANDS`).
+pub fn old_path(root: &Path, old: &str) -> PathBuf {
+    place(root, old)
+}
+
+/// The file of the skill typed as `command` (its folder is the name without the slash).
+fn place(root: &Path, command: &str) -> PathBuf {
+    root.join("skills").join(command.trim_start_matches('/')).join("SKILL.md")
 }
 
 /// The file setup writes for the platoon at `exe`: the template with `exe` in it (as a shell word; in the front
@@ -110,10 +117,10 @@ pub fn state(root: &Path) -> Result<State, String> {
     state_at(&path(root))
 }
 
-/// What is at the old `/to-tickets` skill's place under `root`, judged as `state` judges the current one (platoon's
-/// copies have always ended in the same trailer).
-pub fn old_state(root: &Path) -> Result<State, String> {
-    state_at(&old_path(root))
+/// What is at the skill's place under its old name `old` under `root`, judged as `state` judges the current one
+/// (platoon's copies have always ended in the same trailer).
+pub fn old_state(root: &Path, old: &str) -> Result<State, String> {
+    state_at(&old_path(root, old))
 }
 
 fn state_at(p: &Path) -> Result<State, String> {
@@ -136,15 +143,24 @@ fn there(state: &Result<State, String>) -> bool {
     matches!(state, Ok(State::Ours(_) | State::NotOurs))
 }
 
-/// Is the skill there for Claude Code to run, under either name, platoon's copy or the user's own?
+/// Is the skill there for Claude Code to run, under any of its names, platoon's copy or the user's own?
 pub fn present(root: &Path) -> bool {
-    there(&state(root)) || there(&old_state(root))
+    there(&state(root)) || OLD_COMMANDS.iter().any(|old| there(&old_state(root, old)))
 }
 
-/// The command to tell the user to type: `/to-tasks`, or `/to-tickets` while only that is there (platoon updated, setup
-/// not run since). With neither, `/to-tasks`, the one setup adds.
+/// The command to tell the user to type: `/hand-to-squad`, or while only old names are there (platoon updated, setup
+/// not run since), the newest of those. With none, `/hand-to-squad`, the one setup adds.
 pub fn command(root: &Path) -> &'static str {
-    if !there(&state(root)) && there(&old_state(root)) { OLD_COMMAND } else { COMMAND }
+    if there(&state(root)) {
+        return COMMAND;
+    }
+    OLD_COMMANDS.into_iter().find(|old| there(&old_state(root, old))).unwrap_or(COMMAND)
+}
+
+/// The newest old name platoon's own unchanged copy is under (one setup would rename), if any. One that can't be read
+/// counts as not there.
+pub fn platoons_old(root: &Path) -> Option<&'static str> {
+    OLD_COMMANDS.into_iter().find(|old| matches!(old_state(root, old), Ok(State::Ours(_))))
 }
 
 /// What `install` did.
@@ -189,7 +205,7 @@ pub enum Removal {
     Failed(String),
 }
 
-/// Take platoon's copy of the skill at `p` (`path` or `old_path` of Claude Code's folder) out, and its folder when
+/// Take platoon's copy of the skill at `p` (`path` or an `old_path` of Claude Code's folder) out, and its folder when
 /// nothing else is in it.
 pub fn remove_at(p: &Path) -> Removal {
     let p = p.to_path_buf();
@@ -209,34 +225,41 @@ pub fn remove_at(p: &Path) -> Removal {
     }
 }
 
-/// What `retire_old` did with the old `/to-tickets` copy.
+/// What `retire_old` did with the copy under one old name.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Retired {
     NotThere,
-    /// platoon's copy, unchanged, deleted now that platoon's `/to-tasks` is in place (and its folder, when empty).
+    /// platoon's copy, unchanged, deleted now that platoon's `/hand-to-squad` is in place (and its folder, when empty).
     Removed(PathBuf),
     /// Changed since platoon wrote it, or never platoon's: kept.
     NotOurs(PathBuf),
-    /// platoon's copy, kept because `/to-tasks` isn't platoon's copy: it is still the skill platoon's tasks come from.
+    /// platoon's copy, kept because `/hand-to-squad` isn't platoon's copy: it is still the skill platoon's tasks come
+    /// from.
     Kept(PathBuf),
     Failed(String),
 }
 
-/// After `install`: take out platoon's unchanged `/to-tickets` copy once platoon's `/to-tasks` copy is in place. An old
-/// copy the user changed is theirs and stays; so does platoon's while `/to-tasks` isn't platoon's (the user's own, or
-/// not written), so the skill never goes away altogether.
-pub fn retire_old(root: &Path) -> Retired {
-    let old = old_path(root);
-    match old_state(root) {
+/// After `install`: take out platoon's unchanged copy under each old name (`OLD_COMMANDS`, in that order) once
+/// platoon's `/hand-to-squad` copy is in place, each on its own. An old copy the user changed is theirs and stays; so
+/// does platoon's while `/hand-to-squad` isn't platoon's (the user's own, or not written), so the skill never goes away
+/// altogether.
+pub fn retire_old(root: &Path) -> Vec<(&'static str, Retired)> {
+    let new_is_ours = matches!(state(root), Ok(State::Ours(_)));
+    OLD_COMMANDS.into_iter().map(|old| (old, retire(root, old, new_is_ours))).collect()
+}
+
+fn retire(root: &Path, old: &str, new_is_ours: bool) -> Retired {
+    let p = old_path(root, old);
+    match old_state(root, old) {
         Err(why) => return Retired::Failed(why),
         Ok(State::Missing) => return Retired::NotThere,
-        Ok(State::NotOurs) => return Retired::NotOurs(old),
+        Ok(State::NotOurs) => return Retired::NotOurs(p),
         Ok(State::Ours(_)) => {}
     }
-    if !matches!(state(root), Ok(State::Ours(_))) {
-        return Retired::Kept(old);
+    if !new_is_ours {
+        return Retired::Kept(p);
     }
-    match remove_at(&old) {
+    match remove_at(&p) {
         Removal::Removed(p) => Retired::Removed(p),
         Removal::NotThere => Retired::NotThere,
         Removal::NotOurs(p) => Retired::NotOurs(p),
@@ -266,14 +289,14 @@ mod tests {
     fn the_skill_names_this_platoon_by_its_full_path_and_is_typed_by_the_user() {
         let t = text("/opt/my tools/platoon");
         assert!(!t.contains(PROGRAM), "{t}");
-        assert!(t.starts_with("---\nname: to-tasks\n"));
+        assert!(t.starts_with("---\nname: hand-to-squad\n"));
         assert!(t.contains("  - \"Bash('/opt/my tools/platoon' task add:*)\"\n"), "{t}");
         assert!(t.contains("'/opt/my tools/platoon' task squads\n"));
         assert!(t.contains("'/opt/my tools/platoon' task add --folder "));
         assert!(t.contains("$ARGUMENTS"));
         // The description: the user types it; a suggestion at most once, never an interruption.
         let description = t.lines().find(|l| l.starts_with("description: ")).unwrap();
-        for want in ["typing /to-tasks", "suggest it once", "Never interrupt"] {
+        for want in ["typing /hand-to-squad", "suggest it once", "Never interrupt", "/hand-to-squad sends this work to a platoon squad."] {
             assert!(description.contains(want), "{want:?}: {description}");
         }
         assert!(description.len() < 1024, "agents cap a skill's description");
@@ -350,58 +373,95 @@ mod tests {
         assert!(!p.exists() && p.parent().unwrap().join("notes.md").exists());
     }
 
-    /// platoon 1.3's copy of the skill at its old place: the same trailer, its own text.
-    fn old_copy(root: &Path) -> String {
-        let body = TEMPLATE.replace(COMMAND, OLD_COMMAND).replace("name: to-tasks", "name: to-tickets").replace(PROGRAM, "/old/platoon");
+    /// An earlier platoon's copy of the skill under its old name `old`: the same trailer, its own text.
+    fn old_copy(root: &Path, old: &str) -> String {
+        let name = old.trim_start_matches('/');
+        let body = TEMPLATE.replace(COMMAND, old).replace("name: hand-to-squad", &format!("name: {name}")).replace(PROGRAM, "/old/platoon");
         let text = format!("{body}{}", trailer(&body));
-        fs::create_dir_all(old_path(root).parent().unwrap()).unwrap();
-        fs::write(old_path(root), &text).unwrap();
+        fs::create_dir_all(old_path(root, old).parent().unwrap()).unwrap();
+        fs::write(old_path(root, old), &text).unwrap();
         text
     }
 
     #[test]
-    fn retire_old_takes_out_platoons_old_copy_only_once_platoons_new_one_is_in() {
-        let root = tmp("retire");
-        assert_eq!(retire_old(&root), Retired::NotThere);
-        old_copy(&root);
-        assert_eq!(old_state(&root).map(|s| matches!(s, State::Ours(_))), Ok(true), "the old trailer is platoon's");
-        // Nothing at /to-tasks yet: the old copy is the only skill, kept.
-        assert_eq!(retire_old(&root), Retired::Kept(old_path(&root)));
-        assert!(old_path(&root).is_file());
-        // The user's own /to-tasks: the old copy stays too.
-        fs::create_dir_all(path(&root).parent().unwrap()).unwrap();
-        fs::write(path(&root), "---\nname: to-tasks\n---\nMine.\n").unwrap();
-        assert_eq!(retire_old(&root), Retired::Kept(old_path(&root)));
-        fs::remove_file(path(&root)).unwrap();
-        // platoon's /to-tasks in: the old copy goes, with its folder; the skills folder stays.
-        assert_eq!(install(&root, "/usr/bin/platoon"), Installed::Added);
-        assert_eq!(retire_old(&root), Retired::Removed(old_path(&root)));
-        assert!(!old_path(&root).parent().unwrap().exists() && path(&root).is_file());
-        assert_eq!(retire_old(&root), Retired::NotThere);
-        // An old copy the user changed is theirs: kept, whatever is at /to-tasks.
-        let mine = old_copy(&root).replace("Fewer is better", "Fewer is nicer");
-        fs::write(old_path(&root), &mine).unwrap();
-        assert_eq!(retire_old(&root), Retired::NotOurs(old_path(&root)));
-        assert_eq!(fs::read_to_string(old_path(&root)).unwrap(), mine);
+    fn the_old_names_are_the_14_and_13_ones_newest_first_each_in_its_own_folder() {
+        let root = Path::new("/home/u/.claude");
+        assert_eq!(OLD_COMMANDS, ["/to-tasks", "/to-tickets"]);
+        assert_eq!(path(root), Path::new("/home/u/.claude/skills/hand-to-squad/SKILL.md"));
+        assert_eq!(old_path(root, "/to-tasks"), Path::new("/home/u/.claude/skills/to-tasks/SKILL.md"));
+        assert_eq!(old_path(root, "/to-tickets"), Path::new("/home/u/.claude/skills/to-tickets/SKILL.md"));
     }
 
     #[test]
-    fn the_command_named_is_the_one_there_and_either_counts_as_present() {
+    fn retire_old_takes_out_platoons_old_copies_only_once_platoons_new_one_is_in() {
+        let root = tmp("retire");
+        let (tasks, tickets) = (old_path(&root, "/to-tasks"), old_path(&root, "/to-tickets"));
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::NotThere), ("/to-tickets", Retired::NotThere)]);
+        // A 1.4 world (platoon's /to-tasks) and a 1.3 one's leftover (platoon's /to-tickets), both at once.
+        old_copy(&root, "/to-tasks");
+        old_copy(&root, "/to-tickets");
+        assert_eq!(old_state(&root, "/to-tasks").map(|s| matches!(s, State::Ours(_))), Ok(true), "the old trailer is platoon's");
+        assert_eq!(platoons_old(&root), Some("/to-tasks"), "the newest");
+        // Nothing at /hand-to-squad yet: the old copies are the only skill, kept.
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::Kept(tasks.clone())), ("/to-tickets", Retired::Kept(tickets.clone()))]);
+        assert!(tasks.is_file() && tickets.is_file());
+        // The user's own /hand-to-squad: the old copies stay too.
+        fs::create_dir_all(path(&root).parent().unwrap()).unwrap();
+        fs::write(path(&root), "---\nname: hand-to-squad\n---\nMine.\n").unwrap();
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::Kept(tasks.clone())), ("/to-tickets", Retired::Kept(tickets.clone()))]);
+        fs::remove_file(path(&root)).unwrap();
+        // platoon's /hand-to-squad in: both old copies go, with their folders; the skills folder stays.
+        assert_eq!(install(&root, "/usr/bin/platoon"), Installed::Added);
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::Removed(tasks.clone())), ("/to-tickets", Retired::Removed(tickets.clone()))]);
+        assert!(!tasks.parent().unwrap().exists() && !tickets.parent().unwrap().exists() && path(&root).is_file());
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::NotThere), ("/to-tickets", Retired::NotThere)]);
+        assert_eq!(platoons_old(&root), None);
+        // Each on its own: an old copy the user changed is theirs, kept whatever is at /hand-to-squad; platoon's other goes.
+        let mine = old_copy(&root, "/to-tickets").replace("Fewer is better", "Fewer is nicer");
+        fs::write(&tickets, &mine).unwrap();
+        old_copy(&root, "/to-tasks");
+        assert_eq!(platoons_old(&root), Some("/to-tasks"));
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::Removed(tasks.clone())), ("/to-tickets", Retired::NotOurs(tickets.clone()))]);
+        assert_eq!(fs::read_to_string(&tickets).unwrap(), mine);
+        assert_eq!(platoons_old(&root), None, "the user's copy is no rename");
+        // And the other way round.
+        fs::remove_file(&tickets).unwrap();
+        let mine = old_copy(&root, "/to-tasks").replace("Fewer is better", "Fewer is nicer");
+        fs::write(&tasks, &mine).unwrap();
+        old_copy(&root, "/to-tickets");
+        assert_eq!(platoons_old(&root), Some("/to-tickets"), "platoon's is under the older name only");
+        assert_eq!(retire_old(&root), [("/to-tasks", Retired::NotOurs(tasks.clone())), ("/to-tickets", Retired::Removed(tickets.clone()))]);
+        assert_eq!(fs::read_to_string(&tasks).unwrap(), mine);
+    }
+
+    #[test]
+    fn the_command_named_is_the_one_there_and_any_name_counts_as_present() {
         let root = tmp("command");
         assert!(!present(&root));
-        assert_eq!(command(&root), "/to-tasks", "neither: the one setup adds");
-        old_copy(&root);
+        assert_eq!(command(&root), "/hand-to-squad", "none: the one setup adds");
+        old_copy(&root, "/to-tickets");
         assert!(present(&root));
-        assert_eq!(command(&root), "/to-tickets", "only the old one: the one that works");
+        assert_eq!(command(&root), "/to-tickets", "only the 1.3 one: the one that works");
+        old_copy(&root, "/to-tasks");
+        assert_eq!(command(&root), "/to-tasks", "both old ones: the newer");
+        fs::remove_file(old_path(&root, "/to-tickets")).unwrap();
+        assert!(present(&root));
+        assert_eq!(command(&root), "/to-tasks", "only the 1.4 one");
         install(&root, "/usr/bin/platoon");
-        assert_eq!(command(&root), "/to-tasks");
-        fs::remove_file(old_path(&root)).unwrap();
+        assert_eq!(command(&root), "/hand-to-squad");
+        fs::remove_file(old_path(&root, "/to-tasks")).unwrap();
         assert!(present(&root));
-        assert_eq!(command(&root), "/to-tasks");
-        // The user's own old one counts as much as platoon's.
+        assert_eq!(command(&root), "/hand-to-squad");
+        // The user's own old ones count as much as platoon's.
         fs::remove_file(path(&root)).unwrap();
-        fs::write(old_path(&root), "---\nname: to-tickets\n---\nMine.\n").unwrap();
-        assert!(present(&root));
-        assert_eq!(command(&root), "/to-tickets");
+        assert!(!present(&root));
+        for old in OLD_COMMANDS {
+            fs::create_dir_all(old_path(&root, old).parent().unwrap()).unwrap();
+            fs::write(old_path(&root, old), "---\nname: mine\n---\nMine.\n").unwrap();
+            assert!(present(&root));
+            assert_eq!(command(&root), old);
+            assert_eq!(platoons_old(&root), None, "not platoon's: no rename");
+            fs::remove_file(old_path(&root, old)).unwrap();
+        }
     }
 }

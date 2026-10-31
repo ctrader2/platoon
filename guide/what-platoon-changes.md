@@ -10,7 +10,7 @@ writes, what it starts, and how to take it out again.
 
 | What | Where in `settings.json` | What it does |
 | --- | --- | --- |
-| Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line, ending it with the [`/to-tasks` reminder](tasks-and-squads.md#to-tasks-in-a-session) while the conversation has agreed on work (for that it reads the last 256 KB of the conversation's transcript) |
+| Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line, ending it with the [`/hand-to-squad` reminder](tasks-and-squads.md#hand-to-squad-in-a-session) while the conversation has agreed on work (for that it reads the last 256 KB of the conversation's transcript) |
 | Session guard | a `UserPromptSubmit` hook: `<platoon> hook guard` | refuses a message in a second copy of a conversation that is already running, and passes a project's changed notes to a running session |
 | Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted (at most 8,000 characters) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop` | notes that a project's session finished answering, so its notes can be brought up to date later |
@@ -52,13 +52,13 @@ entry of your own for that folder is left as it is. Uninstall takes out any that
 
 ## One Claude Code skill
 
-[`platoon setup`](install-and-setup.md#the-to-tasks-skill) writes one skill, `/to-tasks`, to
-`~/.claude/skills/to-tasks/SKILL.md` (or under `CLAUDE_CONFIG_DIR`): typed in a session, it
-[turns the work agreed there into tasks](tasks-and-squads.md#to-tasks-in-a-session). It names the platoon that wrote it
+[`platoon setup`](install-and-setup.md#the-hand-to-squad-skill) writes one skill, `/hand-to-squad`, to
+`~/.claude/skills/hand-to-squad/SKILL.md` (or under `CLAUDE_CONFIG_DIR`): typed in a session, it
+[turns the work agreed there into tasks](tasks-and-squads.md#hand-to-squad-in-a-session). It names the platoon that wrote it
 by its full path, and its last line says platoon wrote it, with a checksum of the rest. A skill of that name platoon
-didn't write, or that you changed, is never overwritten or removed. Uninstall removes platoon's copy. Up to platoon 1.3
-the skill was `/to-tickets`, in `skills/to-tickets/`: setup deletes platoon's unchanged copy there once `/to-tasks` is
-in, and uninstall removes it too.
+didn't write, or that you changed, is never overwritten or removed. Uninstall removes platoon's copy. The skill was
+`/to-tasks` in platoon 1.4 (`skills/to-tasks/`) and `/to-tickets` up to 1.3 (`skills/to-tickets/`): setup deletes
+platoon's unchanged copy under each once `/hand-to-squad` is in, and uninstall removes them too.
 
 ## Sessions platoon starts
 
@@ -151,7 +151,7 @@ small marks its parts leave for each other.
   `ai-work/`, the empty folder the `claude -p` and `codex exec` calls run in
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
 - `tickets-hint/`: one small file per conversation the notes update last judged for the
-  [`/to-tasks` reminder](tasks-and-squads.md#to-tasks-in-a-session) (yes or no, and when); tidied after 30 minutes
+  [`/hand-to-squad` reminder](tasks-and-squads.md#hand-to-squad-in-a-session) (yes or no, and when); tidied after 30 minutes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
 - `offer-asked/`, if platoon 1.0 made it: marks of its offer to make tasks. Nothing reads them now; it can be deleted
@@ -161,7 +161,7 @@ small marks its parts leave for each other.
 - `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon,
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
 - `setup-notice.json`: what platoon has already told you `platoon setup` has to add (see
-  [Install and set up](install-and-setup.md#the-to-tasks-skill))
+  [Install and set up](install-and-setup.md#the-hand-to-squad-skill))
 - `diagnostics.log` and `diagnostics.log.1`: platoon's errors, and with "Keep a diagnostics log" on what it decided and
   why, in words and numbers only, never more than about 2 MB together (see
   [Reporting a problem](troubleshooting.md#reporting-a-problem))
@@ -251,7 +251,8 @@ If you'd rather do it yourself, or the uninstaller can't:
    entries of tasks' worktrees. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
    copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
-2. **The skill**: delete `~/.claude/skills/to-tasks/` (and `~/.claude/skills/to-tickets/`, its old name) if its
+2. **The skill**: delete `~/.claude/skills/hand-to-squad/` (and `~/.claude/skills/to-tasks/` and
+   `~/.claude/skills/to-tickets/`, its old names) if its
    `SKILL.md` ends with the line saying platoon setup wrote it (otherwise it is your own).
 3. **platoon's own folders.** Delete `~/.config/platoon` and `~/.cache/platoon`. The config folder holds your projects'
    notes, tasks, squads and settings: keep a copy if you want them.

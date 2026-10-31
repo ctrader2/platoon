@@ -483,7 +483,7 @@ fn each_list_says_what_it_is_when_it_is_empty() {
 }
 
 #[test]
-fn with_no_task_yet_the_tasks_tab_says_how_to_make_one_and_that_to_tasks_turns_a_conversation_into_tasks() {
+fn with_no_task_yet_the_tasks_tab_says_how_to_make_one_and_that_the_skill_turns_a_conversation_into_tasks() {
     let (w, mut app, _, _) = lab("tasks-none-yet", &[]);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     app.set_providers_for_test(crate::agents::Providers {
@@ -496,21 +496,23 @@ fn with_no_task_yet_the_tasks_tab_says_how_to_make_one_and_that_to_tasks_turns_a
     };
     // No skill yet: the one setup adds.
     let shown = draw(&mut term, &app);
-    assert!(shown.contains(&words("/to-tasks")), "{shown}");
-    // Only the skill's old copy (platoon updated, setup not run since): the name that works.
-    let old = crate::skill::old_path(&w.root);
-    fs::create_dir_all(old.parent().unwrap()).unwrap();
-    fs::write(&old, "---\nname: to-tickets\n---\nMake tasks.\n").unwrap();
-    let shown = draw(&mut term, &app);
-    assert!(shown.contains(&words("/to-tickets")), "{shown}");
-    // Setup run: /to-tasks.
+    assert!(shown.contains(&words("/hand-to-squad")), "{shown}");
+    // Only copies under old names (platoon updated, setup not run since): the newest name that works.
+    for old in ["/to-tickets", "/to-tasks"] {
+        let at = crate::skill::old_path(&w.root, old);
+        fs::create_dir_all(at.parent().unwrap()).unwrap();
+        fs::write(&at, "---\nname: old\n---\nMake tasks.\n").unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains(&words(old)), "{old}: {shown}");
+    }
+    // Setup run: /hand-to-squad.
     crate::skill::install(&w.root, "/usr/bin/platoon");
     let shown = draw(&mut term, &app);
-    assert!(shown.contains(&words("/to-tasks")), "{shown}");
+    assert!(shown.contains(&words("/hand-to-squad")), "{shown}");
     // Without Claude Code there is no skill to type.
     app.set_providers_for_test(crate::agents::Providers::default());
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("No tasks yet. Press n to write one.") && !shown.contains("/to-ta"), "{shown}");
+    assert!(shown.contains("No tasks yet. Press n to write one.") && !shown.contains("/hand-to") && !shown.contains("/to-ta"), "{shown}");
 }
 
 #[test]
@@ -560,7 +562,7 @@ fn an_old_done_task_stays_on_active_while_its_work_is_not_merged_and_a_can_archi
 #[test]
 fn sessions_platoon_starts_carry_no_offer_and_the_settings_screen_has_none() {
     let (w, mut app, _, folder) = lab("tasks-no-offer", &[("Write the guide", "docs", State::NotStarted)]);
-    // The settings screen's Sessions tab: no offer setting (the offer is the /to-tasks skill now).
+    // The settings screen's Sessions tab: no offer setting (the offer is the /hand-to-squad skill now).
     key(&mut app, KeyCode::Char('1'));
     key(&mut app, KeyCode::Char('s'));
     for _ in 0..crate::settings::TABS.len() {
