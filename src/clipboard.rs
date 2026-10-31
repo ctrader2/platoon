@@ -222,6 +222,46 @@ pub fn osc52(payload: &str) -> String {
     format!("\x1b]52;c;{payload}\x07")
 }
 
+/// The text a program running in a session asked to copy (the base64 `payload` of its OSC 52), or None when there is
+/// nothing to take: empty (a request to clear the clipboard, which is not done), not base64, not UTF-8 text, or more
+/// than `MAX_COPY_BYTES`, the most platoon's own copy takes. That one is not cut: a part of what the program meant to
+/// copy would be pasted as if it were all of it.
+pub fn from_osc52(payload: &[u8]) -> Option<String> {
+    if payload.is_empty() || payload.len() > MAX_COPY_BYTES.div_ceil(3) * 4 {
+        return None;
+    }
+    let text = String::from_utf8(unbase64(payload)?).ok()?;
+    (text.len() <= MAX_COPY_BYTES).then_some(text)
+}
+
+/// Standard base64 (RFC 4648) decoded; the padding at the end may be left out. None for anything else.
+fn unbase64(encoded: &[u8]) -> Option<Vec<u8>> {
+    let body = encoded.strip_suffix(b"==").or_else(|| encoded.strip_suffix(b"=")).unwrap_or(encoded);
+    let padded = body.len() != encoded.len();
+    if body.len() % 4 == 1 || (padded && !encoded.len().is_multiple_of(4)) {
+        return None;
+    }
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(body.len() / 4 * 3 + 2);
+    for chunk in body.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= u32::from(value(c)?) << (18 - 6 * i);
+        }
+        for i in 0..chunk.len() - 1 {
+            out.push((n >> (16 - 8 * i)) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// At most `max` bytes of `text`, cut on a character boundary.
 fn truncate(text: &str, max: usize) -> (&str, bool) {
     if text.len() <= max {
@@ -301,28 +341,9 @@ pub mod fake {
             .skip(1)
             .map(|rest| {
                 let payload = rest.split('\x07').next().unwrap();
-                String::from_utf8(unbase64(payload)).unwrap()
+                String::from_utf8(unbase64(payload.as_bytes()).unwrap()).unwrap()
             })
             .collect()
-    }
-
-    pub fn unbase64(s: &str) -> Vec<u8> {
-        let val = |c: u8| match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => panic!("not base64: {c}"),
-        };
-        let mut out = Vec::new();
-        for chunk in s.trim_end_matches('=').as_bytes().chunks(4) {
-            let n = chunk.iter().enumerate().fold(0u32, |n, (i, &c)| n | u32::from(val(c)) << (18 - 6 * i));
-            for i in 0..chunk.len() - 1 {
-                out.push((n >> (16 - 8 * i)) as u8);
-            }
-        }
-        out
     }
 }
 
@@ -351,7 +372,9 @@ mod tests {
     fn base64_round_trips_every_length_and_all_byte_values() {
         let all: Vec<u8> = (0..=255).collect();
         for n in 0..=all.len() {
-            assert_eq!(unbase64(&base64(&all[..n])), &all[..n], "{n} bytes");
+            let encoded = base64(&all[..n]);
+            assert_eq!(unbase64(encoded.as_bytes()).unwrap(), &all[..n], "{n} bytes");
+            assert_eq!(unbase64(encoded.trim_end_matches('=').as_bytes()).unwrap(), &all[..n], "{n} bytes, unpadded");
         }
     }
 

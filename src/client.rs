@@ -1,6 +1,6 @@
 //! Connection from platoon to a session host, plus the emulator screen it draws from.
 
-use crate::host::{F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK, emulator, read_frame, size_payload, vt_size, write_frame};
+use crate::host::{F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK, read_frame, size_payload, vt_size, write_frame};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{
     io,
@@ -19,8 +19,62 @@ use std::{
 /// it is not chased in a loop, and the window ends as if the session had.
 pub const RECONNECT_GAP: Duration = Duration::from_secs(1);
 
+/// The window's emulator of the session's screen, which also catches what the session asks to put on the clipboard.
+pub type Emulator = vt100::Parser<SessionCopy>;
+
+/// What the session last asked to put on the clipboard (OSC 52: Claude Code's full screen mode copies its own
+/// selection that way), decoded, until the app takes it (`Client::take_copy`). Only the newest is kept: each copy
+/// replaces the one before on a clipboard anyway.
+#[derive(Default)]
+pub struct SessionCopy(Option<String>);
+
+impl vt100::Callbacks for SessionCopy {
+    /// Whichever selection the program names (the clipboard, the primary selection, ...), it goes where platoon copies
+    /// to. A text that can't be read, or is too big, is ignored (`clipboard::from_osc52`).
+    fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, _which: &[u8], data: &[u8]) {
+        if let Some(text) = crate::clipboard::from_osc52(data) {
+            self.0 = Some(text);
+        }
+    }
+    // A request to read the clipboard (`paste_from_clipboard`) keeps the default, which does nothing: the user's
+    // clipboard is never handed to the program.
+}
+
+fn session_emulator(rows: u16, cols: u16) -> Emulator {
+    let (r, c) = vt_size(rows, cols);
+    vt100::Parser::new_with_callbacks(r, c, SCROLLBACK, SessionCopy::default())
+}
+
+/// What the mouse did, as a session that has asked to hear it is told.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mouse {
+    /// The left button went down.
+    Press,
+    /// The pointer moved to another cell with the left button held.
+    Drag,
+    /// The left button was let go.
+    Release,
+    Wheel {
+        up: bool,
+    },
+}
+
+impl Mouse {
+    /// The session's mouse mode asks to hear this: every mode the presses and the wheel, all but the press-only one
+    /// (X10) the releases, and only the two that follow the pointer the drags.
+    fn heard_in(self, mode: vt100::MouseProtocolMode) -> bool {
+        use vt100::MouseProtocolMode::{AnyMotion, ButtonMotion, None, Press};
+        match self {
+            _ if mode == None => false,
+            Mouse::Drag => matches!(mode, ButtonMotion | AnyMotion),
+            Mouse::Release => mode != Press,
+            Mouse::Press | Mouse::Wheel { .. } => true,
+        }
+    }
+}
+
 pub struct Client {
-    pub parser: Arc<Mutex<vt100::Parser>>,
+    pub parser: Arc<Mutex<Emulator>>,
     stream: UnixStream,
     closed: Arc<AtomicBool>,
     size: (u16, u16),
@@ -35,7 +89,7 @@ impl Client {
         let stream = UnixStream::connect(sock)?;
         let mut writer = stream.try_clone()?;
         write_frame(&mut writer, F_RESIZE, &size_payload(rows, cols))?;
-        let parser = Arc::new(Mutex::new(emulator(rows, cols, SCROLLBACK)));
+        let parser = Arc::new(Mutex::new(session_emulator(rows, cols)));
         let closed = Arc::new(AtomicBool::new(false));
         let p = parser.clone();
         read_output(stream.try_clone()?, closed.clone(), move |payload| lock(&p).process(payload));
@@ -47,7 +101,7 @@ impl Client {
     #[cfg(test)]
     pub fn for_test(rows: u16, cols: u16) -> (Self, UnixStream) {
         let (stream, host) = UnixStream::pair().unwrap();
-        let parser = Arc::new(Mutex::new(emulator(rows, cols, SCROLLBACK)));
+        let parser = Arc::new(Mutex::new(session_emulator(rows, cols)));
         (Self { parser, stream, closed: Arc::new(AtomicBool::new(false)), size: (rows, cols) }, host)
     }
 
@@ -87,8 +141,9 @@ impl Client {
         read(&crate::select::History::new(p.screen_mut()))
     }
 
-    /// The session has asked to hear the mouse (Claude's full screen mode does): the wheel goes to it, and platoon
-    /// has no scrollback of its own to move.
+    /// The session has asked to hear the mouse (Claude's full screen mode does): the wheel goes to it, and so does a
+    /// press on its text with its drag and release (it selects by itself), and platoon has no scrollback of its own to
+    /// move.
     pub fn wants_mouse(&self) -> bool {
         lock(&self.parser).screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
     }
@@ -97,33 +152,46 @@ impl Client {
         lock(&self.parser).screen().application_cursor()
     }
 
-    /// What to send the session for a wheel turn at this cell (1-based, within the session's screen), or None
-    /// when the session has not asked to hear the mouse: then the wheel is ours, to scroll what we have. Empty
-    /// when it has asked but the cell cannot be told to it (a very wide screen): the turn is dropped.
-    pub fn wheel_report(&self, up: bool, col: u16, row: u16) -> Option<Vec<u8>> {
+    /// What to send the session for this mouse event at this cell (1-based, within the session's screen), or None
+    /// when the session has not asked to hear it: then the wheel is ours, to scroll what we have. Empty when it has
+    /// asked but the cell cannot be told to it (a very wide screen): the event is dropped.
+    pub fn mouse_report(&self, what: Mouse, col: u16, row: u16) -> Option<Vec<u8>> {
         let p = lock(&self.parser);
         let screen = p.screen();
-        if screen.mouse_protocol_mode() == vt100::MouseProtocolMode::None {
+        if !what.heard_in(screen.mouse_protocol_mode()) {
             return None;
         }
-        Some(wheel_report(up, col, row, screen.mouse_protocol_encoding()).unwrap_or_default())
+        Some(mouse_report(what, col, row, screen.mouse_protocol_encoding()).unwrap_or_default())
+    }
+
+    /// What the session has asked to put on the clipboard since this was last asked, taken.
+    pub fn take_copy(&self) -> Option<String> {
+        lock(&self.parser).callbacks_mut().0.take()
     }
 }
 
-/// The report a terminal sends for one wheel notch (button 64 up, 65 down) at a 1-based cell, in the way the
-/// session asked for. None when the cell does not fit that encoding (the plain one stops at 223).
-pub fn wheel_report(up: bool, col: u16, row: u16, encoding: vt100::MouseProtocolEncoding) -> Option<Vec<u8>> {
-    let button = if up { 64u16 } else { 65 };
+/// The report a terminal sends for a mouse event at a 1-based cell, in the way the session asked for. The button is
+/// numbered as terminals do: the left one 0, plus 32 while it moves held, the wheel 64 up and 65 down. A release is
+/// SGR's lowercase `m` with the button that was let go; the older encodings can't say which, and send button 3. None
+/// when the cell does not fit the encoding (the plain one stops at 223).
+pub fn mouse_report(what: Mouse, col: u16, row: u16, encoding: vt100::MouseProtocolEncoding) -> Option<Vec<u8>> {
+    let button = match what {
+        Mouse::Press | Mouse::Release => 0u16,
+        Mouse::Drag => 32,
+        Mouse::Wheel { up } => 64 + u16::from(!up),
+    };
+    let release = what == Mouse::Release;
+    let plain_button = if release { 3 } else { button };
     match encoding {
-        vt100::MouseProtocolEncoding::Sgr => Some(format!("\x1b[<{button};{col};{row}M").into_bytes()),
+        vt100::MouseProtocolEncoding::Sgr => Some(format!("\x1b[<{button};{col};{row}{}", if release { 'm' } else { 'M' }).into_bytes()),
         vt100::MouseProtocolEncoding::Default => {
-            let byte = |v: u16| u8::try_from(v + 32).ok();
-            Some(vec![0x1b, b'[', b'M', byte(button)?, byte(col)?, byte(row)?])
+            let byte = |v: u16| u8::try_from(v.saturating_add(32)).ok();
+            Some(vec![0x1b, b'[', b'M', byte(plain_button)?, byte(col)?, byte(row)?])
         }
         vt100::MouseProtocolEncoding::Utf8 => {
             // Each value is a character, so it can go as far as two bytes (2015).
             let mut out = b"\x1b[M".to_vec();
-            for v in [button, col, row] {
+            for v in [plain_button, col, row] {
                 let c = char::from_u32(u32::from(v) + 32).filter(|c| *c <= '\u{7ff}')?;
                 out.extend_from_slice(c.to_string().as_bytes());
             }
@@ -230,7 +298,7 @@ pub fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{F_OUTPUT, read_output, wheel_report, write_frame};
+    use super::{Client, F_OUTPUT, Mouse, mouse_report, read_output, write_frame};
     use std::{
         os::unix::net::UnixStream,
         sync::{
@@ -240,6 +308,10 @@ mod tests {
         time::{Duration, Instant},
     };
     use vt100::MouseProtocolEncoding::{Default, Sgr, Utf8};
+
+    fn wheel_report(up: bool, col: u16, row: u16, encoding: vt100::MouseProtocolEncoding) -> Option<Vec<u8>> {
+        mouse_report(Mouse::Wheel { up }, col, row, encoding)
+    }
 
     fn closed_within(closed: &AtomicBool, wait: Duration) -> bool {
         let start = Instant::now();
@@ -298,5 +370,84 @@ mod tests {
         assert_eq!(wheel_report(false, 200, 5, Utf8).unwrap(), "\x1b[M\u{61}\u{e8}\u{25}".as_bytes());
         assert_eq!(wheel_report(true, 2015, 2015, Utf8).unwrap().len(), 3 + 1 + 2 + 2);
         assert_eq!(wheel_report(true, 2016, 5, Utf8), None, "past what two bytes hold");
+    }
+
+    #[test]
+    fn the_left_button_is_0_held_while_moving_32_and_a_release_is_lowercase_in_sgr_and_button_3_otherwise() {
+        assert_eq!(mouse_report(Mouse::Press, 10, 5, Sgr).unwrap(), b"\x1b[<0;10;5M");
+        assert_eq!(mouse_report(Mouse::Drag, 11, 4, Sgr).unwrap(), b"\x1b[<32;11;4M");
+        assert_eq!(mouse_report(Mouse::Release, 12, 4, Sgr).unwrap(), b"\x1b[<0;12;4m");
+        assert_eq!(mouse_report(Mouse::Press, 10, 5, Default).unwrap(), [0x1b, b'[', b'M', 32, 42, 37]);
+        assert_eq!(mouse_report(Mouse::Drag, 10, 5, Default).unwrap(), [0x1b, b'[', b'M', 64, 42, 37]);
+        assert_eq!(mouse_report(Mouse::Release, 10, 5, Default).unwrap(), [0x1b, b'[', b'M', 35, 42, 37]);
+        assert_eq!(mouse_report(Mouse::Release, 200, 5, Utf8).unwrap(), "\x1b[M\u{23}\u{e8}\u{25}".as_bytes());
+        assert_eq!(mouse_report(Mouse::Press, 224, 5, Default), None, "past what the plain encoding can say");
+        assert_eq!(mouse_report(Mouse::Press, u16::MAX, 5, Default), None, "and no overflow on the way");
+    }
+
+    /// A client whose session has sent `setup`.
+    fn client_after(setup: &str) -> Client {
+        let (client, _host) = Client::for_test(24, 80);
+        client.parser.lock().unwrap().process(setup.as_bytes());
+        client
+    }
+
+    #[test]
+    fn each_mouse_mode_hears_what_it_asked_for() {
+        let heard = |setup: &str| {
+            let c = client_after(setup);
+            [Mouse::Press, Mouse::Drag, Mouse::Release, Mouse::Wheel { up: true }].map(|m| c.mouse_report(m, 1, 1).is_some())
+        };
+        assert_eq!(heard(""), [false; 4], "not asked: nothing");
+        assert_eq!(heard("\x1b[?9h"), [true, false, false, true], "X10: presses only");
+        assert_eq!(heard("\x1b[?1000h"), [true, false, true, true], "presses and releases");
+        assert_eq!(heard("\x1b[?1002h"), [true; 4], "and the drags in between");
+        assert_eq!(heard("\x1b[?1003h"), [true; 4], "every motion");
+        assert_eq!(heard("\x1b[?1002h\x1b[?1002l"), [false; 4], "asked, then not any more");
+    }
+
+    #[test]
+    fn a_copy_the_session_asks_for_is_kept_decoded_until_taken_and_the_newest_wins() {
+        let c = client_after("before \x1b]52;c;Zmlyc3Q=\x07 \x1b]52;c;c2Vjb25k\x1b\\ after");
+        assert_eq!(c.take_copy().as_deref(), Some("second"), "BEL and ST both end it");
+        assert_eq!(c.take_copy(), None, "taken once");
+        assert!(c.parser.lock().unwrap().screen().contents().starts_with("before   after"), "and nothing of it is drawn");
+        for which in ["", "p", "s", "c"] {
+            let c = client_after(&format!("\x1b]52;{which};aGk=\x07"));
+            assert_eq!(c.take_copy().as_deref(), Some("hi"), "selection {which:?}");
+        }
+    }
+
+    #[test]
+    fn a_read_request_bad_base64_an_empty_copy_or_one_too_big_is_ignored() {
+        for setup in [
+            "\x1b]52;c;?\x07",
+            "\x1b]52;c;not*base64\x07",
+            "\x1b]52;c;Zm9v=Zm9v\x07",
+            "\x1b]52;c;Z\x07",
+            "\x1b]52;c;\x07",
+            "\x1b]52;c;//79\x07",
+        ] {
+            assert_eq!(client_after(setup).take_copy(), None, "{setup:?}");
+        }
+        let fits = "x".repeat(crate::clipboard::MAX_COPY_BYTES);
+        let c = client_after(&format!("\x1b]52;c;{}\x07", crate::clipboard::base64(fits.as_bytes())));
+        assert_eq!(c.take_copy().map(|t| t.len()), Some(fits.len()), "as big as platoon's own copy may be");
+        let over = "x".repeat(crate::clipboard::MAX_COPY_BYTES + 1);
+        let c = client_after(&format!("\x1b]52;c;{}\x07", crate::clipboard::base64(over.as_bytes())));
+        assert_eq!(c.take_copy(), None, "a byte more is not cut: it is not taken at all");
+    }
+
+    #[test]
+    fn a_window_connecting_after_a_copy_gets_a_snapshot_without_it() {
+        // The host's own emulator saw the copy go by; a window that connects later is sent its screen as it is now.
+        let mut host = crate::host::emulator(24, 80, crate::host::SCROLLBACK);
+        host.process(b"\x1b[?1049h\x1b[?1002h\x1b[?1006hfull screen\x1b]52;c;aGVsbG8=\x07 more");
+        let snapshot = host.screen().state_formatted();
+        assert!(!snapshot.contains("\x1b]52"), "{snapshot:?}");
+        let c = client_after(&snapshot);
+        assert!(c.parser.lock().unwrap().screen().contents().contains("full screen more"));
+        assert!(c.wants_mouse(), "the mouse mode comes with it");
+        assert_eq!(c.take_copy(), None, "the copy does not");
     }
 }

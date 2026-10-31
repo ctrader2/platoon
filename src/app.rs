@@ -2,7 +2,7 @@ use crate::agents::claude::{self, Reader};
 use crate::agents::{Agent, Catalog, CodexAt, Hidden, Live, Providers, Start, codex};
 use crate::ai;
 use crate::archive::{self, Archive};
-use crate::client::{Client, key_bytes};
+use crate::client::{Client, Mouse, key_bytes};
 use crate::clipboard::Clipboard;
 use crate::dirs;
 use crate::editors::Editor;
@@ -570,6 +570,9 @@ pub struct App {
     drag: Option<Drag>,
     /// The last press in the session's screen, for double and triple clicks.
     last_click: Option<Click>,
+    /// A left press passed on to a session that asked to hear the mouse, not let go yet: the cell of its screen it was
+    /// last told (1-based). Its drag and release go to the session too, wherever the pointer is.
+    pressed_in_session: Option<(u16, u16)>,
     /// Where copied text goes. Lives as long as the app: on X11 the program that set the clipboard is the one
     /// that hands it to whoever pastes, so it has to stay around for the text to stay pasteable.
     clipboard: Clipboard,
@@ -924,6 +927,7 @@ impl App {
             selection: None,
             drag: None,
             last_click: None,
+            pressed_in_session: None,
             // Nothing is ever copied by an App that was not asked to: `new` and tests choose.
             clipboard: Clipboard::off(),
             projects: Projects::open(&config),
@@ -2481,6 +2485,7 @@ impl App {
 
     /// Leave the attached view. Only our connection closes; the session keeps running.
     fn detach(&mut self) {
+        self.let_go_in_session(None);
         self.client = None;
         self.mode = Mode::List;
         self.clear_selection();
@@ -2539,6 +2544,7 @@ impl App {
     fn session_ended(&mut self) {
         self.mode = Mode::List;
         self.client = None;
+        self.pressed_in_session = None;
         self.clear_selection();
         self.notify("Session ended");
     }
@@ -3363,7 +3369,7 @@ impl App {
                         let over_screen = area.contains((m.column, m.row).into());
                         let report = match &self.client {
                             Some(c) if over_screen && !self.attached_paused() => {
-                                c.wheel_report(up, m.column - area.x + 1, m.row - area.y + 1)
+                                c.mouse_report(Mouse::Wheel { up }, m.column - area.x + 1, m.row - area.y + 1)
                             }
                             _ => None,
                         };
@@ -3456,14 +3462,21 @@ impl App {
                     Some(Hit::DraftTask(i)) => self.click_draft(i),
                     Some(Hit::Inert) => {}
                     // Nothing clickable here: in the attached view that is the session's own text.
-                    None => self.begin_selection(m),
+                    None => self.press_on_text(m),
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.pressed_in_session.is_some() => self.drag_in_session(m),
             MouseEventKind::Drag(MouseButton::Left) => self.extend_selection(m),
+            MouseEventKind::Up(MouseButton::Left) if self.pressed_in_session.is_some() => {
+                let at = self.session_cell(m);
+                self.let_go_in_session(Some(at));
+            }
             MouseEventKind::Up(MouseButton::Left) => self.finish_selection(),
             // The pointer moving with no button held: a release the terminal never reported (it was let go outside
-            // the window). Whatever happens to the selection, the view stops scrolling.
+            // the window). The session is told it was let go where it last heard of the pointer; whatever happens to
+            // our selection, the view stops scrolling.
             MouseEventKind::Moved => {
+                self.let_go_in_session(None);
                 if let Some(d) = &mut self.drag {
                     d.past = None;
                 }
@@ -3494,19 +3507,78 @@ impl App {
         self.drag = None;
     }
 
-    /// A press on the session's text starts a selection (a double or triple click one by word or line). It only
-    /// counts as a selection once it covers something: a plain click just clears the old one. Never on the status
-    /// bar, the frame, or a session that is paused (its text is under the banner).
-    fn begin_selection(&mut self, m: MouseEvent) {
+    /// A press on the session's text. A session that has asked to hear the mouse (Claude Code's full screen mode does)
+    /// is told, with the drag and the release that follow, and selects by itself, scrolling its own history as the
+    /// drag goes past an edge; it copies by asking for the clipboard, which `take_session_copy` hands on. Otherwise the
+    /// press starts platoon's own selection. Never on the status bar, the frame, or a session that is paused (its
+    /// text is under the banner).
+    fn press_on_text(&mut self, m: MouseEvent) {
         self.clear_selection();
+        // A press while one is still held: the release was never reported.
+        self.let_go_in_session(None);
         if !matches!(self.mode, Mode::Attached(_)) || self.attached_paused() {
             return;
         }
         let Some(client) = &self.client else { return };
-        let area = self.term_area();
-        if !area.contains((m.column, m.row).into()) {
+        if !self.term_area().contains((m.column, m.row).into()) {
             return;
         }
+        if client.wants_mouse() {
+            // The session counts double and triple clicks itself.
+            self.last_click = None;
+            let at = self.session_cell(m);
+            self.pressed_in_session = Some(at);
+            self.tell_session(Mouse::Press, at);
+        } else {
+            self.begin_selection(m);
+        }
+    }
+
+    /// The cell of the session's screen under the pointer, 1-based, kept inside the screen as a terminal reports a
+    /// held drag that left its window: above it on the top row, below it (here, the status bar) on the last.
+    fn session_cell(&self, m: MouseEvent) -> (u16, u16) {
+        let area = self.term_area();
+        let col = m.column.clamp(area.x, area.right().saturating_sub(1)) - area.x;
+        let row = m.row.clamp(area.y, area.bottom().saturating_sub(1)) - area.y;
+        (col + 1, row + 1)
+    }
+
+    /// Tell the session what the mouse did at a cell of its screen, when it has asked to hear that. Never a paused
+    /// session, which must not be written to.
+    fn tell_session(&mut self, what: Mouse, (col, row): (u16, u16)) {
+        if self.attached_paused() {
+            return;
+        }
+        let Some(client) = self.client.as_mut() else { return };
+        if let Some(report) = client.mouse_report(what, col, row)
+            && !report.is_empty()
+        {
+            // The session answers on its live screen.
+            client.reset_scroll();
+            client.write(&report);
+        }
+    }
+
+    /// A drag of a press the session was told of: reported when the pointer reaches another cell, as a terminal does.
+    fn drag_in_session(&mut self, m: MouseEvent) {
+        let at = self.session_cell(m);
+        if self.pressed_in_session.replace(at) != Some(at) {
+            self.tell_session(Mouse::Drag, at);
+        }
+    }
+
+    /// The press the session was told of is let go: at `at`, or where it last heard of the pointer. Nothing when no
+    /// press of the session's is held.
+    fn let_go_in_session(&mut self, at: Option<(u16, u16)>) {
+        let Some(last) = self.pressed_in_session.take() else { return };
+        self.tell_session(Mouse::Release, at.unwrap_or(last));
+    }
+
+    /// A press on the session's text starts platoon's selection (a double or triple click one by word or line). It
+    /// only counts as a selection once it covers something: a plain click just clears the old one.
+    fn begin_selection(&mut self, m: MouseEvent) {
+        let Some(client) = &self.client else { return };
+        let area = self.term_area();
         let row = m.row - area.y;
         let at = Point::new(client.history(|h| h.top()) + usize::from(row), m.column - area.x);
         let now = Instant::now();
@@ -3523,8 +3595,8 @@ impl App {
 
     /// The head follows the pointer. Past the top or bottom edge of the session's screen it stays on the edge line
     /// and the view scrolls (`drag_scroll`), back through the history above or on toward the live screen below;
-    /// where the session has asked to hear the mouse there is no history of platoon's to scroll, and it just stays
-    /// on the edge.
+    /// where the session has asked to hear the mouse since the press there is no history of platoon's to scroll, and
+    /// it just stays on the edge.
     fn extend_selection(&mut self, m: MouseEvent) {
         let area = self.term_area();
         let scrolls = self.client.as_ref().is_some_and(|c| !c.wants_mouse());
@@ -3591,6 +3663,18 @@ impl App {
             }
             _ => self.selection = None,
         }
+    }
+
+    /// Put on the clipboard what the attached session asked to copy (Claude Code's full screen mode copies its own
+    /// selection that way), as platoon's own copy is, with the same notice. Not from a paused session, which this
+    /// window doesn't run. The event loop asks on every pass.
+    pub fn take_session_copy(&mut self) {
+        let Some(text) = self.client.as_ref().and_then(Client::take_copy) else { return };
+        if !matches!(self.mode, Mode::Attached(_)) || self.attached_paused() {
+            return;
+        }
+        let outcome = self.clipboard.copy(&text);
+        self.notify(outcome.notice());
     }
 
     /// Where copies go (`Clipboard::off` until given one: the real one, or a test's).

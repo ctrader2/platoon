@@ -6,6 +6,14 @@ here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Selecting text in Claude Code's full-screen mode (`/tui fullscreen`): dragging past the top or bottom of the session
+  did nothing, and what Claude Code copied never reached the clipboard. Now platoon passes the press, the drag and the
+  letting go to a program that takes the mouse, so its own selection works, scrolling past an edge included, and puts
+  what it copies on the clipboard the way platoon's own copies go, with the same note in the status bar. Such a program
+  can't read your clipboard through platoon.
+
 ## [1.4.0] - 2026-10-29
 
 ### Changed

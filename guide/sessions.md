@@ -317,9 +317,12 @@ which case hold `shift` and drag.
   through the session's history, onto the status bar below to scroll forward again. It keeps scrolling while you hold
   still, a line at a time at first and faster the longer you hold (and the further out, where your terminal reports
   that); move back onto the text to stop. The highlight stays on the text as it scrolls, and letting go copies all of it.
-  (If you pressed on the top row itself, it only counts as the edge once the drag has been on another row.) A program
-  that takes the mouse itself (Claude Code's full screen mode) scrolls its own screen, so there the drag stops at the
-  edge.
+  (If you pressed on the top row itself, it only counts as the edge once the drag has been on another row.)
+- **A program with its own full-screen mode** (Claude Code after `/tui fullscreen`) takes the mouse itself, and then
+  selecting is the program's: platoon passes your press, drag and letting go on to it and highlights nothing of its own.
+  The highlight, scrolling while you hold the drag past an edge, double and triple clicks, and when it copies are the
+  program's own. What it copies, platoon puts on the clipboard the same way as its own copies (below), with the same
+  note in the status bar. The program can only put text on your clipboard this way, never read what is on it.
 - A word is letters, digits and the characters that live inside paths and URLs (`_ - . / : ~ @ % + = # ? &`), so a path, a
   URL or `--flag=value` is one word. Quotes, brackets, commas, `|`, `$` and box-drawing characters end a word, and a full
   stop, colon or question mark right at its end is left off unless you clicked on it.
@@ -337,7 +340,8 @@ which case hold `shift` and drag.
 - `PLATOON_CLIPBOARD` chooses where copies go: `system` (the default: system clipboard and OSC 52), `osc52` (only the
   terminal sequence) or `none` (nothing is copied; selecting still highlights and says what was selected).
 - Text over 512 KiB is cut at that size, and one over about 100 KB is not sent as OSC 52 (some terminals refuse sequences
-  that long), only to the system clipboard; the status bar says when either happened.
+  that long), only to the system clipboard; the status bar says when either happened. A copy over 512 KiB that a
+  full-screen program asks for is not made at all, rather than pasted later as if a part of it were the whole.
 
 `platoon open` in a regular terminal does not take over the mouse: platoon passes the session's output straight through,
 so the terminal's own selection and copy work as usual.

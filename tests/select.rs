@@ -189,3 +189,61 @@ fn a_drag_held_still_above_the_session_keeps_scrolling_back_and_letting_go_copie
     t.send(b"q");
     t.wait_exit();
 }
+
+#[test]
+fn a_session_that_asked_for_the_mouse_selects_by_itself_and_what_it_copies_reaches_the_clipboard_once() {
+    let base = tmp("select-fullscreen-e2e");
+    let env = env(&base);
+    let work = base.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let _end = EndHost(base.join("cache"));
+    let mut t = Term::spawn(&[], &env, &work, 30, 100);
+    t.wait_for("enter open");
+    t.send(b"n");
+    t.wait_for("pick a folder");
+    t.send(work.to_string_lossy().as_bytes());
+    t.send(b"\r");
+    t.wait_for("back to list");
+
+    // The session copies as Claude Code's full screen mode does: an OSC 52 to its terminal, which is platoon. Platoon
+    // copies it its own way, here the OSC 52 it sends its own terminal. (The typed command has the escape as `\033`
+    // text, so only the shell's output carries one.)
+    t.send(b"printf '\\033]52;c;ZnVsbHNjcmVlbi00Mg==\\007'; echo copied-$((6*7))\r");
+    t.wait_for_all(&["copied-42", "Copied 13 characters"]);
+    assert_eq!(osc52_payloads(&t.raw()), ["ZnVsbHNjcmVlbi00Mg=="], "fullscreen-42, once");
+
+    // Ask for button events in SGR, then print every byte that arrives, escapes made visible. Raw mode so that
+    // nothing waits for a newline and the terminal echoes nothing itself; only once "go-42" shows is it raw.
+    t.send(b"printf '\\033[?1002h\\033[?1006h'; stty raw -echo; printf 'go-%s\\r\\n' $((6*7)); cat -v\r");
+    t.wait_for("go-42");
+    let plain_bg = t.bg_at(2, 30);
+    // Press, a drag along the row, a drag down onto the status bar (the last of the 30 rows), let go there.
+    t.send(&sgr(0, 19, 7, false));
+    t.send(&sgr(32, 24, 7, false));
+    t.send(&sgr(32, 5, 29, false));
+    t.send(&sgr(0, 5, 29, true));
+    // The status bar is below the session's 29 rows: reported on its last one.
+    t.wait_for_flat("^[[<0;20;8M^[[<32;25;8M^[[<32;6;29M^[[<0;6;29m");
+    assert_eq!(t.bg_at(7, 22), plain_bg, "platoon highlights nothing of its own");
+    assert_eq!(osc52_payloads(&t.raw()).len(), 1, "and copies nothing of its own");
+
+    // A window connecting now (a reconnect is one) starts from the host's snapshot of the screen, which has no copy in
+    // it to make again. Asked here as a window asks, at the same size as platoon's (29 rows under 30, no frame).
+    let (_, sock) = find_host(&base.join("cache")).expect("the session's host");
+    let mut window = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    write_frame(&mut window, b'R', &[0, 29, 0, 100]).unwrap();
+    window.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    let (kind, snapshot) = read_frame(&mut window).expect("the snapshot");
+    assert_eq!(kind, b'O');
+    let snapshot = String::from_utf8_lossy(&snapshot);
+    assert!(snapshot.contains("copied-42") && !snapshot.contains("\x1b]52"), "{snapshot:?}");
+    let _ = window.shutdown(std::net::Shutdown::Both);
+    t.send(b"end-of-test");
+    t.wait_for("end-of-test");
+    assert_eq!(osc52_payloads(&t.raw()).len(), 1, "copied once");
+
+    t.send(&[0]); // ctrl+space
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
+}

@@ -158,11 +158,13 @@ fn a_wheel_over_the_status_bar_is_not_sent() {
 
 #[test]
 fn the_wheel_still_drops_the_selection_when_it_is_sent_on() {
-    let mut r = rig(TRACKING_SGR, false);
+    // Selected before the session asked for the mouse: after, a press is the session's and platoon selects nothing.
+    let mut r = rig("", false);
     let ev = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
     r.app.on_mouse(ev(MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), 2, 1));
     r.app.on_mouse(ev(MouseEventKind::Drag(ratatui::crossterm::event::MouseButton::Left), 9, 1));
     assert!(r.app.selection.is_some());
+    r.app.client.as_ref().unwrap().parser.lock().unwrap().process(TRACKING_SGR.as_bytes());
     r.wheel(true, 9, 4);
     assert!(r.app.selection.is_none());
     assert_eq!(r.sent(), b"\x1b[<64;10;5M");

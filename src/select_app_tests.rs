@@ -467,9 +467,10 @@ fn the_pointer_moving_with_no_button_held_stops_the_scrolling() {
 }
 
 #[test]
-fn a_session_that_asked_for_mouse_reports_is_not_scrolled_by_a_drag_and_it_sticks_to_the_edge() {
-    let mut r = rig(&format!("{}\x1b[?1000h\x1b[?1006h", long_text()));
+fn a_session_that_asks_for_the_mouse_after_the_press_keeps_platoons_selection_but_is_not_scrolled() {
+    let mut r = rig(&long_text());
     r.press(10, 6);
+    r.app.client.as_ref().unwrap().parser.lock().unwrap().process(b"\x1b[?1000h\x1b[?1006h");
     r.drag(3, 0);
     r.drag(0, 0);
     r.hold(10);
@@ -480,7 +481,210 @@ fn a_session_that_asked_for_mouse_reports_is_not_scrolled_by_a_drag_and_it_stick
     r.drag(0, 0);
     r.release(0, 0);
     assert_eq!(r.system(), [numbered(77..=87)], "up to the edge, as before");
-    assert!(r.sent().is_empty(), "and the drag was not sent to the session");
+    assert!(r.sent().is_empty(), "and the drag was not sent to the session: who has the drag is decided at the press");
+}
+
+// --- a session that selects by itself (it asked to hear the mouse) ------------------------------------
+
+/// Button events (the drags too), SGR: what Claude Code's full screen mode asks for.
+const BUTTONS_SGR: &str = "\x1b[?1002h\x1b[?1006h";
+
+impl Rig {
+    /// What the client has sent to the session so far, as the bytes inside its frames.
+    fn reported(&mut self) -> String {
+        let raw = self.sent();
+        let mut out = Vec::new();
+        let mut r = raw.as_slice();
+        while let Ok((_, payload)) = crate::host::read_frame(&mut r) {
+            out.extend(payload);
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    /// The session writes `output`, and the event loop passes.
+    fn session_writes(&mut self, output: &str) {
+        self.app.client.as_ref().unwrap().parser.lock().unwrap().process(output.as_bytes());
+        self.app.take_session_copy();
+    }
+
+    /// No cell of the session's screen is drawn selected.
+    fn nothing_highlighted(&mut self) -> bool {
+        self.draw();
+        let sel = self.app.effective_theme().selection_bg().unwrap();
+        (0..ROWS).all(|row| (0..COLS).all(|col| bg_of(self, row, col) != sel))
+    }
+}
+
+#[test]
+fn a_session_that_asked_for_the_mouse_is_told_of_the_press_the_drag_and_the_release_and_platoon_selects_nothing() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    r.press(0, 6);
+    assert!(r.app.selection.is_none() && r.nothing_highlighted());
+    r.drag(0, 8);
+    r.drag(0, 8); // the same cell again: not reported twice
+    r.drag(1, 3);
+    assert!(r.app.selection.is_none() && r.nothing_highlighted(), "the session draws its own selection");
+    r.release(1, 3);
+    assert_eq!(r.reported(), "\x1b[<0;7;1M\x1b[<32;9;1M\x1b[<32;4;2M\x1b[<0;4;2m", "1-based cells, the release lowercase");
+    assert!(r.system().is_empty() && r.osc52().is_empty(), "platoon copies nothing of its own");
+    assert_eq!(r.notice(), None);
+    r.hold(10);
+    assert_eq!(r.scrollback(), 0, "and never scrolls its own view");
+}
+
+#[test]
+fn a_drag_that_leaves_the_sessions_screen_is_reported_on_its_edge() {
+    let mut r = rig(&format!("{}{BUTTONS_SGR}", long_text()));
+    r.press(10, 6);
+    r.mouse(MouseEventKind::Drag(MouseButton::Left), 30, 23); // the status bar: the session's last row
+    r.mouse(MouseEventKind::Drag(MouseButton::Left), 200, 60); // past the window's corner, as some terminals report
+    r.mouse(MouseEventKind::Drag(MouseButton::Left), 5, 0); // the top row, as a terminal reports a pointer above it
+    r.mouse(MouseEventKind::Up(MouseButton::Left), 300, 90);
+    assert_eq!(r.reported(), "\x1b[<0;7;11M\x1b[<32;31;23M\x1b[<32;80;23M\x1b[<32;6;1M\x1b[<0;80;23m");
+    assert!(r.app.selection.is_none() && r.system().is_empty());
+    r.hold(10);
+    assert_eq!(r.scrollback(), 0, "the session scrolls its own history");
+}
+
+#[test]
+fn a_release_lost_outside_the_window_is_reported_when_the_pointer_comes_back_without_the_button() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    r.press(0, 6);
+    r.drag(2, 4);
+    r.mouse(MouseEventKind::Moved, 40, 10);
+    assert_eq!(r.reported(), "\x1b[<0;7;1M\x1b[<32;5;3M\x1b[<0;5;3m", "let go where the session last heard of it");
+    r.mouse(MouseEventKind::Moved, 41, 10);
+    r.drag(3, 3);
+    r.release(3, 3);
+    assert_eq!(r.reported(), "", "a press only once, and nothing for a drag without one");
+    assert!(r.app.selection.is_none() && r.system().is_empty());
+}
+
+#[test]
+fn a_new_press_while_one_is_held_lets_the_old_one_go_first() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    r.press(0, 6);
+    r.press(1, 2);
+    assert_eq!(r.reported(), "\x1b[<0;7;1M\x1b[<0;7;1m\x1b[<0;3;2M");
+}
+
+#[test]
+fn leaving_the_session_while_the_button_is_held_lets_it_go_there_first() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    r.press(0, 6);
+    r.drag(0, 9);
+    let _ = r.reported();
+    r.app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    assert!(matches!(r.app.mode, Mode::List));
+    assert_eq!(r.reported(), "\x1b[<0;10;1m");
+}
+
+#[test]
+fn double_and_triple_clicks_are_each_passed_on_for_the_session_to_count() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    for _ in 0..3 {
+        r.click(0, 8);
+    }
+    assert_eq!(r.reported(), "\x1b[<0;9;1M\x1b[<0;9;1m".repeat(3));
+    assert!(r.app.selection.is_none() && r.system().is_empty() && r.nothing_highlighted());
+}
+
+#[test]
+fn a_session_that_hears_presses_only_is_told_of_nothing_else() {
+    // X10: the press, in the plain encoding (each value plus 32).
+    let mut r = rig(&format!("{TEXT}\x1b[?9h"));
+    r.press(0, 6);
+    r.drag(1, 3);
+    r.release(1, 3);
+    assert_eq!(r.reported().as_bytes(), [0x1b, b'[', b'M', 32, 32 + 7, 32 + 1]);
+    assert!(r.app.selection.is_none() && r.system().is_empty());
+    // Presses and releases, not the drags.
+    let mut r = rig(&format!("{TEXT}\x1b[?1000h\x1b[?1006h"));
+    r.press(0, 6);
+    r.drag(1, 3);
+    r.release(1, 3);
+    assert_eq!(r.reported(), "\x1b[<0;7;1M\x1b[<0;4;2m");
+}
+
+#[test]
+fn the_plain_encoding_says_drag_with_32_more_and_release_with_button_3() {
+    let mut r = rig(&format!("{TEXT}\x1b[?1002h"));
+    r.press(0, 6);
+    r.drag(1, 3);
+    r.release(1, 3);
+    let report = |button: u8, col: u8, row: u8| [0x1b, b'[', b'M', 32 + button, 32 + col, 32 + row];
+    assert_eq!(r.reported().as_bytes(), [report(0, 7, 1), report(32, 4, 2), report(3, 4, 2)].concat());
+}
+
+#[test]
+fn a_paused_session_that_asked_for_the_mouse_is_told_nothing() {
+    let mut w = World::new("select-paused-mouse");
+    w.transcript("aaa", "/tmp", "a prompt", 5);
+    let pid = w.live("aaa", "/tmp", 1, "idle");
+    crate::guard::mark_stale(&w.cache, pid, 1);
+    let mut app = w.app();
+    let (client, mut host) = Client::for_test(ROWS, COLS);
+    host.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    client.parser.lock().unwrap().process(format!("hello brave world{BUTTONS_SGR}\x1b]52;c;aGk=\x07").as_bytes());
+    app.client = Some(client);
+    app.mode = Mode::Attached(pid);
+    let (fake, rec) = Fake::new();
+    app.set_clipboard(Clipboard::new(Target::System, Box::new(fake)));
+    assert!(app.attached_paused(), "the fixture is paused");
+    let ev = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
+    app.on_mouse(ev(MouseEventKind::Down(MouseButton::Left), 2, 0));
+    app.on_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 9, 0));
+    app.on_mouse(ev(MouseEventKind::Up(MouseButton::Left), 9, 0));
+    app.take_session_copy();
+    let mut buf = [0u8; 64];
+    assert!(host.read(&mut buf).is_err(), "nothing was written");
+    assert!(app.selection.is_none() && rec.lock().unwrap().system.is_empty(), "and nothing copied, its copy included");
+}
+
+// --- what the session copies ---------------------------------------------------------------------------
+
+#[test]
+fn what_the_session_copies_goes_on_the_clipboard_with_platoons_notice() {
+    let mut r = rig(&format!("{TEXT}{BUTTONS_SGR}"));
+    r.session_writes(&format!("\x1b]52;c;{}\x07", crate::clipboard::base64("héllo\nwörld".as_bytes())));
+    assert_eq!(r.system(), ["héllo\nwörld"]);
+    assert_eq!(r.osc52(), ["héllo\nwörld"], "both routes, as platoon's own copy");
+    assert_eq!(r.notice().as_deref(), Some("Copied 2 lines"));
+    let bar = r.draw().lines().nth(23).unwrap().to_string();
+    assert!(bar.contains("Copied 2 lines"), "{bar}");
+    // Ended by ST instead of BEL, any selection named.
+    r.session_writes("\x1b]52;p;YnJhdmU=\x1b\\");
+    assert_eq!(r.system().last().unwrap(), "brave");
+    assert_eq!(r.notice().as_deref(), Some("Copied 5 characters"));
+    // Once: the next pass finds nothing new.
+    r.app.take_session_copy();
+    assert_eq!(r.system().len(), 2);
+    assert!(r.reported().is_empty(), "nothing is said back to the session");
+}
+
+#[test]
+fn the_sessions_copy_goes_where_platoons_clipboard_setting_says() {
+    let mut r = rig_with(TEXT, Target::Osc52, |_| {});
+    r.session_writes("\x1b]52;c;YnJhdmU=\x07");
+    assert!(r.system().is_empty());
+    assert_eq!(r.osc52(), ["brave"]);
+    let mut r = rig_with(TEXT, Target::Off, |_| {});
+    r.session_writes("\x1b]52;c;YnJhdmU=\x07");
+    assert!(r.system().is_empty() && r.rec.lock().unwrap().terminal.is_empty());
+    assert_eq!(r.notice().as_deref(), Some("Selected 5 characters (clipboard off)"));
+}
+
+#[test]
+fn a_request_to_read_the_clipboard_is_never_answered_and_bad_copies_are_ignored() {
+    let mut r = rig(TEXT);
+    let too_big = crate::clipboard::base64("x".repeat(crate::clipboard::MAX_COPY_BYTES + 1).as_bytes());
+    for output in ["\x1b]52;c;?\x07", "\x1b]52;c;?\x1b\\", "\x1b]52;c;Zm9v=Zm9v\x07", "\x1b]52;c;\x07", &format!("\x1b]52;c;{too_big}\x07")]
+    {
+        r.session_writes(output);
+    }
+    assert!(r.system().is_empty() && r.rec.lock().unwrap().terminal.is_empty(), "nothing copied");
+    assert_eq!(r.notice(), None);
+    assert!(r.reported().is_empty(), "and nothing of the clipboard's was sent to the session");
 }
 
 // --- the selection's lifetime -------------------------------------------------------------------------

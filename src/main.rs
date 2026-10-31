@@ -553,6 +553,8 @@ fn run() -> io::Result<usize> {
             // Anything may have changed (sessions, tickets, usage, the time a row says); the frame says whether it did.
             screen.dirty = true;
         }
+        // What the session asked to copy, before a connection that closed is replaced by a new one.
+        app.take_session_copy();
         // A session's host may have closed its connection: connect again (or leave the session) before drawing.
         app.keep_attached();
         // A selection dragged past the top or bottom of a session keeps scrolling while the mouse stands still.

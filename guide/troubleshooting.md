@@ -72,6 +72,13 @@ arrows. See [A project's screen](projects.md#a-projects-screen).
 **Dragging in a session doesn't select text the way my terminal does.** platoon selects and copies itself; hold `shift` and
 drag for the terminal's own selection. See [Copying text from a session](sessions.md#copying-text-from-a-session).
 
+**In Claude Code's full-screen mode the drag looks different, and platoon's highlight never shows.** In that mode
+(`/tui fullscreen`) Claude Code asks for the mouse, so platoon passes the drag on: the highlight, the scrolling past an
+edge and the copy are Claude Code's. Claude Code copies by sending the text to its terminal as an OSC 52 sequence, and
+platoon puts that on the clipboard as it does its own copies (`PLATOON_CLIPBOARD` applies), with the same note in the
+status bar. No note means the program sent no copy. See
+[Copying text from a session](sessions.md#copying-text-from-a-session).
+
 **What I copied is gone after quitting platoon (X11).** On X11 the program that copied hands the text over, so it goes when
 platoon quits, unless a clipboard manager kept a copy. Terminals with OSC 52 (Ghostty, kitty, WezTerm, iTerm2) keep their
 own copy; Xfce Terminal doesn't support it. `PLATOON_CLIPBOARD` chooses where copies go. See
