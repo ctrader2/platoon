@@ -79,20 +79,18 @@ impl Agent {
     pub fn known_idle(self, root: &Path, pid: u32, session: Option<&str>) -> bool {
         match self {
             Agent::Claude => claude::registry_status(root, pid).as_deref() == Some("idle"),
-            Agent::Codex => session.and_then(|s| codex::find_rollout(root, s)).and_then(|p| codex::busy(&p)) == Some(false),
+            Agent::Codex => session.and_then(|s| codex::idle_since(root, pid, s)).is_some(),
         }
     }
 
     /// Since when the agent has said the session process `pid` runs is idle, as it records it: Claude Code's registry
-    /// entry, `idle` since its `statusUpdatedAt`; Codex's rollout of `session`, at the end of a turn, last written then.
+    /// entry, `idle` since its `statusUpdatedAt`; Codex's rollouts of `session` and of every other chat the process
+    /// holds, each at the end of a turn, the latest last written then (`codex::idle_since`).
     /// None when it doesn't say the session is idle, or not since when.
     pub fn idle_since(self, root: &Path, pid: u32, session: Option<&str>) -> Option<std::time::SystemTime> {
         match self {
             Agent::Claude => claude::idle_since(root, pid).map(|ms| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms)),
-            Agent::Codex => {
-                let rollout = codex::find_rollout(root, session?)?;
-                (codex::busy(&rollout) == Some(false)).then(|| std::fs::metadata(&rollout).and_then(|m| m.modified()).ok()).flatten()
-            }
+            Agent::Codex => codex::idle_since(root, pid, session?),
         }
     }
 

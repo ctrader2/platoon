@@ -6,6 +6,15 @@ here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A Codex session platoon runs could be stopped as idle while another chat in the same Codex window was still working
+  (Codex 0.167 runs several chats in one window, from its command center). platoon now waits until every chat that
+  window has open has finished its reply.
+- Codex keeps a lock file of its own beside its conversations' (`.coordination.lock`), and platoon could take it, for a
+  moment, for an open conversation; a new Codex task that hadn't yet said its session could then lose track of it for
+  good. platoon now reads only the conversations' own lock files.
+
 ## [1.5.0] - 2026-10-31
 
 ### Changed

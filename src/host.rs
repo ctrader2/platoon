@@ -1221,6 +1221,86 @@ mod tests {
         assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
     }
 
+    /// One Codex process can run several chats (Codex 0.167's command center, in a `--no-daemon` window too): the
+    /// session is stopped only when every conversation Codex holds open under the host is idle, not just the one the
+    /// host was started with. A conversation another Codex window holds is none of its business.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_codex_session_is_not_stopped_while_another_chat_in_the_same_codex_works() {
+        let mut rig = Rig::new("codex-chats", Settings::default());
+        let codex = rig.dir.join("codex");
+        let day = codex.join("sessions/2026/11/06");
+        let locks = codex.join("thread-writer-locks");
+        fs::create_dir_all(&day).unwrap();
+        fs::create_dir_all(&locks).unwrap();
+        let turn =
+            |kind: &str| json!({"timestamp": "2026-11-06T10:00:00.000Z", "type": "event_msg", "payload": {"type": kind}}).to_string();
+        let (named, other, elsewhere) =
+            ("01a40000-0000-7000-8000-00000000000a", "01a40000-0000-7000-8000-00000000000b", "01a40000-0000-7000-8000-00000000000c");
+        let rollout = |id: &str| day.join(format!("rollout-2026-11-06T10-00-00-{id}.jsonl"));
+        let write = |id: &str, kinds: &[&str]| fs::write(rollout(id), kinds.iter().map(|k| turn(k) + "\n").collect::<String>()).unwrap();
+        write(named, &["task_started", "task_complete"]);
+        write(other, &["task_started"]);
+        write(elsewhere, &["task_started"]);
+        let lock = |id: &str| {
+            let p = locks.join(format!("{id}.lock"));
+            fs::write(&p, "").unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        rig.dog.agent = Agent::Codex;
+        rig.dog.root = codex.clone();
+        rig.dog.session = Agent::Codex.session_of_args(&Agent::Codex.args(Start::Resume(named)));
+
+        // Another Codex window's chat, working: it never keeps this session.
+        let (other_lock, elsewhere_lock) = (lock(other), lock(elsewhere));
+        let mut window = hold_elsewhere(&elsewhere_lock);
+        let reader = crate::agents::codex::Reader::with_root(codex.clone());
+        let start = Instant::now();
+        while !reader.live().iter().any(|l| l.id == elsewhere) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the other window's lock was never seen held");
+            thread::sleep(Duration::from_millis(20));
+        }
+        // This session's Codex holds a second chat, in the middle of a reply: Linux reads the lock's holder (`flock`,
+        // under the stand-in Codex), macOS the process with its lock file open (the stand-in itself).
+        let script = if cfg!(target_os = "linux") {
+            format!("flock '{other_lock}' sleep 631 & read x")
+        } else {
+            format!("exec 3<'{other_lock}'; sleep 631 & read x")
+        };
+        let s = Session::start(&mut rig, &script, if cfg!(target_os = "linux") { 2 } else { 1 });
+        let start = Instant::now();
+        while rig.decide() != Decision::Keep(Reason::NotIdle) && start.elapsed() < Duration::from_secs(10) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle), "the other chat is working");
+        // Its reply done: every chat it holds is idle, and it stops, whatever the other window's chat does.
+        write(other, &["task_started", "task_complete"]);
+        assert!(matches!(rig.decide(), Decision::Stop(_)));
+        // A chat it holds that has no saved conversation yet can't be told: not idle.
+        fs::remove_file(rollout(other)).unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        drop(s);
+        unsafe { libc::kill(-(window.id() as i32), libc::SIGKILL) };
+        let _ = window.wait();
+    }
+
+    /// A process of the test's own holding `lock` as another Codex window would (Linux: the lock itself; macOS: the
+    /// file open), in a process group of its own so all of it can be ended.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn hold_elsewhere(lock: &str) -> Child {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = if cfg!(target_os = "linux") {
+            let mut c = Command::new("flock");
+            c.args([lock, "sleep", "30"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "exec 3<\"$0\"; exec sleep 30", lock]);
+            c
+        };
+        cmd.stdin(Stdio::null()).process_group(0).spawn().unwrap()
+    }
+
     #[test]
     fn what_claude_runs_that_is_not_a_command_does_not_prevent_a_stop_and_is_recorded_for_clean_up() {
         // MCP servers: platoon reads no configuration for them; they are simply not a command claude started.

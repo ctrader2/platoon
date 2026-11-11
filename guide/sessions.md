@@ -255,7 +255,8 @@ Details worth knowing:
   this. If platoon can't see what runs under a session, it leaves the session alone. Some MCP servers don't exit when
   Claude does: after a stop, platoon asks the ones it saw before to exit too, and never any other process.
 - For a Codex session, idle is what Codex's saved session says (its last reply has finished), and a command Codex started
-  (it runs each one in a shell of its own too) keeps it running, as for Claude.
+  (it runs each one in a shell of its own too) keeps it running, as for Claude. One Codex window can have several chats
+  open (Codex's command center): the session is stopped only once every one of them has finished its reply.
 - The row of a running session that has been quiet that long but is still running says why when you pick it: `Kept
   running: a command Claude started is still going (npm run dev)`, `a window is open on it`, `Claude Code doesn't say it's
   idle`. Only the command's name and its first word or two are shown, never all of it.

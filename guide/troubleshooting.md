@@ -54,6 +54,12 @@ per folder: answer it there, in the session. See [Codex conversations](sessions.
 worktree is trusted in Codex by platoon when it makes it; if Codex couldn't be asked then, the task said so, and Codex
 asks you this once.
 
+**A task on Codex opens read-only after you changed Codex's model provider.** Codex keeps each chat on the provider it
+started with, and won't continue it on another one. Switch Codex back to that provider (or put back its settings), then
+`enter` opens the task's session as before. Codex's offer to continue in a new chat starts a chat that isn't the task's:
+platoon doesn't commit or check what it does (pushing still waits for your yes). See
+[Tasks on Codex](tasks-and-squads.md#tasks-on-codex).
+
 **A task on Codex stays Working whatever its session does.** Its hooks aren't in Codex yet: run `platoon setup`
 once more (it adds the task hooks and has Codex trust them). See [Tasks on Codex](tasks-and-squads.md#tasks-on-codex).
 

@@ -12,9 +12,11 @@
 //! - `session_index.jsonl`: the names Codex gives conversations, one line per change (the latest line wins).
 //! - `thread-writer-locks/<id>.lock`: held while a conversation is open. Codex keeps one writer per conversation
 //!   itself, so the holder of the lock is the one process running it (sometimes Codex's shared background server,
-//!   which runs many and is never signaled). A new conversation's lock is taken as soon as the session opens (after
-//!   Codex's own update and folder-trust questions), before any message and so before its rollout exists: such a
-//!   conversation is `Live::unsaved`, its folder the holder's own (`procs::cwd`).
+//!   which runs many and is never signaled; since 0.167 a `--no-daemon` window can run several chats too, its command
+//!   center's). A new conversation's lock is taken as soon as the session opens (after Codex's own update and
+//!   folder-trust questions), before any message and so before its rollout exists: such a conversation is
+//!   `Live::unsaved`, its folder the holder's own (`procs::cwd`). Codex's own `.coordination.lock` there is no
+//!   conversation's.
 //! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `hooks`).
 
 use super::{
@@ -495,8 +497,12 @@ pub fn id_of_path(path: &Path) -> Option<String> {
         return None;
     }
     let id = &stem[stem.len() - 36..];
-    let shape = id.split('-').map(str::len).collect::<Vec<_>>() == [8, 4, 4, 4, 12];
-    (shape && id.chars().all(|c| c == '-' || c.is_ascii_hexdigit())).then(|| id.to_string())
+    is_id(id).then(|| id.to_string())
+}
+
+/// Is `s` shaped as a conversation id: a UUID as Codex writes one (`ThreadId`, `protocol/src/thread_id.rs`)?
+fn is_id(s: &str) -> bool {
+    s.split('-').map(str::len).eq([8, 4, 4, 4, 12]) && s.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
 }
 
 /// The folders under `dir` (for the year, month and day levels of `sessions/`).
@@ -838,6 +844,31 @@ fn busy_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<bool> {
     None
 }
 
+/// Since when every conversation process `pid` runs has been idle, as their rollouts say (each at the end of a turn,
+/// the latest last written of them): `session`, the one its host was started with, and every other one it holds open
+/// itself or through a process under it (npm's launcher runs the real `codex` as its child). One Codex process can run
+/// several chats (0.167's command center, a `--no-daemon` window too), and stopping it stops them all. None when any of
+/// them is working or can't be told (no rollout yet, no turn record).
+pub fn idle_since(root: &Path, pid: u32, session: &str) -> Option<std::time::SystemTime> {
+    let reader = Reader::with_root(root.to_path_buf());
+    let mut ids = vec![session.to_string()];
+    for (holder, id) in reader.holders(&reader.locks()) {
+        if !ids.contains(&id) && (holder == pid || crate::guard::ancestors(holder).contains(&pid)) {
+            ids.push(id);
+        }
+    }
+    let rollouts = rollout_paths(root);
+    let mut latest = UNIX_EPOCH;
+    for id in &ids {
+        let rollout = rollouts.iter().find(|p| id_of_path(p).as_deref() == Some(id.as_str()))?;
+        if busy(rollout) != Some(false) {
+            return None;
+        }
+        latest = latest.max(fs::metadata(rollout).and_then(|m| m.modified()).ok()?);
+    }
+    Some(latest)
+}
+
 /// The names Codex gave conversations, by id, from `session_index.jsonl`: one line per change, the latest line for
 /// an id wins. A line that can't be read is skipped.
 pub fn names(root: &Path) -> HashMap<String, String> {
@@ -968,15 +999,16 @@ impl Reader {
         cwds.entry(pid).or_insert_with(|| crate::procs::cwd(pid).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()).clone()
     }
 
-    /// The lock files there are: (conversation id, path).
+    /// The conversations' lock files there are: (conversation id, path). Only `<id>.lock`: Codex keeps its own
+    /// `.coordination.lock` there too (`rollout/src/writer_lock.rs`), held for a moment whenever a conversation's lock
+    /// is taken or let go, and it is no conversation.
     fn locks(&self) -> Vec<(String, PathBuf)> {
         fs::read_dir(self.root.join("thread-writer-locks"))
             .into_iter()
             .flatten()
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "lock"))
-            .filter_map(|p| Some((p.file_stem()?.to_str()?.to_string(), p.clone())))
+            .filter_map(|p| Some((p.file_name()?.to_str()?.strip_suffix(".lock").filter(|id| is_id(id))?.to_string(), p.clone())))
             .collect()
     }
 
@@ -1600,6 +1632,39 @@ pub(crate) mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert!(reader.live().is_empty(), "free again");
+    }
+
+    /// Codex keeps one more lock file beside the conversations' (`.coordination.lock`, held for a moment whenever a
+    /// conversation's lock is taken or let go) and might keep others: only a file named for a conversation id is one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_lock_named_for_a_conversation_is_one() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let root = tmp("other-locks");
+        let dir = root.join("thread-writer-locks");
+        fs::create_dir_all(&dir).unwrap();
+        let mut held = Vec::new();
+        let mut children = Vec::new();
+        for name in [".coordination.lock".to_string(), "notes.lock".into(), format!("{FINISHED}.lock")] {
+            let lock = dir.join(&name);
+            fs::write(&lock, "").unwrap();
+            held.push((name, lock.clone()));
+            // In a process group of its own, so the `sleep` it runs goes with it.
+            let child = Command::new("flock").arg(&lock).args(["sleep", "30"]).stdin(Stdio::null()).process_group(0).spawn().unwrap();
+            children.push(child);
+        }
+        // Wait until every `flock` holds its lock.
+        let start = std::time::Instant::now();
+        while linux::holders(&held).len() < held.len() && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let ids: Vec<String> = Reader::with_root(root.clone()).live().into_iter().map(|l| l.id).collect();
+        for mut c in children {
+            unsafe { libc::kill(-(c.id() as i32), libc::SIGKILL) };
+            let _ = c.wait();
+        }
+        assert_eq!(ids, [FINISHED]);
     }
 
     /// The same through `lsof`, as macOS reads it (run here too when `lsof` is installed).
