@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-11
+
 ### Fixed
 
 - 1.5.1 was never published: its build for Macs with Apple silicon could not run, because GitHub no longer has the
@@ -233,7 +235,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/ctrader2/platoon/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/ctrader2/platoon/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/ctrader2/platoon/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ctrader2/platoon/compare/v1.3.0...v1.4.0
