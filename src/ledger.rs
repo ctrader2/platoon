@@ -282,7 +282,7 @@ pub fn local_day(epoch: u64) -> String {
     format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
 }
 
-fn utc_day(epoch: u64) -> String {
+pub(crate) fn utc_day(epoch: u64) -> String {
     // civil-from-days (Howard Hinnant)
     let z = (epoch / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);

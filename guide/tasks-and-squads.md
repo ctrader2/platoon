@@ -225,6 +225,18 @@ Nothing is pushed or published. The setting also takes away Claude's question to
 a squad that plans first can't show you its plan. platoon can't turn the setting off for a task: when it is on anywhere
 Claude Code reads it, it wins. Turn it off to use tasks as described here.
 
+### It writes only in its worktree
+
+A task's session edits files only in its worktree (or its folder, for one that isn't in git) and the task's own folder
+(Claude Code 2.1.314 and later: its `blockWritesOutsideWorkingDirectories` setting, turned on for the task's session
+only). An edit anywhere else, your main checkout included, is refused and Claude is told why, in every permission mode,
+plan mode too. A squad that plans first works as before: Claude Code still writes its own plan files, and platoon saves
+the plan with its hook. The same setting keeps Claude's file tools off Claude Code's settings files
+(`.claude/settings.json`, `.claude/settings.local.json`) even inside the worktree, and takes away the tools that move a
+session to another worktree. It covers Claude's file tools, not the commands it runs. To let a task write in another
+folder, add it in the session with `/add-dir`. A task on Codex is kept to its worktree by Codex's own sandbox (see
+[Tasks on Codex](#tasks-on-codex)).
+
 ### After the work
 
 When a Done or cancelled task's session has stopped and nothing else is open in its worktree, platoon removes the

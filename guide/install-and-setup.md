@@ -191,6 +191,25 @@ new version is said once; the line goes at your next key or click. "Check for a 
 [settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off every
 check: platoon then runs neither `claude --version` nor `codex --version`.
 
+## When your Claude Code sign-in ends
+
+A claude.ai sign-in of Claude Code lasts a set time, and signing in again is the only way to make it longer. Claude Code
+2.1.318 and later say when it ends in every answer of the `claude -p` calls platoon makes (smart features, the project
+notes, the check of a task's work), and platoon keeps the latest date. When the sign-in can end within the next week,
+it says so once, in a line above the key hints:
+
+```
+Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to keep sessions, task checks and smart features working.
+```
+
+Claude Code gives a date that may be up to 3 days late, so platoon names the range; it starts saying so 10 days before
+the date, as Claude Code's own `claude -p` warning does. Closer to the date the line says the sign-in can end any day
+now, and after it that it may have ended. The line goes at your next key or click and isn't said again for the same
+sign-in; after `claude auth login` (or `/login` in a session) the new sign-in has a new date. With
+an API key, or a token from the environment, Claude Code gives no date and platoon says nothing. platoon never runs
+`claude auth` itself: it reads only the answers it already gets, so it learns the date at its first call. With Claude
+Code switched off in the [settings](settings-and-keys.md#general), nothing is said.
+
 ## Uninstall
 
 One command removes platoon completely, however you installed it:

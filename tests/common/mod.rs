@@ -611,6 +611,18 @@ impl AiFake {
         }
     }
 
+    /// Say in every answer, as Claude Code 2.1.318 and later does for a claude.ai sign-in, that the sign-in ends at
+    /// `iso` (`credential_expires_at`); None: no date, as for an API key.
+    pub fn sign_in_ends(&self, iso: Option<&str>) {
+        let p = self.dir.join("sign-in-ends");
+        match iso {
+            Some(t) => std::fs::write(p, t).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+
     pub fn usage(&self, input: u64, output: u64) {
         std::fs::write(
             self.dir.join("usage"),

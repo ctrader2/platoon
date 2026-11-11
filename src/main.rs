@@ -83,6 +83,9 @@ mod setup;
 #[cfg(test)]
 mod setup_notice_app_tests;
 mod setupnotice;
+mod signin;
+#[cfg(test)]
+mod signin_app_tests;
 mod skill;
 mod smart;
 #[cfg(test)]

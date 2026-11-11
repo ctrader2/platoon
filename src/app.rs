@@ -19,6 +19,7 @@ use crate::select::{Click, Drag, Past, Point, Selection, Unit, click_count, extr
 use crate::settings::{EditorFor, Item, Kind, ModelFor, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::setupnotice;
+use crate::signin;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
 use crate::usage::{self, Usage};
@@ -518,6 +519,13 @@ struct News {
     shown: bool,
 }
 
+/// The Claude Code sign-in ends soon (`signin.rs`), waiting to show or showing.
+struct SignInNews {
+    notice: signin::Notice,
+    /// It has been on screen, and remembered as said for its sign-in.
+    shown: bool,
+}
+
 /// What `platoon setup` has to add or update outside the start-up gate (`setupnotice.rs`), waiting to show or showing.
 struct SetupNews {
     notice: setupnotice::Notice,
@@ -564,6 +572,8 @@ pub struct App {
     news_rx: Option<Receiver<Option<versions::Outcome>>>,
     /// Something `platoon setup` has to add outside the start-up gate: shown where the version notice is, above it.
     setup_news: Option<SetupNews>,
+    /// The Claude Code sign-in ends soon: shown where the version notice is, first.
+    sign_in_news: Option<SignInNews>,
     pub mouse: (u16, u16),
     /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
     /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
@@ -925,6 +935,7 @@ impl App {
             news: None,
             news_rx: None,
             setup_news: None,
+            sign_in_news: None,
             mouse: (0, 0),
             selection: None,
             drag: None,
@@ -1279,6 +1290,27 @@ impl App {
             n.shown = true;
             let _ = setupnotice::remember(&self.cache, &n.notice);
         }
+        self.poll_sign_in();
+    }
+
+    /// The sign-in notice, looked for at each refresh: any call platoon makes (here, in the notes helper, in a task's
+    /// check) may be the one that learns the date. It goes as soon as its sign-in does (signed in again, an API key
+    /// now, Claude Code switched off), and is said once per sign-in.
+    fn poll_sign_in(&mut self) {
+        let due = self.providers.claude.is_some().then(|| signin::look(&self.cache, usage::now())).flatten();
+        if self.sign_in_news.as_ref().is_some_and(|n| due.as_ref().map(signin::Notice::ends) != Some(n.notice.ends())) {
+            self.sign_in_news = None;
+        }
+        // Until it shows, its words follow the clock ("between", "any day now", "may have ended").
+        if self.sign_in_news.as_ref().is_none_or(|n| !n.shown) {
+            self.sign_in_news = due.filter(|n| !signin::said(&self.cache, n)).map(|notice| SignInNews { notice, shown: false });
+        }
+        if self.news_place()
+            && let Some(n) = self.sign_in_news.as_mut().filter(|n| !n.shown)
+        {
+            n.shown = true;
+            let _ = signin::remember(&self.cache, &n.notice);
+        }
     }
 
     /// What `platoon setup` has to add or update outside the gate now, for the Claude Code in use (`setupnotice.rs`).
@@ -1299,13 +1331,15 @@ impl App {
         matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.board_showing()
     }
 
-    /// The notices on screen now, each its own lines: what setup has to add, then the version notice.
+    /// The notices on screen now, each its own lines: the sign-in ending, what setup has to add, then the version
+    /// notice.
     pub fn news_showing(&self) -> Vec<&str> {
         if !self.news_place() {
             return Vec::new();
         }
+        let sign_in = self.sign_in_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
         let setup = self.setup_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
-        setup.into_iter().chain(self.news.as_ref().filter(|n| n.shown).map(|n| n.text.as_str())).collect()
+        sign_in.into_iter().chain(setup).chain(self.news.as_ref().filter(|n| n.shown).map(|n| n.text.as_str())).collect()
     }
 
     /// A key or a click while a notice shows puts the notices away (the key still does what it does).
@@ -1313,6 +1347,7 @@ impl App {
         if !self.news_showing().is_empty() {
             self.news = None;
             self.setup_news = None;
+            self.sign_in_news = None;
         }
     }
 

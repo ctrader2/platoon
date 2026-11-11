@@ -6,6 +6,19 @@ here.
 
 ## [Unreleased]
 
+### Added
+
+- platoon tells you before your Claude Code sign-in ends. Claude Code 2.1.318 and later say when a claude.ai sign-in
+  ends in each answer of the calls platoon makes; when it can end within a week, a line above the key hints says so
+  once, for example ``Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to
+  keep sessions, task checks and smart features working.`` Nothing is said for an API key.
+
+### Changed
+
+- A task on Claude Code edits files only in its worktree and the task's own folder. An edit anywhere else, your main
+  checkout included, is refused (Claude Code 2.1.314 and later), as a task on Codex already was by Codex's sandbox. A
+  squad that plans first works as before. `/add-dir` in the task's session lets it write in another folder.
+
 ## [1.5.2] - 2026-11-11
 
 ### Fixed

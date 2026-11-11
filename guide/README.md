@@ -6,7 +6,7 @@ differently in Codex, the page says so beside it.
 
 | Page | What it covers |
 | --- | --- |
-| [Install and set up](install-and-setup.md) | What you need, the ways to install and update, `platoon setup` and each of its steps, the notices when Claude Code, Codex or platoon is newer, and uninstalling |
+| [Install and set up](install-and-setup.md) | What you need, the ways to install and update, `platoon setup` and each of its steps, the notices when Claude Code, Codex or platoon is newer and when your Claude Code sign-in ends, and uninstalling |
 | [Sessions](sessions.md) | The list, search, renaming, background sessions, archive, automatic clean-up, sessions that keep running, copying text, `platoon open`, and opening the work in your code editor (`v`) |
 | [Projects](projects.md) | Grouping conversations into projects, their notes, editing them, notes that keep themselves up to date, the description line, and handing work on to a new session (`h`) |
 | [Tasks and squads](tasks-and-squads.md) | Tasks, tasks drafted from a conversation (`t`), starting a task as one session that follows a squad, how its state follows the session, the built-in squads and your own |

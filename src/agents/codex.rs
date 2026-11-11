@@ -357,7 +357,7 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool, wants_json: bool
         }
         Some(a) => Ok(a),
     };
-    Outcome { result, usage, cost_usd: 0.0 }
+    Outcome { result, usage, cost_usd: 0.0, sign_in: crate::signin::SignIn::Unknown }
 }
 
 /// `turn.completed`'s usage as platoon counts it. Codex's `input_tokens` is everything sent, its cached part

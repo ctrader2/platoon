@@ -271,6 +271,8 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     assert_eq!(settings["statusLine"]["command"], json!(format!("{BIN} statusline")));
     assert_eq!(settings["statusLine"]["refreshInterval"], 2);
     assert_eq!(settings["permissions"]["allow"], json!([format!("Bash({BIN} task step:*)")]));
+    // Its file tools write only in its working folders: the worktree it runs in and the task's folder it was given.
+    assert_eq!(settings["permissions"]["blockWritesOutsideWorkingDirectories"], json!(true), "{settings}");
     assert!(!argv.iter().any(|a| a == "--agents" || a == "--agent"));
     // The task's own folder: squad.md (platoon's rules, then the squad's steps) and every squad beside it.
     let squad_md = fs::read_to_string(task_dir.join("squad.md")).unwrap();

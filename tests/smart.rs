@@ -106,6 +106,36 @@ fn the_list_fills_in_generated_names_with_a_mark_and_the_summary_under_it() {
 }
 
 #[test]
+fn an_answer_that_says_the_sign_in_ends_within_ten_days_puts_the_notice_above_the_footer_once() {
+    let lab = Lab::new("smart-sign-in");
+    lab.save("alpha", "please fix the login redirect after sign in", 5);
+    lab.on();
+    let fake = AiFake::new("smart-sign-in");
+    names_reply(&fake);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    fake.sign_in_ends(Some(&iso((now + 6 * 86_400) * 1000)));
+    let mut t = Term::spawn(&[], &lab.env(&fake), &lab.base, 24, 100);
+    t.wait_for("Newest topic");
+    t.wait_for_flat("Your Claude Code sign-in ends between");
+    t.wait_for_flat("Run `claude auth login` before then to keep sessions, task checks and smart features working.");
+    let screen = t.stable();
+    let rows: Vec<&str> = screen.lines().collect();
+    let at = rows.iter().position(|l| l.contains("Your Claude Code sign-in ends between")).unwrap();
+    assert!(rows[at + 1..].iter().take(2).any(|l| l.contains("? help")), "just above the footer:\n{screen}");
+    let ends: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.dir("cache/sign-in.json")).unwrap()).unwrap();
+    assert_eq!(ends["ends"].as_u64(), Some(now + 6 * 86_400));
+    t.send(b"j");
+    t.wait_gone("Your Claude Code sign-in");
+    t.send(b"q");
+    t.wait_exit();
+    // Said once: the next start has nothing to say about this sign-in.
+    let mut t2 = Term::spawn(&[], &lab.env(&fake), &lab.base, 24, 100);
+    t2.wait_for("Newest topic");
+    thread::sleep(Duration::from_millis(600));
+    assert!(!t2.flat().contains("Your Claude Code sign-in"), "{}", t2.stable());
+}
+
+#[test]
 fn describe_it_runs_one_call_on_enter_shows_results_and_enter_jumps_and_esc_cancels_with_no_process_left() {
     let lab = Lab::new("smart-find");
     lab.save("alpha", "please fix the login redirect after sign in", 5);

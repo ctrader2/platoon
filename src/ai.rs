@@ -731,6 +731,8 @@ pub struct Outcome {
     /// What Claude reported (present even for a failed call, when the JSON had it).
     pub usage: Option<Usage>,
     pub cost_usd: f64,
+    /// When the sign-in the call was made with ends, as the answer said (`signin.rs`).
+    pub sign_in: crate::signin::SignIn,
 }
 
 /// The one folder every call runs in, under platoon's cache folder. Defined here only: whatever must recognize or
@@ -934,6 +936,10 @@ impl Runner {
         }
         drop(schema);
         let outcome = agent.one_shot_outcome(req, &stdout, &stderr, status.is_some_and(|s| s.success()));
+        // Whatever the call was for and however it ended, its answer may say when the sign-in ends: for the notice.
+        if agent == Agent::Claude {
+            crate::signin::note(&self.cache, outcome.sign_in);
+        }
         let ok = outcome.result.is_ok();
         // Whatever Claude said it used counts, even if the call failed. If it said nothing about a good call, a rough
         // figure still counts, so the daily limit can't be silently bypassed.
@@ -1292,6 +1298,7 @@ fn tokens_test(
 pub(crate) mod tests {
     use super::*;
     use crate::agents::claude::interpret;
+    use crate::signin::{self, SignIn};
     use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::AtomicUsize};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -1904,6 +1911,65 @@ pub(crate) mod tests {
         // Only the cache dir is written to.
         let names: Vec<String> = fs::read_dir(&f.cache).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(names.iter().all(|n| ["ai-work", "ai-usage.json", "ai-usage.lock"].contains(&n.as_str())), "{names:?}");
+    }
+
+    /// A good answer as Claude Code 2.1.318 and later gives it for a claude.ai sign-in: with the day it ends.
+    fn ok_json_ending(text: &str, iso: &str) -> String {
+        ok_json(text, 400, 0, 17, 5).replacen(r#""session_id""#, &format!(r#""credential_expires_at":"{iso}","session_id""#), 1)
+    }
+
+    #[test]
+    fn interpret_reads_when_the_sign_in_ends_and_an_answer_without_a_date_has_none() {
+        let o = interpret(ok_json_ending("hi", "2026-11-21T12:00:00.000Z").as_bytes(), b"", true);
+        assert_eq!((o.result, o.sign_in), (Ok("hi".into()), SignIn::EndsAt(1_795_262_400)));
+        // A failed answer says it too: the sign-in it was made with.
+        let e = r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login","credential_expires_at":"2026-11-21T12:00:00Z"}"#;
+        assert_eq!(interpret(e.as_bytes(), b"", false).sign_in, SignIn::EndsAt(1_795_262_400));
+        // An API key, an older Claude Code, a date that isn't one: no date.
+        assert_eq!(interpret(ok_json("hi", 1, 0, 0, 1).as_bytes(), b"", true).sign_in, SignIn::NoEnd);
+        assert_eq!(interpret(ok_json_ending("hi", "soon").as_bytes(), b"", true).sign_in, SignIn::NoEnd);
+        assert_eq!(interpret(br#"{"is_error":false,"result":"ok","credential_expires_at":17}"#, b"", true).sign_in, SignIn::NoEnd);
+        // No answer to read: nothing can be told.
+        assert_eq!(interpret(b"", b"Error: Not logged in", false).sign_in, SignIn::Unknown);
+        assert_eq!(interpret(b"<html>502</html>", b"", true).sign_in, SignIn::Unknown);
+    }
+
+    #[test]
+    fn every_call_keeps_when_the_sign_in_ends_a_tasks_check_and_a_failed_call_too_and_a_later_answer_replaces_it() {
+        let f = Fake::new("sign-in", &format!("printf '%s' '{}'", ok_json_ending("ok", "2026-11-21T12:00:00.000Z")));
+        f.runner().run(&on(), &req()).unwrap();
+        assert_eq!(signin::recorded(&f.cache), Some(1_795_262_400));
+        let text = fs::read_to_string(f.cache.join("sign-in.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            serde_json::json!({"ends": 1_795_262_400u64}),
+            "the date and nothing else"
+        );
+
+        // A task's check (outside the gate, the token features off) after the user signed in again.
+        let g = Fake::new("sign-in-check", &format!("printf '%s' '{}'", ok_json_ending("{}", "2026-12-20T09:30:00.000Z")));
+        let mut check = Request::new(crate::verdict::FEATURE, "sys", "prompt");
+        check.model = Some("opus".into());
+        Runner::with_program(&f.cache, &g.script).run(&Settings::default(), &check).unwrap();
+        assert_eq!(signin::recorded(&f.cache), Some(1_797_759_000));
+
+        // A call that failed still says which sign-in it was made with.
+        let h = Fake::new(
+            "sign-in-failed",
+            r#"printf '%s' '{"is_error":true,"result":"Not logged in","credential_expires_at":"2026-11-21T12:00:00.000Z"}'; exit 1"#,
+        );
+        assert!(Runner::with_program(&f.cache, &h.script).run(&on(), &req()).is_err());
+        assert_eq!(signin::recorded(&f.cache), Some(1_795_262_400));
+
+        // Garbage says nothing: the date stays. An answer without one (an API key now) takes it away. (Task checks:
+        // the failed call started a back-off, which holds the smart features back.)
+        let garbage = Fake::new("sign-in-garbage", "printf 'not json'");
+        let _ = Runner::with_program(&f.cache, &garbage.script).run(&Settings::default(), &check);
+        assert_eq!(signin::recorded(&f.cache), Some(1_795_262_400));
+        let key = Fake::ok("sign-in-key");
+        Runner::with_program(&f.cache, &key.script).run(&Settings::default(), &check).unwrap();
+        assert_eq!(signin::recorded(&f.cache), None);
+        assert!(!f.cache.join("sign-in.json").exists());
     }
 
     #[test]

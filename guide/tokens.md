@@ -127,7 +127,8 @@ All of this is enforced in one place before any call starts:
 - **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls
   on that program for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed
   out or over the plan limit); the other program's calls go on. A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the
-  worker looks again every 30 seconds without repeating itself.
+  worker looks again every 30 seconds without repeating itself. Before a claude.ai sign-in ends, platoon
+  [says so](install-and-setup.md#when-your-claude-code-sign-in-ends) once, so the calls don't start failing unannounced.
 - **Small calls**: on Claude Code, `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and
   low effort, run in `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only
   one), with `PLATOON_AI=1` set. `MAX_THINKING_TOKENS=0` is set too, so the model doesn't spend hidden "thinking" tokens on

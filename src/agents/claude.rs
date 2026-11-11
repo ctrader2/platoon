@@ -9,6 +9,7 @@ use super::{
 use crate::ai::{Outcome, Request, classify, extract_json};
 use crate::ledger::{FailKind, Usage};
 use crate::procs::pid_alive;
+use crate::signin::SignIn;
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
@@ -292,7 +293,8 @@ pub fn one_shot(cmd: &mut Command, model: &str, req: &Request) {
 }
 
 /// What came out of a run of `claude -p`, understood. Pure: the runner feeds it the bytes. With `--json-schema` the
-/// answer is `structured_output`, else `result`; the usage is `usage`, the cost `total_cost_usd`.
+/// answer is `structured_output`, else `result`; the usage is `usage`, the cost `total_cost_usd`; when the sign-in
+/// ends, `credential_expires_at` (Claude Code 2.1.318 and later, a claude.ai sign-in only: no date for an API key).
 pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
     let out = String::from_utf8_lossy(stdout);
     let err = String::from_utf8_lossy(stderr);
@@ -306,7 +308,7 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         let detail = cut(both.trim(), 200);
         let kind = classify(&both);
         let detail = if detail.is_empty() { "no output".to_string() } else { detail };
-        return Outcome { result: Err((kind, detail)), usage: None, cost_usd: 0.0 };
+        return Outcome { result: Err((kind, detail)), usage: None, cost_usd: 0.0, sign_in: SignIn::Unknown };
     };
     let number = |o: &Value, k: &str| o.get(k).and_then(Value::as_u64).unwrap_or(0);
     let usage = v.get("usage").filter(|u| u.is_object()).map(|u| Usage {
@@ -316,6 +318,10 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         output: number(u, "output_tokens"),
     });
     let cost_usd = v.get("total_cost_usd").and_then(Value::as_f64).filter(|c| c.is_finite() && *c >= 0.0).unwrap_or(0.0);
+    let sign_in = match v.get("credential_expires_at").and_then(Value::as_str).and_then(parse_iso_ms) {
+        Some(ms) => SignIn::EndsAt(ms / 1000),
+        None => SignIn::NoEnd,
+    };
     // With `--json-schema` the answer is `structured_output`; `result` may then be empty or a sentence about it.
     let structured = v.get("structured_output").filter(|s| !s.is_null()).map(Value::to_string);
     let text = structured.as_deref().or_else(|| v.get("result").and_then(Value::as_str));
@@ -339,7 +345,7 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
             Err((kind, detail))
         }
     };
-    Outcome { result, usage, cost_usd }
+    Outcome { result, usage, cost_usd, sign_in }
 }
 
 fn cut(s: &str, n: usize) -> String {
@@ -354,18 +360,20 @@ fn cut(s: &str, n: usize) -> String {
 // - `--model`, the squad's model, and `--permission-mode plan` for a squad that plans first, else `acceptEdits`;
 // - `--settings`, the task's hooks for this session only (the user's own settings stay as they are), with
 //   `permissions.ask` rules so pushing, opening or merging pull requests and publishing wait at Claude Code's own
-//   permission prompt (`ASK`);
+//   permission prompt (`ASK`), and its file tools kept to its folders (`CONFINED`);
 // - `--append-system-prompt-file <task folder>/squad.md`: platoon's fixed rules and the squad's steps;
-// - `--add-dir <task folder>`, so the session can read those files;
+// - `--add-dir <task folder>`, so the session can read those files (and write there: the only folder besides its
+//   worktree it may);
 // - the task's text as its first message.
 
 /// Commands that publish: they wait at Claude Code's permission prompt (`permissions.ask`), whatever mode the session
-/// is in. Claude Code matches a rule against each part of a compound command (`cd x && git push` asks too) and past a
-/// leading `VAR=value`, and a `*` may stand anywhere, so the forms of `git push` with options before `push` (`git -C
-/// <dir> push`, `git -c k=v push`, `--git-dir`, `--work-tree`) have rules of their own. Not caught (Claude Code's own
-/// list of what a rule doesn't match): another spelling of the program (`/usr/bin/git push`, `git 'push'`), a shell
-/// that runs it (`sh -c '...'`), and a script or tool that pushes for you. A commit whose message has " push " in it
-/// after `git -C <dir>` asks too.
+/// is in. As Claude Code 2.1.322's own code matches an ask rule: against each command of a compound line (`cd x && git
+/// push` asks too), by its words as the shell reads them, quotes taken out (`git 'push'` asks: since 2.1.319), with the
+/// program by its name (`/usr/bin/git push` asks), past a leading `VAR=value` and wrappers such as `env`, `sudo`,
+/// `timeout`, `nice` and `nohup`; and a `*` may stand anywhere, so the forms of `git push` with options before `push`
+/// (`git -C <dir> push`, `git -c k=v push`, `--git-dir`, `--work-tree`) have rules of their own. Not caught: a shell
+/// given the command as a script (`sh -c 'git push'`), and a script or tool that pushes for you. A commit whose message
+/// has " push " in it after `git -C <dir>` asks too.
 pub const ASK: &[&str] = &[
     "Bash(git push:*)",
     "Bash(git -C * push)",
@@ -398,6 +406,18 @@ pub const ASK: &[&str] = &[
     "Bash(npm publish:*)",
 ];
 
+/// `permissions.blockWritesOutsideWorkingDirectories` (Claude Code 2.1.314 and later): Write, Edit and NotebookEdit refuse
+/// a path outside the session's working folders (its worktree, or its folder outside git, and the task's own folder
+/// from `--add-dir`) in every permission mode, as Codex's `workspace-write` does for a Codex task, so a slip can't edit
+/// the main checkout. Read from Claude Code 2.1.322's own code, it lets through what the session keeps for itself (its
+/// plan files, which plan mode writes outside, its scratchpad, a background job's folder, the project's auto-memory);
+/// refuses its settings files (`.claude/settings.json`, `.claude/settings.local.json`) inside the folders too; takes
+/// away `EnterWorktree` and `ExitWorktree`; and leaves shell commands, MCP tools and hooks as they were (platoon's own
+/// `plan.md` is written by its hook). A folder the user adds with `/add-dir` is a working folder too. Before 2.1.314 the
+/// key means nothing: 2.1.314's settings keep a `permissions` key they don't know (`passthrough`), and older versions
+/// are taken to do the same (not seen).
+const CONFINED: &str = "blockWritesOutsideWorkingDirectories";
+
 /// How much longer than the check of the work may take the `Stop` hook is given before Claude Code gives up on it, in
 /// seconds.
 const STOP_MARGIN: u64 = 60;
@@ -415,7 +435,8 @@ pub fn shell_word(s: &str) -> String {
 /// `statusLine.refreshInterval`, at least 1): the step, the helpers and the check's timer stay current.
 pub const STATUS_EVERY: u64 = 2;
 
-/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules; platoon's own
+/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, the `ask` rules, and its file tools
+/// kept to its folders (`CONFINED`); platoon's own
 /// status line (the task's line: `platoon statusline`), run again every `STATUS_EVERY` seconds, in place of the user's
 /// in this session only; and `exe task step` allowed without a permission prompt (the rules have the session run it
 /// at each step, written as here). The `Stop` hook waits as long as the check of the work may take, and a little more,
@@ -429,7 +450,7 @@ pub fn settings_json(exe: &str, checker: &str) -> String {
         o.insert("statusMessage".into(), json!(format!("{checker} is checking the work against \"Done when\"…")));
     }
     json!({
-        "permissions": {"ask": ASK, "allow": [format!("Bash({exe} task step:*)")]},
+        "permissions": {"ask": ASK, "allow": [format!("Bash({exe} task step:*)")], CONFINED: true},
         "statusLine": {"type": "command", "command": format!("{exe} statusline"), "refreshInterval": STATUS_EVERY},
         "hooks": {
             "PreToolUse": [
@@ -1532,6 +1553,8 @@ mod tests {
         assert_eq!(now["statusLine"], json!({"type": "command", "command": "/opt/platoon/bin/platoon statusline", "refreshInterval": 2}));
         // `task step` by platoon's path, as the rules write it, needs no permission prompt.
         assert_eq!(now["permissions"]["allow"], json!(["Bash(/opt/platoon/bin/platoon task step:*)"]));
+        // Its file tools write only in its worktree and the task's folder, in every permission mode.
+        assert_eq!(now["permissions"]["blockWritesOutsideWorkingDirectories"], json!(true));
         // While the stop's check runs, Claude Code says who checks.
         let stop = &now["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["statusMessage"], "Fable is checking the work against \"Done when\"…");
@@ -1541,6 +1564,7 @@ mod tests {
         }
         if let Some(p) = now.get_mut("permissions").and_then(Value::as_object_mut) {
             p.remove("allow");
+            p.remove("blockWritesOutsideWorkingDirectories");
         }
         if let Some(h) = now.pointer_mut("/hooks/Stop/0/hooks/0").and_then(Value::as_object_mut) {
             h.remove("statusMessage");

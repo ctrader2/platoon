@@ -94,9 +94,12 @@ Claude Code is started with:
 - `ask` rules in the same `--settings`: Claude Code asks you before `git push` (also written `git -C <dir> push`,
   `git -c ... push`, `git --git-dir ... push` or `git --work-tree ... push`, and inside `cd x && ...`), `gh pr create`, `gh pr merge`,
   `gh release`, `gh api` calls with `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`, `glab`,
-  `cargo publish` and `npm publish`, whatever your own settings allow. They are Claude Code's own permission rules, not a
-  sandbox: something they don't name (another tool, a script that pushes, `sh -c 'git push'`, `/usr/bin/git push`, or
-  an MCP server that publishes) is not stopped by them.
+  `cargo publish` and `npm publish`, whatever your own settings allow. Claude Code matches them also when a command is
+  written with quotes (`git 'push'`), with the program's full path (`/usr/bin/git push`) or after `sudo` or `env`. They
+  are Claude Code's own permission rules, not a sandbox: something they don't name (another tool, a script that pushes,
+  `sh -c 'git push'`, or an MCP server that publishes) is not stopped by them.
+- `permissions.blockWritesOutsideWorkingDirectories` in the same `--settings`: Claude's file tools write only in the
+  task's worktree and its own folder (see [It writes only in its worktree](tasks-and-squads.md#it-writes-only-in-its-worktree)).
 - One `allow` rule in the same `--settings`, `Bash(<platoon> task step:*)`, so the session marks the
   [squad's steps](tasks-and-squads.md#watching-it-work) without asking you each time. It allows only that command,
   written with platoon's full path.
@@ -162,6 +165,9 @@ small marks its parts leave for each other.
   Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
 - `setup-notice.json`: what platoon has already told you `platoon setup` has to add (see
   [Install and set up](install-and-setup.md#the-hand-to-squad-skill))
+- `sign-in.json`: the date your Claude Code sign-in ends, as Claude Code's last answer said it (a date and nothing
+  else), and `sign-in-notice.json`, the sign-in platoon has already told you about (see
+  [Install and set up](install-and-setup.md#when-your-claude-code-sign-in-ends))
 - `diagnostics.log` and `diagnostics.log.1`: platoon's errors, and with "Keep a diagnostics log" on what it decided and
   why, in words and numbers only, never more than about 2 MB together (see
   [Reporting a problem](troubleshooting.md#reporting-a-problem))

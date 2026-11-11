@@ -252,8 +252,9 @@ pub fn wait_ended(pid: u32) {
 /// A stand-in for `claude -p` that records every call (`calls/N.argv`, `.cwd`, `.env`, `.stdin`, N from 1) and
 /// answers from files the test writes: `reply.N` (the text the model says, for call N) or else `reply.default`, or,
 /// when neither exists, a naming answer built from the numbers it finds in the request (`[1]`, `[2]`, ...) or a
-/// ranking answer for a "Description:" request. `usage` holds the four token numbers it reports; `hang` makes it
-/// sleep until killed (its pid is written to `pid`); `fail` makes it print an error result and exit 1.
+/// ranking answer for a "Description:" request. `usage` holds the four token numbers it reports; `sign-in-ends` the
+/// date it says the sign-in ends; `hang` makes it sleep until killed (its pid is written to `pid`); `fail` makes it
+/// print an error result and exit 1.
 pub struct AiFake {
     pub dir: PathBuf,
     pub script: String,
@@ -362,6 +363,18 @@ impl AiFake {
 
     pub fn reply_default(&self, text: &str) {
         fs::write(self.dir.join("reply.default"), text).unwrap();
+    }
+
+    /// Say in every answer, as Claude Code 2.1.318 and later does for a claude.ai sign-in, that the sign-in ends at
+    /// `iso` (`credential_expires_at`); None: no date, as for an API key.
+    pub fn sign_in_ends(&self, iso: Option<&str>) {
+        let p = self.dir.join("sign-in-ends");
+        match iso {
+            Some(t) => std::fs::write(p, t).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(p);
+            }
+        }
     }
 
     pub fn usage(&self, input: u64, output: u64) {

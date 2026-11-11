@@ -18,8 +18,11 @@ fi
 [ -e "$dir/delay" ] && sleep "$(cat "$dir/delay")"
 usage='{"input_tokens":400,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":50}'
 [ -e "$dir/usage" ] && usage=$(cat "$dir/usage")
+# When the sign-in ends, as Claude Code 2.1.318 and later says it for a claude.ai sign-in (none for an API key).
+ends=''
+[ -e "$dir/sign-in-ends" ] && ends=",\"credential_expires_at\":\"$(cat "$dir/sign-in-ends")\""
 if [ -e "$dir/fail" ]; then
-  printf '{"type":"result","subtype":"error","is_error":true,"result":"%s","usage":%s}' "$(cat "$dir/fail")" "$usage"
+  printf '{"type":"result","subtype":"error","is_error":true,"result":"%s","usage":%s%s}' "$(cat "$dir/fail")" "$usage" "$ends"
   exit 1
 fi
 if [ -e "$dir/reply.$k" ]; then
@@ -49,4 +52,4 @@ else
 fi
 # The reply as a JSON string, as claude -p writes it: line breaks kept (as \n), quotes and backslashes escaped.
 esc=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')
-printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":%s}' "$esc" "$usage"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":%s%s}' "$esc" "$usage" "$ends"
