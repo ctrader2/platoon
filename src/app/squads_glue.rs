@@ -23,6 +23,11 @@ use std::time::SystemTime;
 /// What a task says while its worktree is made, before its session starts.
 pub const MAKING_WORKTREE: &str = "Making its worktree…";
 
+/// Why a task's Claude Code session can't be continued: its saved conversation is gone (Claude Code deletes the ones
+/// nobody has used for `cleanupPeriodDays`, 30 unless set).
+pub const GONE_FROM_CLAUDE: &str = "Claude Code no longer has its conversation (it deletes conversations not used for 30 days, unless its \
+     cleanupPeriodDays setting says otherwise)";
+
 /// What making a task's worktree came to: the worktree (None: the folder isn't in git), and for a Codex task, what
 /// came of asking Codex to trust it (`trust_worktree`).
 pub(super) type Made = (Result<Option<Worktree>, String>, Option<Trusted>);
@@ -434,6 +439,13 @@ impl App {
         }
         let agent = self.task_agent(&squad)?;
         let resume = resume && t.session_id().is_some();
+        // Claude Code deletes a conversation nobody has used for a while: resuming it would only fail.
+        if resume
+            && agent == Agent::Claude
+            && t.session_id().is_some_and(|id| crate::agents::claude::find_transcript(self.reader.root(), id).is_none())
+        {
+            return Err(GONE_FROM_CLAUDE.into());
+        }
         let exe = crate::taskrun::this_platoon();
         let checker = crate::agents::model_display_name(&taskrun::verdict_model(&self.config, project, &t, &self.catalog()));
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));

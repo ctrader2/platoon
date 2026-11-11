@@ -69,6 +69,8 @@ pub use projects_glue::{
     AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_SQUADS, TOP_TASKS, TOPS,
 };
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
+#[cfg(test)]
+pub use squads_glue::GONE_FROM_CLAUDE;
 pub use squads_glue::SquadState;
 pub use squadtab_glue::{SquadsTab, origin_words};
 pub use tickets_glue::TicketsState;

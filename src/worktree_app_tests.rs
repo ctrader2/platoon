@@ -200,6 +200,22 @@ fn cancelling_a_task_whose_worktree_has_changes_says_platoon_keeps_it() {
 }
 
 #[test]
+fn a_task_whose_conversation_claude_code_deleted_says_so_instead_of_starting_a_resume_that_fails() {
+    // Claude Code deletes a saved conversation nobody has used for 30 days (`cleanupPeriodDays`).
+    let mut l = lab("wt-gone", State::Done);
+    let (config, project) = (l.w.config.clone(), l.project.clone());
+    l.app.refresh_until_for_test(15, "the worktree removed", |_| {
+        Tickets::open(&config, &project).get(1).and_then(|t| t.worktree.clone()).is_some_and(|w| w.removed.is_some())
+    });
+    key(&mut l.app, KeyCode::Enter);
+    l.app.refresh_until_for_test(15, "the worktree back", |a| a.worktrees_idle() && a.active_notice().is_some());
+    assert!(l.app.sq.launched.is_empty(), "no `claude --resume` of a conversation that isn't there");
+    let said = l.app.active_notice().unwrap_or_default().to_string();
+    assert_eq!(said, format!("Couldn't open #1's session: {}", crate::app::GONE_FROM_CLAUDE));
+    assert!(said.contains("cleanupPeriodDays"), "{said}");
+}
+
+#[test]
 fn opening_a_done_tasks_session_whose_worktree_was_removed_makes_it_again_from_its_branch_first() {
     let mut l = lab("wt-continue", State::Done);
     let (config, project) = (l.w.config.clone(), l.project.clone());
@@ -211,6 +227,8 @@ fn opening_a_done_tasks_session_whose_worktree_was_removed_makes_it_again_from_i
     fs::write(l.shop.join("later.txt"), "later\n").unwrap();
     git(&l.shop, &["add", "."]);
     git(&l.shop, &["commit", "-q", "-m", "later"]);
+    // Its conversation is saved in Claude Code (`claude --resume` needs it).
+    l.w.transcript("sess-1", &l.made.path, "make a basket page", 5);
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
     assert!(flat(&draw(&mut term, &l.app)).contains("enter its session"));
     key(&mut l.app, KeyCode::Enter);

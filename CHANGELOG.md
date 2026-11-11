@@ -14,6 +14,18 @@ here.
 - Codex keeps a lock file of its own beside its conversations' (`.coordination.lock`), and platoon could take it, for a
   moment, for an open conversation; a new Codex task that hadn't yet said its session could then lose track of it for
   good. platoon now reads only the conversations' own lock files.
+- Idle stop no longer ends a Claude Code session while a tool Claude started is still working in the background. Since
+  Claude Code 2.1.319 an MCP server can run a long tool call as a task that Claude Code moves to the background, and
+  Claude Code then says the session is idle; platoon stopped it after the idle time and the tool's work was lost. Now
+  the session is kept until a turn of Claude's ends without such a tool at work, and its row says `Kept running: a tool
+  Claude started is still working in the background`.
+- A task waiting at a permission prompt went back to Working when a tool from a turn you had interrupted by typing
+  finished late (Claude Code 2.1.319 and later report those). Now only a tool that started after your last message
+  counts as the answer.
+- Opening a task whose conversation Claude Code has deleted (it deletes conversations nobody has used for 30 days)
+  tried to continue it and failed. Now platoon says so. The guide explains Claude Code's clean-up and how to keep your
+  history longer (its `cleanupPeriodDays` setting), and that a task can't wait for you at a permission prompt while
+  Claude Code's `denyInsteadOfPrompting` setting is on.
 
 ## [1.5.0] - 2026-10-31
 

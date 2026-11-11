@@ -83,6 +83,15 @@ impl Agent {
         }
     }
 
+    /// The conversation process `pid` has open now, as the agent records it: Claude Code's registry says (a session
+    /// started new, or switched to another conversation inside); Codex doesn't, and None.
+    pub fn open_session(self, root: &Path, pid: u32) -> Option<String> {
+        match self {
+            Agent::Claude => claude::registry_session(root, pid),
+            Agent::Codex => None,
+        }
+    }
+
     /// Since when the agent has said the session process `pid` runs is idle, as it records it: Claude Code's registry
     /// entry, `idle` since its `statusUpdatedAt`; Codex's rollouts of `session` and of every other chat the process
     /// holds, each at the end of a turn, the latest last written then (`codex::idle_since`).
@@ -470,7 +479,12 @@ pub enum HookEvent {
         tool: Tool,
         said: String,
     },
-    AfterTool(Tool),
+    /// The agent's use of `tool` has finished, after it ran for `ran` (its own run, not the time it waited for a
+    /// permission or for hooks), when the agent says.
+    AfterTool {
+        tool: Tool,
+        ran: Option<std::time::Duration>,
+    },
     /// The agent waits for the user's permission, and says what for when it does.
     PermissionWait(Option<String>),
     Stop(TurnEnd),
@@ -485,6 +499,9 @@ pub struct TurnEnd {
     pub last_message: Option<String>,
     /// Subagents are still at work: the turn's end isn't the end of the work.
     pub subagents_working: bool,
+    /// A tool call goes on in the background (Claude Code's MCP tasks): the agent is told when it finishes, and a turn
+    /// about it follows. Stopping the agent meanwhile would end it.
+    pub background_tool: bool,
 }
 
 /// What platoon answers a hook with.

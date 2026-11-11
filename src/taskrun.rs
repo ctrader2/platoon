@@ -336,13 +336,19 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
             let msg = tickets::clean(&msg, tickets::WHY_MAX);
             set(&mut store, &|t| (t.state == State::Working).then(|| State::NeedsYou(Need::Permission(msg.clone()))));
         }
-        HookEvent::AfterTool(tool) => set(&mut store, &|t| match &t.state {
-            State::NeedsYou(Need::Plan) if tool == Tool::Plan => Some(State::Working),
-            State::NeedsYou(Need::Question(_)) if tool == Tool::Question => Some(State::Working),
-            State::NeedsYou(Need::Permission(_)) => Some(State::Working),
-            _ => None,
-        }),
+        HookEvent::AfterTool { tool, ran } => {
+            // A tool of a turn a new message interrupted can finish after it (Claude Code 2.1.319 runs PostToolUse for
+            // it then): one that started before the newest message is no answer to what the new turn waits for.
+            let of_an_earlier_turn = ran.is_some_and(|ran| started_before_prompt(&task_dir, ran));
+            set(&mut store, &|t| match &t.state {
+                State::NeedsYou(Need::Plan) if tool == Tool::Plan => Some(State::Working),
+                State::NeedsYou(Need::Question(_)) if tool == Tool::Question => Some(State::Working),
+                State::NeedsYou(Need::Permission(_)) if !of_an_earlier_turn => Some(State::Working),
+                _ => None,
+            })
+        }
         HookEvent::PromptSubmitted => {
+            let _ = crate::projects::write_atomic(&task_dir.join(PROMPTED_FILE), &now_ms().to_string());
             if agent == Agent::Codex {
                 // The user's answer: to the plan (edits may start now), and to a command held back (it may run once).
                 if t.state == State::NeedsYou(Need::Plan) {
@@ -381,6 +387,19 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
         HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
     }
     None
+}
+
+/// The task's own file with when the user last wrote to its session (ms since the epoch).
+const PROMPTED_FILE: &str = "prompted";
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Did a tool that just finished after running for `ran` start before the user last wrote to the task's session?
+fn started_before_prompt(task_dir: &Path, ran: Duration) -> bool {
+    let prompted = fs::read_to_string(task_dir.join(PROMPTED_FILE)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    prompted.is_some_and(|at| now_ms().saturating_sub(ran.as_millis() as u64) < at)
 }
 
 /// What a Codex task hook does before the steps every agent shares.
@@ -1034,6 +1053,28 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         );
         hook("task-notify", &input("Notification", notice), &d);
         assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Q?".into())));
+    }
+
+    #[test]
+    fn a_tool_of_a_turn_a_new_message_interrupted_finishing_late_is_not_the_answer_to_the_new_turns_permission_prompt() {
+        // Claude Code 2.1.319 and later run PostToolUse for a tool call that finishes after a new message interrupted its
+        // turn. Here: a test run started 40 s ago, the user typed, the new turn asks to push, then the test run ends.
+        let (d, p, n) = world("permission-late");
+        hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "and push it when it passes"})), &d);
+        let notice = json!({"message": "Claude needs your permission to use Bash", "notification_type": "permission_prompt"});
+        hook("task-notify", &input("Notification", notice), &d);
+        let late = json!({"tool_name": "Bash", "tool_input": {"command": "cargo test"}, "tool_use_id": "toolu_a", "duration_ms": 40_000});
+        hook("task-tool", &input("PostToolUse", late), &d);
+        assert!(matches!(state(&d, &p, n), State::NeedsYou(Need::Permission(_))), "{:?}", state(&d, &p, n));
+        // The push, allowed, started after the message (here, everything happens within a moment of it): the answer.
+        let push = json!({"tool_name": "Bash", "tool_input": {"command": "git push"}, "tool_use_id": "toolu_b", "duration_ms": 0});
+        hook("task-tool", &input("PostToolUse", push), &d);
+        assert_eq!(state(&d, &p, n), State::Working);
+        // A Claude Code that doesn't say how long a tool ran: any tool finishing is the answer, as before.
+        let notice = json!({"message": "Claude needs your permission to use Bash", "notification_type": "permission_prompt"});
+        hook("task-notify", &input("Notification", notice), &d);
+        hook("task-tool", &input("PostToolUse", json!({"tool_name": "Bash"})), &d);
+        assert_eq!(state(&d, &p, n), State::Working);
     }
 
     #[test]

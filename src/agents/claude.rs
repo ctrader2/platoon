@@ -175,17 +175,22 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             };
             HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) }
         }
-        HookKind::AfterTool => HookEvent::AfterTool(match text("tool_name").unwrap_or_default() {
-            "ExitPlanMode" => Tool::Plan,
-            "AskUserQuestion" => Tool::Question,
-            _ => Tool::Other,
-        }),
+        HookKind::AfterTool => HookEvent::AfterTool {
+            tool: match text("tool_name").unwrap_or_default() {
+                "ExitPlanMode" => Tool::Plan,
+                "AskUserQuestion" => Tool::Question,
+                _ => Tool::Other,
+            },
+            // `duration_ms`: how long the tool ran, "excludes permission-prompt and hook time" (Claude Code 2.1.322).
+            ran: v.get("duration_ms").and_then(Value::as_u64).map(std::time::Duration::from_millis),
+        },
         HookKind::PermissionWait if is_permission_notice(&v) => HookEvent::PermissionWait(text("message").map(String::from)),
         HookKind::PermissionWait => return None,
         HookKind::Stop => HookEvent::Stop(TurnEnd {
             planning: text("permission_mode") == Some("plan"),
             last_message: text("last_assistant_message").map(String::from),
             subagents_working: still_working(v.get("background_tasks")),
+            background_tool: mcp_task_running(v.get("background_tasks")),
         }),
     };
     Some(HookInput { session, cwd, event })
@@ -248,6 +253,19 @@ fn still_working(v: Option<&Value>) -> bool {
         Some(Value::Bool(b)) => *b,
         _ => false,
     }
+}
+
+/// Does Claude Code's `background_tasks` hold an MCP task in flight (since 2.1.319: an MCP server runs a tool call as a
+/// task, Claude Code moves it to the background at once and tells Claude when it finishes)? Each entry's `type` is its
+/// label, "MCP task" (2.1.322), or its raw kind, `mcp_task`; only work in flight is listed, so any status but a
+/// finished one counts. Its registry says `idle` meanwhile: it counts only subagents, workflows and teammates as busy.
+fn mcp_task_running(v: Option<&Value>) -> bool {
+    let Some(Value::Array(tasks)) = v else { return false };
+    tasks.iter().any(|t| {
+        let kind = t.get("type").and_then(Value::as_str).unwrap_or_default();
+        let status = t.get("status").and_then(Value::as_str).unwrap_or_default();
+        matches!(kind, "MCP task" | "mcp_task") && !matches!(status, "completed" | "failed" | "killed")
+    })
 }
 
 // ---- a one-shot call (`claude -p`) ---------------------------------------------------------------------------------
@@ -509,6 +527,16 @@ pub fn registry_status(root: &Path, pid: u32) -> Option<String> {
         return Some("parked".into());
     }
     v["status"].as_str().map(String::from)
+}
+
+/// The conversation Claude Code's registry says process `pid` has open now (`sessionId`): None if there is no entry of
+/// its own or it can't be read.
+pub fn registry_session(root: &Path, pid: u32) -> Option<String> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(root.join("sessions").join(format!("{pid}.json"))).ok()?).ok()?;
+    if v.get("pid").and_then(Value::as_u64) != Some(u64::from(pid)) {
+        return None;
+    }
+    v.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from)
 }
 
 /// Since when Claude Code's registry has said process `pid` is idle (`statusUpdatedAt`, ms since the epoch): None unless
@@ -1425,9 +1453,14 @@ mod tests {
         for (name, tool) in [("ExitPlanMode", Tool::Plan), ("AskUserQuestion", Tool::Question), ("Bash", Tool::Other)] {
             assert_eq!(
                 read(HookKind::AfterTool, json!({"session_id": "s1", "tool_name": name})).unwrap().event,
-                HookEvent::AfterTool(tool)
+                HookEvent::AfterTool { tool, ran: None }
             );
         }
+        let ran = json!({"session_id": "s1", "tool_name": "Bash", "tool_use_id": "toolu_1", "duration_ms": 1250});
+        assert_eq!(
+            read(HookKind::AfterTool, ran).unwrap().event,
+            HookEvent::AfterTool { tool: Tool::Other, ran: Some(std::time::Duration::from_millis(1250)) }
+        );
         let asks =
             json!({"session_id": "s1", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"});
         assert_eq!(
@@ -1440,10 +1473,32 @@ mod tests {
         let end = json!({"session_id": "s1", "permission_mode": "plan", "last_assistant_message": "Red or blue?", "background_tasks": [{"id": "a"}]});
         assert_eq!(
             read(HookKind::Stop, end).unwrap().event,
-            HookEvent::Stop(TurnEnd { planning: true, last_message: Some("Red or blue?".into()), subagents_working: true })
+            HookEvent::Stop(TurnEnd {
+                planning: true,
+                last_message: Some("Red or blue?".into()),
+                subagents_working: true,
+                background_tool: false
+            })
         );
+        // Claude Code 2.1.322's `background_tasks` entries: a tool call an MCP server runs as a task, in flight.
+        let mcp = |status: &str| json!({"id": "k1", "type": "MCP task", "status": status, "description": "d", "server": "a", "tool": "b"});
+        let tool_left = |tasks: Value| match read(HookKind::Stop, json!({"session_id": "s1", "background_tasks": tasks})).unwrap().event {
+            HookEvent::Stop(end) => end.background_tool,
+            other => panic!("{other:?}"),
+        };
+        assert!(tool_left(json!([mcp("running")])));
+        assert!(tool_left(json!([{"id": "b1", "type": "shell", "status": "running"}, mcp("pending")])));
+        assert!(tool_left(json!([{"id": "k2", "type": "mcp_task", "status": "running"}])), "the raw kind, should the label go");
+        assert!(!tool_left(json!([mcp("completed")])));
+        assert!(!tool_left(
+            json!([{"id": "b1", "type": "shell", "status": "running"}, {"id": "a1", "type": "subagent", "status": "running"}])
+        ));
+        assert!(!tool_left(json!({"k1": mcp("running")})), "not the shape Claude Code sends");
         let plain = read(HookKind::Stop, json!({"session_id": "s1", "background_tasks": []})).unwrap();
-        assert_eq!(plain.event, HookEvent::Stop(TurnEnd { planning: false, last_message: None, subagents_working: false }));
+        assert_eq!(
+            plain.event,
+            HookEvent::Stop(TurnEnd { planning: false, last_message: None, subagents_working: false, background_tool: false })
+        );
         for bad in ["", "{", "[]", "null", r#"{"cwd":"/x"}"#, r#"{"session_id":5}"#] {
             assert_eq!(hook_input(HookKind::Prompt, bad), None, "{bad}");
         }

@@ -197,10 +197,13 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             };
             HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) }
         }
-        HookKind::AfterTool => HookEvent::AfterTool(match text("tool_name").unwrap_or_default() {
-            "request_user_input" => Tool::Question,
-            _ => Tool::Other,
-        }),
+        HookKind::AfterTool => HookEvent::AfterTool {
+            tool: match text("tool_name").unwrap_or_default() {
+                "request_user_input" => Tool::Question,
+                _ => Tool::Other,
+            },
+            ran: None,
+        },
         // Codex's `PermissionRequest`: every call is one, with the agent's reason as the tool's description.
         HookKind::PermissionWait => HookEvent::PermissionWait(
             tool_input.get("description").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty()).map(String::from),
@@ -210,6 +213,7 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             planning: false,
             last_message: text("last_assistant_message").map(String::from),
             subagents_working: false,
+            background_tool: false,
         }),
     };
     Some(HookInput { session, cwd, event })
@@ -1464,7 +1468,7 @@ pub(crate) mod tests {
         assert_eq!((prompt.session.as_str(), prompt.event), (FINISHED, HookEvent::PromptSubmitted));
         for (name, last) in [("Stop-first", "Teal."), ("Stop-after-block", "CHECKED")] {
             let stop = hook_input(HookKind::Stop, &hook(name)).unwrap();
-            let end = TurnEnd { planning: false, last_message: Some(last.into()), subagents_working: false };
+            let end = TurnEnd { planning: false, last_message: Some(last.into()), subagents_working: false, background_tool: false };
             assert_eq!(stop.event, HookEvent::Stop(end), "{name}");
         }
         let perm = hook_input(HookKind::PermissionWait, &hook("PermissionRequest")).unwrap();
@@ -1474,7 +1478,10 @@ pub(crate) mod tests {
                 "May I rerun the exact curl command with network access after sandbox DNS resolution failed?".into()
             ))
         );
-        assert_eq!(hook_input(HookKind::AfterTool, &hook("PreToolUse")).unwrap().event, HookEvent::AfterTool(Tool::Question));
+        assert_eq!(
+            hook_input(HookKind::AfterTool, &hook("PreToolUse")).unwrap().event,
+            HookEvent::AfterTool { tool: Tool::Question, ran: None }
+        );
         for bad in ["", "not json", "{}", r#"{"session_id": 5}"#] {
             assert_eq!(hook_input(HookKind::Prompt, bad), None, "{bad}");
         }
@@ -1514,7 +1521,7 @@ pub(crate) mod tests {
         let q = hook_input(HookKind::BeforeAnyTool, &hook("PreToolUse")).unwrap();
         assert_eq!(q.event, HookEvent::BeforeTool { tool: Tool::Question, said: "What should the second line of notes.txt say?".into() });
         let after = hook_input(HookKind::AfterTool, &hook("PostToolUse.from-source")).unwrap();
-        assert_eq!((after.session.as_str(), after.event), (PLANNING, HookEvent::AfterTool(Tool::Other)));
+        assert_eq!((after.session.as_str(), after.event), (PLANNING, HookEvent::AfterTool { tool: Tool::Other, ran: None }));
         // A command given as its words reads as the line a shell would run.
         let argv = r#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":["bash","-lc","git push origin 'my branch'"]}}"#;
         let HookEvent::BeforeTool { tool: Tool::Shell, said } = hook_input(HookKind::BeforeAnyTool, argv).unwrap().event else { panic!() };

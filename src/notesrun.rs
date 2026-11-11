@@ -22,7 +22,7 @@
 //! on top of that the hook refuses outright when `PLATOON_AI` is set or the session's folder is that work folder,
 //! and a session that is in no project is turned away after one small read.
 
-use crate::agents::{Agent, HookKind, claude, codex};
+use crate::agents::{Agent, HookEvent, HookKind, claude, codex};
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::describe;
@@ -177,7 +177,8 @@ fn max_life_secs() -> u64 {
 
 /// What the hook does with one hook input: the project it marked, or None for "nothing to do", which costs one
 /// small read of `projects.json` and nothing else. It never writes anything but the mark (and, for a project with
-/// no notes file yet, the notes from the template: `notes_to_keep`) and never prints.
+/// no notes file yet, the notes from the template: `notes_to_keep`), and for idle stop, in any session, whether a tool
+/// is still at work in the background after the turn (`idle::note_turn_end`); it never prints.
 pub fn stop_mark(agent: Agent, input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms: u64) -> Option<String> {
     // The helper's own calls must never come back here. (They load no settings, so Claude Code runs no hook for
     // them at all; these two checks are the belt to that brace.)
@@ -185,6 +186,11 @@ pub fn stop_mark(agent: Agent, input: &str, config: &Path, cache: &Path, ai_chil
         return None;
     }
     let input = agent.hook_input(HookKind::Stop, input)?;
+    // For idle stop, in every session: whether a tool call goes on in the background after this turn.
+    if let HookEvent::Stop(end) = &input.event {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_millis(at_ms);
+        crate::idle::note_turn_end(cache, &input.session, end.background_tool, at);
+    }
     let session = input.session.as_str();
     if !crate::sessionhook::safe_name(session) {
         return None;

@@ -137,6 +137,23 @@ impl Rig {
         !alive(pid) && find_host(&self.cache).is_none() && self.host.as_mut().is_some_and(|h| matches!(h.try_wait(), Ok(Some(_))))
     }
 
+    /// Run `platoon hook stop` as Claude Code does at the end of a turn of the session `pid` runs (its registry's
+    /// `sessionId`, see `register`), with what it says is still at work in the background.
+    fn stop_hook(&self, pid: u32, background_tasks: serde_json::Value) {
+        use std::io::Write;
+        let mut cmd = Command::new(BIN);
+        cmd.env("PLATOON_NO_UPDATE_CHECK", "1").env("PLATOON_NOTES_HELPER", "off");
+        for (k, v) in common::NO_REAL_CODEX {
+            cmd.env(k, v);
+        }
+        cmd.args(["hook", "stop"]).envs(self.env()).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = cmd.spawn().unwrap();
+        let input = serde_json::json!({"session_id": format!("s-{pid}"), "cwd": self.work, "hook_event_name": "Stop",
+            "stop_hook_active": false, "background_tasks": background_tasks});
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
     /// Assert the session is still up for `how_long`, checking throughout.
     fn stays_up(&self, pid: u32, how_long: Duration) {
         let start = Instant::now();
@@ -259,6 +276,24 @@ fn a_command_claude_started_and_left_running_keeps_the_session_until_it_ends_and
         libc::kill(shell as i32, libc::SIGKILL); // our own command: now nothing of claude's runs
         libc::kill(job as i32, libc::SIGKILL);
     }
+    r.wait_stopped(pid);
+}
+
+#[test]
+fn a_tool_claude_runs_in_the_background_keeps_the_session_until_a_turn_ends_without_it() {
+    let mut r = Rig::new("idle-mcp-task", 1);
+    let pid = r.start("sleep", &["600"]);
+    r.register(pid, "idle");
+    // Claude Code 2.1.319 and later: an MCP server's tool call that runs as a task goes to the background at once and
+    // the turn ends; the registry says idle, and only the Stop hook's `background_tasks` names it (2.1.322's shape).
+    let task = serde_json::json!([{"id": "k1a2b3c4d", "type": "MCP task", "status": "running",
+        "description": "render/render_video", "server": "render", "tool": "render_video"}]);
+    r.stop_hook(pid, task);
+    r.stays_up(pid, STAY);
+    assert_eq!(r.host_file(pid)["kept"], serde_json::json!({"why": "background-tool"}), "why it is kept, for the session's row");
+    // The task finished: Claude Code told Claude, whose turn about it ended with no such tool left in the background
+    // (a memory save or a dream is Claude Code's own and ends by itself).
+    r.stop_hook(pid, serde_json::json!([{"id": "d1", "type": "dream", "status": "running", "description": "x"}]));
     r.wait_stopped(pid);
 }
 

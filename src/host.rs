@@ -40,7 +40,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// How often a host asks whether its session has been idle long enough to stop.
@@ -551,6 +551,8 @@ enum Reason {
     RecentOutput,
     /// A task's session whose task is Working: its subagents may be at work while nobody watches.
     TaskAtWork,
+    /// The last turn ended with a tool call still at work in the background (`idle::background_tool`).
+    BackgroundTool,
     /// The process table couldn't be read, so what runs under claude is unknown.
     ProcessesUnknown,
     /// A command claude started is still running (`idle::under`); its short form, when it has one.
@@ -566,6 +568,7 @@ impl Reason {
             Reason::NotIdle => "not-idle",
             Reason::RecentOutput => "recent-output",
             Reason::TaskAtWork => "task-at-work",
+            Reason::BackgroundTool => "background-tool",
             Reason::ProcessesUnknown => "processes-unknown",
             Reason::Command(_) => "command",
         }
@@ -579,6 +582,7 @@ impl Reason {
             Reason::Viewer => quiet.then_some(Kept::Window),
             Reason::NotIdle => quiet.then_some(Kept::NotIdle),
             Reason::TaskAtWork => Some(Kept::TaskAtWork),
+            Reason::BackgroundTool => Some(Kept::BackgroundTool),
             Reason::ProcessesUnknown => Some(Kept::Unknown),
             Reason::Command(what) => Some(Kept::Command(what.clone())),
         }
@@ -589,8 +593,9 @@ impl Reason {
 ///
 /// Idle means all of: no window attached for the whole threshold, claude's own registry entry saying
 /// `idle` the whole time (missing, unreadable or any other status is NOT idle, so uncertainty never
-/// stops anything), no output from claude for the threshold, and no command claude started still running
-/// (`idle::under`: its MCP servers and other helpers don't count).
+/// stops anything), no output from claude for the threshold, its last turn not ended with a tool call still at work in
+/// the background (an MCP task: `idle::background_tool`), and no command claude started still running (`idle::under`:
+/// its MCP servers and other helpers don't count).
 /// Stopping is SIGTERM to claude, which shuts down cleanly; the host then exits like it always does.
 /// The conversation is untouched, and Enter resumes it.
 ///
@@ -614,6 +619,10 @@ struct Watchdog {
     session: Option<String>,
     /// platoon's config folder, where the tasks are.
     config: PathBuf,
+    /// platoon's cache folder, where the end of a turn says whether a tool call goes on in the background.
+    cache: PathBuf,
+    /// When the host started the agent: what an earlier process of the same conversation left says nothing of this one.
+    started: SystemTime,
 }
 
 impl Watchdog {
@@ -632,6 +641,8 @@ impl Watchdog {
             leftover_grace: if scaled.is_some() { Duration::from_secs(1) } else { LEFTOVER_GRACE },
             session: agent.session_of_args(args),
             config: config_dir(),
+            cache: cache_dir(),
+            started: SystemTime::now(),
         }
     }
 
@@ -663,6 +674,11 @@ impl Watchdog {
         // Only now, when everything else says stop: a few small reads of the tasks files.
         if self.session.as_deref().is_some_and(|s| crate::tickets::session_at_work(&self.config, s)) {
             return Decision::Keep(Reason::TaskAtWork);
+        }
+        // The conversation open now (one started new names none in the arguments, and one can switch to another).
+        let open = self.agent.open_session(&self.root, self.claude_pid).or_else(|| self.session.clone());
+        if open.is_some_and(|s| idle::background_tool(&self.cache, &s, self.started, SystemTime::now())) {
+            return Decision::Keep(Reason::BackgroundTool);
         }
         self.decide_processes()
     }
@@ -900,6 +916,8 @@ mod tests {
                 leftover_grace: Duration::from_millis(300),
                 session: None,
                 config: dir.join("config"),
+                cache: dir.join("cache"),
+                started: SystemTime::now(),
             };
             Rig { dog, dir, child }
         }
@@ -1345,6 +1363,7 @@ mod tests {
         assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, t0), Some(Kept::NotIdle));
         assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, later - MIN), None, "working away");
         assert_eq!(rig.dog.kept(&keep(Reason::TaskAtWork), later, t0), Some(Kept::TaskAtWork));
+        assert_eq!(rig.dog.kept(&keep(Reason::BackgroundTool), later, t0), Some(Kept::BackgroundTool));
         assert_eq!(rig.dog.kept(&keep(Reason::ProcessesUnknown), later, t0), Some(Kept::Unknown));
         assert_eq!(rig.dog.kept(&keep(Reason::RecentOutput), later, t0), None);
         assert_eq!(rig.dog.kept(&Decision::Stop(Vec::new()), later, t0), None);
@@ -1364,6 +1383,11 @@ mod tests {
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::NotIdle));
         rig.status("idle");
         assert_eq!(rig.dog.decide(later, 0, &mut { later - MIN }), Decision::Keep(Reason::RecentOutput));
+        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
+        // The conversation the registry says is open ended its last turn with a tool still at work in the background.
+        idle::note_turn_end(&rig.dog.cache, "s", true, SystemTime::now());
+        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::BackgroundTool));
+        idle::note_turn_end(&rig.dog.cache, "s", false, SystemTime::now());
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
         save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, ..Settings::default() }).unwrap();
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::IdleStopOff));

@@ -236,11 +236,12 @@ stays in the list.
 
 ## Automatic clean-up
 
-Two things happen on their own, so you don't have to think about them. Nothing is ever deleted.
+Two things happen on their own, so you don't have to think about them. platoon never deletes anything (Claude Code
+itself does delete old conversations: see [below](#claude-code-deletes-old-conversations)).
 
 | What | When | What you see |
 | --- | --- | --- |
-| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours, and no command it started is still going | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
+| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours, and no command or background tool it started is still going | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
 | A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 sessions idle for 2+ days. Find them in Archived.`) that stays until you press a key; the first time you run platoon, many old conversations can be archived at once |
 
 Details worth knowing:
@@ -254,12 +255,17 @@ Details worth knowing:
   are closed when the session stops and started again when you open it. platoon doesn't read your MCP configuration for
   this. If platoon can't see what runs under a session, it leaves the session alone. Some MCP servers don't exit when
   Claude does: after a stop, platoon asks the ones it saw before to exit too, and never any other process.
+- A tool Claude runs in the background keeps the session too. Since Claude Code 2.1.319, an MCP server can run a long
+  tool call as a task: Claude Code moves it to the background and tells Claude when it is done, and meanwhile says the
+  session is idle. platoon keeps the session until a turn of Claude's ends without such a tool still at work (after a
+  day it no longer counts).
 - For a Codex session, idle is what Codex's saved session says (its last reply has finished), and a command Codex started
   (it runs each one in a shell of its own too) keeps it running, as for Claude. One Codex window can have several chats
   open (Codex's command center): the session is stopped only once every one of them has finished its reply.
 - The row of a running session that has been quiet that long but is still running says why when you pick it: `Kept
   running: a command Claude started is still going (npm run dev)`, `a window is open on it`, `Claude Code doesn't say it's
-  idle`. Only the command's name and its first word or two are shown, never all of it.
+  idle`, `a tool Claude started is still working in the background`. Only the command's name and its first word or two
+  are shown, never all of it.
 - A session that an older platoon started (it keeps running after you update platoon) still follows the older rules on its
   own. platoon checks such sessions itself once a minute, by these rules, and stops the ones that have been idle for the
   time in the settings (as Claude Code's or Codex's own records say), with no window open on them and no command of
@@ -271,6 +277,24 @@ Details worth knowing:
   unused for the full time.
 - Restoring is the same as always: the Archived tab, `a` (or `enter` to restore and open).
 - Both times are on the [settings screen](settings-and-keys.md#general): press `s`.
+
+### Claude Code deletes old conversations
+
+Claude Code deletes a saved conversation that nobody has used for 30 days, archived in platoon or not. Once it is gone,
+its row leaves platoon's lists, and a task whose session it was can't be continued (`enter` on the task says so; its
+branch and its commits stay). The number of days is Claude Code's `cleanupPeriodDays` setting. To keep your history
+longer, set it in `~/.claude/settings.json`, for example to a year:
+
+```json
+{
+  "cleanupPeriodDays": 365
+}
+```
+
+platoon doesn't change this setting for you. Before Claude Code 2.1.317, platoon's own calls to Claude (smart names,
+"Describe it", the notes, the check of a task's work) could keep that clean-up from running on your computer, so
+conversations older than 30 days may have been kept by accident; with Claude Code 2.1.317 or later they are deleted the
+next time the clean-up runs.
 
 ## Big histories
 

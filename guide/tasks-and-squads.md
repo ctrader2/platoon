@@ -136,7 +136,8 @@ platoon gives the session a few hooks, and they move the task along:
   task is Working again.
 - It asks you something (Claude Code's question tool): **Needs you · a question**, with the question. Answer it in the
   session.
-- It waits at a permission prompt: **Needs you · asks permission**.
+- It waits at a permission prompt: **Needs you · asks permission**. It is Working again once a tool runs that started
+  after your last message (a tool of a turn you interrupted by typing may still finish later: that isn't the answer).
 - It stops: platoon [checks the work](#the-check-of-the-work), and only a check that says done makes the task
   **Done**.
 - You type into it: a task that needed you, or was Done, is Working again, with its tries counted from nothing.
@@ -217,6 +218,12 @@ when it is written `git -C <dir> push` or `cd <dir> && git push`),
 `gh pr create`, `gh pr merge`, `gh release`, `gh api` calls that write, `glab`, `cargo publish` and `npm publish`.
 Merging, pushing and opening pull requests are yours to do (or to ask the session for). A task on Codex holds the
 same commands back until you say yes in its session (see [Tasks on Codex](#tasks-on-codex)).
+
+If you have turned on Claude Code's `permissions.denyInsteadOfPrompting` setting (Claude Code 2.1.319 and later), Claude
+Code never waits for you: those commands are refused instead, and the task never shows **Needs you · asks permission**.
+Nothing is pushed or published. The setting also takes away Claude's question tool and the tool that presents a plan, so
+a squad that plans first can't show you its plan. platoon can't turn the setting off for a task: when it is on anywhere
+Claude Code reads it, it wins. Turn it off to use tasks as described here.
 
 ### After the work
 

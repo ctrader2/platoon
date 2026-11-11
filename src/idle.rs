@@ -23,7 +23,7 @@ use crate::mcp::Tracked;
 use crate::procs::{self, Row};
 use serde_json::{Value, json};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -260,6 +260,8 @@ pub enum Kept {
     NotIdle,
     /// A task's session whose task is being worked on.
     TaskAtWork,
+    /// A tool call the agent made goes on in the background (`background_tool`).
+    BackgroundTool,
     /// What runs under it couldn't be seen.
     Unknown,
 }
@@ -277,6 +279,7 @@ impl Kept {
             Kept::Window => "a window is open on it".into(),
             Kept::NotIdle => format!("{program} doesn't say it's idle"),
             Kept::TaskAtWork => "its task is still being worked on".into(),
+            Kept::BackgroundTool => format!("a tool {who} started is still working in the background"),
             Kept::Unknown => "platoon couldn't see what it is running".into(),
         };
         format!("Kept running: {why}")
@@ -289,6 +292,7 @@ impl Kept {
             Kept::Window => "window",
             Kept::NotIdle => "not-idle",
             Kept::TaskAtWork => "task-at-work",
+            Kept::BackgroundTool => "background-tool",
             Kept::Unknown => "unknown",
         }
     }
@@ -300,6 +304,7 @@ impl Kept {
             Kept::Window => json!({"why": "window"}),
             Kept::NotIdle => json!({"why": "not-idle"}),
             Kept::TaskAtWork => json!({"why": "task"}),
+            Kept::BackgroundTool => json!({"why": "background-tool"}),
             Kept::Unknown => json!({"why": "unknown"}),
         }
     }
@@ -311,10 +316,60 @@ impl Kept {
             "window" => Kept::Window,
             "not-idle" => Kept::NotIdle,
             "task" => Kept::TaskAtWork,
+            "background-tool" => Kept::BackgroundTool,
             "unknown" => Kept::Unknown,
             _ => return None,
         })
     }
+}
+
+// ---- a tool at work in the background -----------------------------------------------------------------------------
+
+/// The marks that a session's last turn ended with a tool call still at work in the background (see
+/// `agents::TurnEnd::background_tool`): `<cache>/background-tool/<session id>`, holding when (ms since the epoch).
+const BACKGROUND_DIR: &str = "background-tool";
+/// The longest a mark keeps a session: the turn that would put it away may never come (the agent ended in between, or
+/// its turn failed), and a session must not be kept for ever on that account.
+pub const BACKGROUND_TOOL_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Keep what the end of a turn of `session` says, at `at` (the `Stop` hook): a tool still at work in the background
+/// leaves a mark (`still_at_work`), a turn without one takes it away. Marks left past `BACKGROUND_TOOL_MAX` are
+/// tidied away as a new one is made. Every failure is skipped: the worst is a session stopped as before.
+pub fn note_turn_end(cache: &Path, session: &str, still_at_work: bool, at: SystemTime) {
+    if !crate::sessionhook::safe_name(session) {
+        return;
+    }
+    let dir = cache.join(BACKGROUND_DIR);
+    let mark = dir.join(session);
+    if !still_at_work {
+        let _ = std::fs::remove_file(&mark);
+        return;
+    }
+    // Only marks: another hook's file on its way in (`.<id>.<pid>-<thread>.tmp`) is not one.
+    let marks =
+        std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| crate::sessionhook::safe_name(&e.file_name().to_string_lossy()));
+    for old in marks {
+        if read_mark(&old.path()).is_none_or(|t| at.duration_since(t).is_ok_and(|d| d > BACKGROUND_TOOL_MAX)) {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
+    let ms = at.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let _ = crate::projects::write_atomic(&mark, &ms.to_string());
+}
+
+fn read_mark(path: &Path) -> Option<SystemTime> {
+    let ms: u64 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
+    Some(SystemTime::UNIX_EPOCH + Duration::from_millis(ms))
+}
+
+/// Did the last turn of `session` end with a tool still at work in the background, in the agent process started at
+/// `since` (a mark from before it is an earlier process's), less than `BACKGROUND_TOOL_MAX` before `now`?
+pub fn background_tool(cache: &Path, session: &str, since: SystemTime, now: SystemTime) -> bool {
+    if !crate::sessionhook::safe_name(session) {
+        return false;
+    }
+    read_mark(&cache.join(BACKGROUND_DIR).join(session))
+        .is_some_and(|t| t >= since && now.duration_since(t).map_or(true, |d| d < BACKGROUND_TOOL_MAX))
 }
 
 // ---- sessions whose host an older platoon started ----------------------------------------------------------------
@@ -657,8 +712,15 @@ mod tests {
 
     #[test]
     fn the_reason_is_said_in_plain_words_and_kept_in_a_hosts_file_as_it_is() {
-        let all =
-            [Kept::Command(Some("npm run dev".into())), Kept::Command(None), Kept::Window, Kept::NotIdle, Kept::TaskAtWork, Kept::Unknown];
+        let all = [
+            Kept::Command(Some("npm run dev".into())),
+            Kept::Command(None),
+            Kept::Window,
+            Kept::NotIdle,
+            Kept::TaskAtWork,
+            Kept::BackgroundTool,
+            Kept::Unknown,
+        ];
         for k in &all {
             assert_eq!(Kept::from_json(&k.to_json()).as_ref(), Some(k));
             for agent in Agent::ALL {
@@ -672,8 +734,32 @@ mod tests {
         assert_eq!(all[0].words(Agent::Claude), "Kept running: a command Claude started is still going (npm run dev)");
         assert_eq!(all[0].words(Agent::Codex), "Kept running: a command Codex started is still going (npm run dev)");
         assert_eq!(Kept::NotIdle.words(Agent::Claude), "Kept running: Claude Code doesn't say it's idle");
+        assert_eq!(Kept::BackgroundTool.words(Agent::Claude), "Kept running: a tool Claude started is still working in the background");
         assert_eq!(Kept::from_json(&json!({"why": "something newer"})), None);
         assert_eq!(Kept::from_json(&json!(5)), None);
+    }
+
+    #[test]
+    fn a_tool_at_work_in_the_background_counts_for_the_agent_process_it_was_left_in_and_for_a_day_at_most() {
+        let cache = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-idle-bg-{}", std::process::id())));
+        let t0 = SystemTime::now();
+        let (started, later) = (t0 - Duration::from_secs(60), t0 + Duration::from_secs(600));
+        assert!(!background_tool(&cache, "s1", started, later), "no turn has said so");
+        note_turn_end(&cache, "s1", true, t0);
+        assert!(background_tool(&cache, "s1", started, later));
+        assert!(!background_tool(&cache, "s2", started, later), "another conversation's");
+        assert!(!background_tool(&cache, "s1", t0 + Duration::from_secs(1), later), "left by an earlier process: a resumed one");
+        assert!(!background_tool(&cache, "s1", started, t0 + BACKGROUND_TOOL_MAX), "the turn that would put it away never came");
+        note_turn_end(&cache, "s1", false, later);
+        assert!(!background_tool(&cache, "s1", started, later), "a turn ended without one");
+        // A new mark tidies away the ones left past the longest a mark counts.
+        note_turn_end(&cache, "s3", true, t0);
+        note_turn_end(&cache, "s4", true, t0 + BACKGROUND_TOOL_MAX + Duration::from_secs(1));
+        assert!(!cache.join(BACKGROUND_DIR).join("s3").exists());
+        // Never a path out of the folder.
+        note_turn_end(&cache, "../x", true, t0);
+        assert!(!cache.join("x").exists() && !background_tool(&cache, "../x", started, later));
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]
