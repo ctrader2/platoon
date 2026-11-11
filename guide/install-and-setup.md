@@ -196,7 +196,7 @@ check: platoon then runs neither `claude --version` nor `codex --version`.
 A claude.ai sign-in of Claude Code lasts a set time, and signing in again is the only way to make it longer. Claude Code
 2.1.318 and later say when it ends in every answer of the `claude -p` calls platoon makes (smart features, the project
 notes, the check of a task's work), and platoon keeps the latest date. When the sign-in can end within the next week,
-it says so once, in a line above the key hints:
+it says so once, in a line above the key hints of the Sessions, Projects or Tasks list:
 
 ```
 Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to keep sessions, task checks and smart features working.

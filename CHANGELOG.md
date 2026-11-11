@@ -9,8 +9,8 @@ here.
 ### Added
 
 - platoon tells you before your Claude Code sign-in ends. Claude Code 2.1.318 and later say when a claude.ai sign-in
-  ends in each answer of the calls platoon makes; when it can end within a week, a line above the key hints says so
-  once, for example ``Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to
+  ends in each answer of the calls platoon makes; when it can end within a week, a line above the key hints of the
+  Sessions, Projects or Tasks list says so once, for example ``Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to
   keep sessions, task checks and smart features working.`` Nothing is said for an API key.
 
 ### Changed

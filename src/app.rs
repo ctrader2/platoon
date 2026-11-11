@@ -1305,7 +1305,7 @@ impl App {
         if self.sign_in_news.as_ref().is_none_or(|n| !n.shown) {
             self.sign_in_news = due.filter(|n| !signin::said(&self.cache, n)).map(|notice| SignInNews { notice, shown: false });
         }
-        if self.news_place()
+        if self.sign_in_place()
             && let Some(n) = self.sign_in_news.as_mut().filter(|n| !n.shown)
         {
             n.shown = true;
@@ -1331,23 +1331,32 @@ impl App {
         matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.board_showing()
     }
 
-    /// The notices on screen now, each its own lines: the sign-in ending, what setup has to add, then the version
-    /// notice.
-    pub fn news_showing(&self) -> Vec<&str> {
-        if !self.news_place() {
-            return Vec::new();
-        }
-        let sign_in = self.sign_in_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
-        let setup = self.setup_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
-        sign_in.into_iter().chain(setup).chain(self.news.as_ref().filter(|n| n.shown).map(|n| n.text.as_str())).collect()
+    /// Where the sign-in notice shows: where the others do, and the Tasks tab's lists too (a task's session and its
+    /// check stop working when the sign-in ends).
+    fn sign_in_place(&self) -> bool {
+        self.news_place() || (matches!(self.mode, Mode::List) && !self.help_open && self.board_showing() && self.tk.open.is_none())
     }
 
-    /// A key or a click while a notice shows puts the notices away (the key still does what it does).
+    /// The notices on screen now, each its own lines: the sign-in ending, what setup has to add, then the version
+    /// notice (those two not on the Tasks tab).
+    pub fn news_showing(&self) -> Vec<&str> {
+        let sign_in = self.sign_in_news.as_ref().filter(|n| n.shown && self.sign_in_place()).map(|n| n.notice.text());
+        let others = self.news_place().then_some(()).into_iter().flat_map(|()| {
+            let setup = self.setup_news.as_ref().filter(|n| n.shown).map(|n| n.notice.text());
+            setup.into_iter().chain(self.news.as_ref().filter(|n| n.shown).map(|n| n.text.as_str()))
+        });
+        sign_in.into_iter().chain(others).collect()
+    }
+
+    /// A key or a click while a notice shows puts the notices away (the key still does what it does); on the Tasks tab
+    /// only the sign-in notice shows, so only it goes.
     fn dismiss_news(&mut self) {
         if !self.news_showing().is_empty() {
-            self.news = None;
-            self.setup_news = None;
             self.sign_in_news = None;
+            if self.news_place() {
+                self.news = None;
+                self.setup_news = None;
+            }
         }
     }
 

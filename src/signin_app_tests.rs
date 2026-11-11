@@ -1,6 +1,7 @@
 //! The sign-in notice in the app (`signin.rs`, `App::news_showing`): an answer of `claude -p` (here a task's check,
 //! from a stand-in) says the Claude Code sign-in ends within ten days, and the app says so once, on its own line above
-//! the footer of the Sessions and Projects lists, in the theme's warning color like the other notices; put away by the
+//! the footer of the Sessions and Projects lists and the Tasks tab's, in the theme's warning color like the other
+//! notices (the version and setup notices stay off the Tasks tab, and wait there for the Sessions list); put away by the
 //! next key, never again for that sign-in, again for a new one, gone by itself when an answer has no date any more, and
 //! never where Claude Code isn't in use. Drawn the way a terminal shows it (TestBackend). Every folder is a temp dir.
 
@@ -124,21 +125,37 @@ fn said_once_per_sign_in_and_again_for_a_new_one() {
 }
 
 #[test]
-fn it_waits_for_the_sessions_list_and_goes_by_itself_when_answers_have_no_date_any_more() {
+fn it_shows_on_the_tasks_tab_too_waits_while_the_help_is_open_and_goes_when_answers_have_no_date_any_more() {
     let w = world("si-wait");
     let ends = usage::now() + 4 * DAY;
     check_answers(&w, Some(ends));
     let mut app = w.app();
     app.notice = None;
     app.top = TOP_TASKS;
+    app.set_news_for_test("platoon 9.9.9 is out.");
+    app.help_open = true;
     app.refresh();
-    assert_eq!(app.news_showing(), NONE, "not on the Tasks tab");
+    assert_eq!(app.news_showing(), NONE, "not over the help");
     assert!(!w.cache.join("sign-in-notice.json").exists(), "not remembered as said before it shows");
-    app.top = TOP_SESSIONS;
+    app.help_open = false;
     app.refresh();
     let want = between(ends);
-    assert_eq!(app.news_showing(), [want.as_str()]);
+    assert_eq!(app.news_showing(), [want.as_str()], "on the Tasks tab, without the version notice");
+    let shown = lines(&drawn(&app, 110, 24));
+    println!("{}", shown.join("\n"));
+    let footer = shown.len() - 1;
+    let first = shown.iter().position(|l| l.trim_start().starts_with("Your Claude Code sign-in")).expect("the notice starts a line");
+    assert_eq!(words(&shown[first..footer]), want, "whole, just above the Tasks tab's footer");
+    key(&mut app, 'j');
+    assert_eq!(app.news_showing(), NONE, "a key puts it away");
+    app.top = TOP_SESSIONS;
+    app.refresh();
+    assert_eq!(app.news_showing(), ["platoon 9.9.9 is out."], "the version notice kept for the Sessions list");
     // The user switched to an API key: the next answer has no date, and the notice goes.
+    let w = world("si-gone");
+    check_answers(&w, Some(ends));
+    let mut app = app_of(&w);
+    assert_eq!(app.news_showing(), [want.as_str()]);
     check_answers(&w, None);
     app.refresh();
     assert_eq!(app.news_showing(), NONE);
