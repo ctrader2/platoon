@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-11
+
 ### Fixed
 
 - A Codex session platoon runs could be stopped as idle while another chat in the same Codex window was still working
@@ -227,7 +229,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/ctrader2/platoon/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/ctrader2/platoon/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ctrader2/platoon/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/ctrader2/platoon/compare/v1.2.0...v1.3.0
