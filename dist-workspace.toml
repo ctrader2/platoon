@@ -38,6 +38,12 @@ allow-dirty = ["ci"]
 # Keep these the same as release.yml's (Dependabot updates release.yml), so `dist generate` doesn't put older ones back.
 github-action-commits = { "actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/upload-artifact" = "cf430e030ddbb5b0abf93d22962f4752f3646cd9", "actions/download-artifact" = "9000827ccba6bdab643e8b6fd33ac0654aef8333" }
 
+# The Apple silicon build runs on macos-15: dist 0.33 picks macos-14 for it, which GitHub no longer has (the 1.5.1
+# release could not be built: "The configuration 'macos-14-arm64-us-default' is not supported"). The Intel build is on
+# dist's default, macos-15-intel. The matrix is worked out by `dist plan` in the release run, so release.yml is unchanged.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 # crates.io trusted publishing: the publish-crate job may ask GitHub for an identity token, and nothing more.
 [dist.github-custom-job-permissions]
 "publish-crate" = { contents = "read", id-token = "write" }

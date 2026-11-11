@@ -6,10 +6,10 @@ here.
 
 ## [Unreleased]
 
-## [1.5.1] - 2026-11-11
-
 ### Fixed
 
+- 1.5.1 was never published: its build for Macs with Apple silicon could not run, because GitHub no longer has the
+  machine it was built on. This release is 1.5.1 again, built on a newer one, with the fixes below.
 - A Codex session platoon runs could be stopped as idle while another chat in the same Codex window was still working
   (Codex 0.167 runs several chats in one window, from its command center). platoon now waits until every chat that
   window has open has finished its reply.
@@ -28,6 +28,10 @@ here.
   tried to continue it and failed. Now platoon says so. The guide explains Claude Code's clean-up and how to keep your
   history longer (its `cleanupPeriodDays` setting), and that a task can't wait for you at a permission prompt while
   Claude Code's `denyInsteadOfPrompting` setting is on.
+
+## [1.5.1] - 2026-11-11
+
+Tagged but never published (its Apple silicon build could not run). Everything in it is in 1.5.2.
 
 ## [1.5.0] - 2026-10-31
 
