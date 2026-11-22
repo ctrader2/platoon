@@ -1303,9 +1303,25 @@ mod tests {
         // Its reply done: every chat it holds is idle, and it stops, whatever the other window's chat does.
         write(other, &["task_started", "task_complete"]);
         assert!(matches!(rig.decide(), Decision::Stop(_)));
-        // A chat it holds that has no saved conversation yet can't be told: not idle.
+        // A chat it holds that has no saved conversation has never been sent anything (Codex saves it with the first
+        // message): it doesn't keep the session, though the lock stays held.
         fs::remove_file(rollout(other)).unwrap();
-        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        assert!(matches!(rig.decide(), Decision::Stop(_)), "a chat opened and not used");
+        assert!(crate::agents::codex::Reader::with_root(codex.clone()).live().iter().any(|l| l.id == other), "still held");
+        // A side chat Codex saved as it was opened (Codex 0.171): nothing has run in it yet, so it doesn't either.
+        let asides = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/asides"));
+        fs::copy(asides.join("rollout-2026-11-20T10-00-00-01a50000-0000-7000-8000-0000000051de.jsonl"), rollout(other)).unwrap();
+        assert!(matches!(rig.decide(), Decision::Stop(_)), "a side chat not used yet");
+        // Once something is asked in it, it keeps the session while it works, as any chat does.
+        fs::copy(asides.join("working-side-chat.jsonl"), rollout(other)).unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle), "a side chat at work");
+        // A long chat whose end says nothing of its turns can't be told: kept.
+        let ask = json!({"timestamp": "2026-11-06T10:00:00.000Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "a long job"}]}});
+        let output = json!({"timestamp": "2026-11-06T10:00:01.000Z", "type": "response_item",
+            "payload": {"type": "function_call_output", "output": "x".repeat(1000)}});
+        fs::write(rollout(other), format!("{ask}\n{}", format!("{output}\n").repeat(1000))).unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle), "a long chat at work, its turn record far back");
         drop(s);
         unsafe { libc::kill(-(window.id() as i32), libc::SIGKILL) };
         let _ = window.wait();

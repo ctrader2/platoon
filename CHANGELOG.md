@@ -37,6 +37,14 @@ here.
   counted against 1M as well; it was counted against 200K and looked fuller than it is.
 - The `/hand-to-squad` reminder in the status line now goes away when Claude runs the skill from a script in Claude
   Code's Code Mode (an experimental opt-in) too.
+- A Codex session platoon runs was never stopped as idle while it had a chat open that nothing had been sent in yet: a
+  new chat, or a side chat (Codex 0.171 shows side chats beside the main chat by default, and saves one as you open
+  it). Such a chat no longer keeps the session running; a chat that is working still does.
+- Side chats and subagents' chats in Codex no longer show up as rows of their own, or as extra running conversations.
+  Codex's own list of conversations to resume leaves them out too: they open with the chat they belong to.
+- Codex conversations that Codex has compressed are listed again. Codex can compress a conversation nobody has used for
+  a week (when that is switched on in Codex); platoon reads it as before, and it keeps its row when Codex compresses it
+  or opens it again.
 
 ## [1.5.2] - 2026-11-11
 

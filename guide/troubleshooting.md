@@ -64,8 +64,9 @@ platoon doesn't commit or check what it does (pushing still waits for your yes).
 once more (it adds the task hooks and has Codex trust them). See [Tasks on Codex](tasks-and-squads.md#tasks-on-codex).
 
 **My Codex conversations aren't listed.** platoon reads them from `~/.codex` (or `$CODEX_HOME` when it is set): check
-that it is the folder your Codex uses. platoon reads only the saved sessions in its `sessions` folder.
-Deleting `~/.cache/platoon/codex-index.json` is harmless. See [Codex conversations](sessions.md#codex-conversations).
+that it is the folder your Codex uses. platoon reads only the saved sessions in its `sessions` folder. Side chats and
+subagents' chats are left out on purpose: open the chat they came from. Deleting `~/.cache/platoon/codex-index.json` is
+harmless. See [Codex conversations](sessions.md#codex-conversations).
 
 ## Keys and the mouse
 

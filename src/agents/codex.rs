@@ -6,9 +6,11 @@
 //!
 //! Where things are, under `$CODEX_HOME` (else `~/.codex`):
 //! - `sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`: one saved conversation ("rollout") per file, one JSON record
-//!   per line, `{"timestamp", "type", "payload"}`: `session_meta` (id, folder, git), `turn_context` (the model),
-//!   `response_item` (messages with roles, tool calls), and `event_msg`s (`task_started`, `task_complete`,
-//!   `turn_aborted`, `token_count` with the context window, ...).
+//!   per line, `{"timestamp", "type", "payload"}`: `session_meta` (id, folder, git, where it came from), `turn_context`
+//!   (the model), `response_item` (messages with roles, tool calls), and `event_msg`s (`task_started`,
+//!   `task_complete`, `turn_aborted`, `token_count` with the context window, ...). An old one may be compressed,
+//!   `.jsonl.zst` (`COMPRESSED`). Side chats and subagents' chats have rollouts of their own, which are no
+//!   conversations of their own (`is_aside`).
 //! - `session_index.jsonl`: the names Codex gives conversations, one line per change (the latest line wins).
 //! - `thread-writer-locks/<id>.lock`: held while a conversation is open. Codex keeps one writer per conversation
 //!   itself, so the holder of the lock is the one process running it (sometimes Codex's shared background server,
@@ -495,13 +497,27 @@ pub fn window_size(t: &Transcript) -> u64 {
 
 // ---- saved conversations ---------------------------------------------------------------------------------------------
 
-/// The conversation id in a rollout's file name: `rollout-2026-10-18T20-07-40-<id>.jsonl`, the id a UUID.
+/// The end of a compressed rollout's name. Codex can compress a saved conversation nobody has written to for 7 days into
+/// `<name>.jsonl.zst` (one zstd frame, the file's time kept) and removes the `.jsonl`; resuming it writes the `.jsonl`
+/// again and removes the `.zst` (`rollout/src/compression.rs`). While both are there, the `.jsonl` is the one. Codex
+/// 0.171 does this only with `features.local_thread_store_compression` on, or when an app asks its app server
+/// (`rollout/compress`).
+const COMPRESSED: &str = ".jsonl.zst";
+
+/// Is this rollout one Codex compressed (`.jsonl.zst`)?
+pub fn is_compressed(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(COMPRESSED))
+}
+
+/// The conversation id in a rollout's file name: `rollout-2026-10-18T20-07-40-<id>.jsonl` (or `.jsonl.zst`), the id a
+/// UUID.
 pub fn id_of_path(path: &Path) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?;
-    if path.extension()? != "jsonl" || !stem.starts_with("rollout-") || stem.len() < "rollout-".len() + 36 {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(COMPRESSED).or_else(|| name.strip_suffix(".jsonl"))?;
+    if !stem.starts_with("rollout-") || stem.len() < "rollout-".len() + 36 {
         return None;
     }
-    let id = &stem[stem.len() - 36..];
+    let id = stem.get(stem.len() - 36..)?;
     is_id(id).then(|| id.to_string())
 }
 
@@ -515,22 +531,92 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()).collect()
 }
 
-/// Every saved conversation: `sessions/YYYY/MM/DD/rollout-*.jsonl`. Not the ones Codex archived (`archived_sessions`).
+/// Every saved conversation: `sessions/YYYY/MM/DD/rollout-*.jsonl`, or `.jsonl.zst` (one file each: a compressed one
+/// is left out while its `.jsonl` is there, as Codex does). Not the ones Codex archived (`archived_sessions`).
 pub fn rollout_paths(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for year in subdirs(&root.join("sessions")) {
         for month in subdirs(&year) {
             for day in subdirs(&month) {
-                for f in fs::read_dir(&day).into_iter().flatten().flatten() {
-                    let p = f.path();
-                    if f.file_type().is_ok_and(|t| t.is_file()) && id_of_path(&p).is_some() {
-                        out.push(p);
-                    }
-                }
+                let files: Vec<PathBuf> = fs::read_dir(&day)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|f| f.file_type().is_ok_and(|t| t.is_file()))
+                    .map(|f| f.path())
+                    .filter(|p| id_of_path(p).is_some())
+                    .collect();
+                let plain_too = |p: &Path| {
+                    is_compressed(p)
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .and_then(|n| n.strip_suffix(".zst"))
+                            .is_some_and(|plain| files.contains(&day.join(plain)))
+                };
+                out.extend(files.iter().filter(|p| !plain_too(p)).cloned());
             }
         }
     }
     out
+}
+
+/// A rollout's text from its start: the file as it is, or a compressed one decompressed as it is read. A compressed
+/// file that can't be decompressed reads as ending where it went wrong.
+pub fn open(path: &Path) -> Option<Box<dyn Read + Send>> {
+    let file = File::open(path).ok()?;
+    if !is_compressed(path) {
+        return Some(Box::new(file));
+    }
+    Some(Box::new(ruzstd::decoding::StreamingDecoder::new(BufReader::new(file)).ok()?))
+}
+
+/// The start of a rollout's text, as far as a reading of its head goes (`HEAD_BYTES`).
+fn head(path: &Path) -> Option<BufReader<std::io::Take<Box<dyn Read + Send>>>> {
+    Some(BufReader::new(open(path)?.take(HEAD_BYTES)))
+}
+
+/// The last `TAIL_BYTES` of a rollout's text.
+struct Tail {
+    text: String,
+    /// It starts after the file's start: its first line is probably cut, and is left out.
+    cut: bool,
+}
+
+impl Tail {
+    /// Its whole lines, oldest first.
+    fn lines(&self) -> Vec<&str> {
+        self.text.lines().skip(usize::from(self.cut)).collect()
+    }
+}
+
+/// Read the end of a rollout: a plain file from there, a compressed one decompressed to its end with only that much
+/// kept (Codex compresses only files nobody has written to for a week, so this is rare and each is read once).
+fn tail(path: &Path) -> Option<Tail> {
+    let (bytes, cut) = if is_compressed(path) {
+        let mut source = open(path)?;
+        let (mut kept, mut chunk, mut cut) = (Vec::new(), vec![0u8; 64 * 1024], false);
+        // A file that goes wrong part way reads as ending there (as `open` says), so it isn't tried again and again.
+        while let Ok(n @ 1..) = source.read(&mut chunk) {
+            kept.extend_from_slice(&chunk[..n]);
+            if kept.len() as u64 > 2 * TAIL_BYTES {
+                kept.drain(..kept.len() - TAIL_BYTES as usize);
+                cut = true;
+            }
+        }
+        if kept.len() as u64 > TAIL_BYTES {
+            kept.drain(..kept.len() - TAIL_BYTES as usize);
+            cut = true;
+        }
+        (kept, cut)
+    } else {
+        let mut file = File::open(path).ok()?;
+        let start = file.metadata().ok()?.len().saturating_sub(TAIL_BYTES);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut kept = Vec::new();
+        file.take(TAIL_BYTES).read_to_end(&mut kept).ok()?;
+        (kept, start > 0)
+    };
+    Some(Tail { text: String::from_utf8_lossy(&bytes).into_owned(), cut })
 }
 
 /// The rollout of conversation `id`.
@@ -549,8 +635,7 @@ fn payload_type(v: &Value) -> Option<&str> {
 
 /// The folder a conversation was run in: its `session_meta` record's `cwd`.
 pub fn rollout_cwd(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file.take(HEAD_BYTES)).lines().take(HEAD_LINES).map_while(Result::ok) {
+    for line in head(path)?.lines().take(HEAD_LINES).map_while(Result::ok) {
         if !line.contains("\"type\":\"session_meta\"") {
             continue;
         }
@@ -566,30 +651,36 @@ pub fn rollout_cwd(path: &Path) -> Option<String> {
 /// earlier reading of the same file: what only the head can tell is kept when it isn't found again. The name is not
 /// in the rollout (see `names`): `prev`'s is kept.
 pub fn read_rollout(path: &Path, prev: Option<&Transcript>) -> Option<Transcript> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
     let mut t = prev.cloned().unwrap_or_default();
     if prev.is_none() || t.first_prompt.is_none() || t.cwd.is_none() {
-        scan_head(&file, &mut t);
+        scan_head(path, &mut t);
     }
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.lines();
-    if start > 0 {
-        lines.next(); // probably cut mid-line
-    }
-    scan_tail(lines.collect::<Vec<_>>().into_iter().rev(), &mut t);
+    scan_tail(tail(path)?.lines().into_iter().rev(), &mut t);
     Some(t)
 }
 
-fn scan_head(file: &File, t: &mut Transcript) {
-    let mut reader = BufReader::new(file.take(HEAD_BYTES));
+/// Is the rollout whose first `session_meta` says `meta` a conversation of its own, as Codex's own list of them counts
+/// one (`codex resume`'s, `tui/src/resume_picker.rs`)? Not when it is part of another (`Transcript::aside`):
+/// - a side chat Codex keeps with the chat it was opened from (`attached_thread`, with that chat's id as
+///   `forked_from_id`), which Codex reopens with that chat (`include_attached_threads: false` in the list);
+/// - a helper's chat: a subagent's (`"source": {"subagent": ...}`) or one of Codex's own (`{"internal": ...}`: its
+///   reviewer, memory), outside the sources a person starts that the list takes (`tui/src/lib.rs`,
+///   `resume_source_kinds`).
+///
+/// Only the first `session_meta` counts: a fork that copied another chat's records copied its `session_meta` too.
+fn is_aside(meta: &Value) -> bool {
+    let attached = meta.get("attached_thread").and_then(Value::as_bool) == Some(true)
+        && meta.get("forked_from_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty());
+    let helper = meta.get("source").and_then(Value::as_object).is_some_and(|s| s.contains_key("subagent") || s.contains_key("internal"));
+    attached || helper
+}
+
+fn scan_head(path: &Path, t: &mut Transcript) {
+    let Some(mut reader) = head(path) else { return };
     let mut line = Vec::new();
+    let mut first_meta = true;
     for _ in 0..HEAD_LINES {
-        if t.cwd.is_some() && t.first_prompt.is_some() {
+        if t.cwd.is_some() && t.first_prompt.is_some() && !first_meta {
             break;
         }
         line.clear();
@@ -597,11 +688,17 @@ fn scan_head(file: &File, t: &mut Transcript) {
             break;
         }
         let line = String::from_utf8_lossy(&line);
-        if t.cwd.is_none() && line.contains("\"type\":\"session_meta\"") {
-            if let Some(v) = record(&line) {
+        if (first_meta || t.cwd.is_none()) && line.contains("\"type\":\"session_meta\"") {
+            if let Some(v) = record(&line).filter(|v| v["type"] == "session_meta") {
                 let p = &v["payload"];
-                t.cwd = p["cwd"].as_str().filter(|c| !c.is_empty()).map(String::from);
-                t.branch = p["git"]["branch"].as_str().filter(|b| !b.is_empty()).map(String::from).or(t.branch.take());
+                if first_meta {
+                    t.aside = is_aside(p);
+                    first_meta = false;
+                }
+                if t.cwd.is_none() {
+                    t.cwd = p["cwd"].as_str().filter(|c| !c.is_empty()).map(String::from);
+                    t.branch = p["git"]["branch"].as_str().filter(|b| !b.is_empty()).map(String::from).or(t.branch.take());
+                }
             }
         } else if t.first_prompt.is_none() {
             t.first_prompt = prompt_in_line(&line, TEXT_MAX);
@@ -663,8 +760,7 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
 
 /// When the conversation started: the time of the first record that has one (its `session_meta`), ms since the epoch.
 pub fn started_ms(path: &Path) -> Option<u64> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file.take(HEAD_BYTES));
+    let mut reader = head(path)?;
     let mut line = Vec::new();
     for _ in 0..HEAD_LINES {
         line.clear();
@@ -698,21 +794,14 @@ pub fn spent(path: &Path) -> Option<Spent> {
             subagents: false,
         })
     };
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    (&mut file).take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    if let Some(s) = text.lines().skip(usize::from(start > 0)).collect::<Vec<_>>().into_iter().rev().find_map(total_in) {
+    let end = tail(path)?;
+    if let Some(s) = end.lines().into_iter().rev().find_map(total_in) {
         return Some(s);
     }
-    if start == 0 {
+    if !end.cut {
         return None;
     }
-    file.seek(SeekFrom::Start(0)).ok()?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(open(path)?);
     let (mut line, mut last) = (Vec::new(), None);
     while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
         if let Some(s) = total_in(&String::from_utf8_lossy(&line)) {
@@ -788,15 +877,7 @@ fn format_limit(l: &crate::usage::Limit, now: u64) -> crate::diag::Safe {
 
 /// The newest `rate_limits` in a rollout's tail (see `rate_limits`).
 fn limits_in(path: &Path) -> Option<Vec<crate::usage::Limit>> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let lines: Vec<&str> = text.lines().skip(usize::from(start > 0)).collect();
-    lines.into_iter().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|line| {
+    tail(path)?.lines().into_iter().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|line| {
         let v = record(line)?;
         let p = &v["payload"];
         (payload_type(&v) == Some("token_count")).then_some(())?;
@@ -824,14 +905,39 @@ fn window_of(w: &Value, at: u64) -> Option<crate::usage::Limit> {
 /// `task_complete` and `turn_aborted` near its end is a start, Some(false) when it is an end; None when none of them
 /// is there (nothing can be said, so callers must not take it for idle).
 pub fn busy(path: &Path) -> Option<bool> {
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    busy_in(text.lines().skip(usize::from(start > 0)).collect::<Vec<_>>().into_iter().rev())
+    match turn(path)? {
+        Turn::Working => Some(true),
+        Turn::Ended => Some(false),
+        Turn::NotStarted | Turn::Unknown => None,
+    }
+}
+
+/// Where the conversation in a rollout is, by the turn records Codex writes (`task_started`; `task_complete`,
+/// `turn_aborted`), which it keeps in every kind of rollout (`rollout/src/policy.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    /// The newest turn record near its end starts a turn.
+    Working,
+    /// The newest one ends a turn: it finished, or was interrupted.
+    Ended,
+    /// The whole rollout has no turn record and nothing the user sent: nothing has run in it yet. A side chat Codex
+    /// saved as it was opened is one: only its settings are written until its first message (a fork of a chat with
+    /// paginated history copies none of that chat's records, `core/src/session/mod.rs`, `ForkPersistence::Referenced`).
+    NotStarted,
+    /// No turn record near the end of a long one, or one with messages: nothing can be said.
+    Unknown,
+}
+
+/// See `Turn`. None when the rollout can't be read.
+fn turn(path: &Path) -> Option<Turn> {
+    let end = tail(path)?;
+    let lines = end.lines();
+    Some(match busy_in(lines.iter().rev().copied()) {
+        Some(true) => Turn::Working,
+        Some(false) => Turn::Ended,
+        None if !end.cut && !lines.iter().any(|l| prompt_in_line(l, 1).is_some()) => Turn::NotStarted,
+        None => Turn::Unknown,
+    })
 }
 
 /// `busy` over lines given newest first.
@@ -849,29 +955,58 @@ fn busy_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<bool> {
     None
 }
 
-/// Since when every conversation process `pid` runs has been idle, as their rollouts say (each at the end of a turn,
-/// the latest last written of them): `session`, the one its host was started with, and every other one it holds open
-/// itself or through a process under it (npm's launcher runs the real `codex` as its child). One Codex process can run
-/// several chats (0.167's command center, a `--no-daemon` window too), and stopping it stops them all. None when any of
-/// them is working or can't be told (no rollout yet, no turn record).
+/// Since when every conversation process `pid` runs has been idle, as their rollouts say (the latest last written of
+/// them): `session`, the one its host was started with, at the end of a turn, and every other one it holds open itself
+/// or through a process under it (npm's launcher runs the real `codex` as its child). One Codex process can run
+/// several chats (0.167's command center, side chats, subagents' chats), and stopping it stops them all. Each other chat
+/// is idle at the end of a turn, and so is one nothing has run in yet:
+/// - one with no rollout: Codex takes a chat's lock as it opens it and writes its rollout as the first message sent in
+///   it is recorded (`core/src/session/mod.rs`, `record_user_prompt_and_emit_turn_item`), so it has never been sent
+///   anything (a new chat opened and not used); it adds no time. Its rollout is also looked for among the archived
+///   ones, in case Codex resumed an archived chat where it is.
+/// - a side chat saved as it was opened, before its first message (`Turn::NotStarted`).
+///
+/// A temporary side chat takes no lock and writes no rollout (`ephemeral`: `core/src/session/session.rs`), so it is
+/// not seen here; while it works, the window shows it doing so, and that output keeps the session (see `host.rs`).
+/// None when any of them is working or can't be told (no turn record near the end of a long rollout).
 pub fn idle_since(root: &Path, pid: u32, session: &str) -> Option<std::time::SystemTime> {
     let reader = Reader::with_root(root.to_path_buf());
-    let mut ids = vec![session.to_string()];
+    let mut others: Vec<String> = Vec::new();
     for (holder, id) in reader.holders(&reader.locks()) {
-        if !ids.contains(&id) && (holder == pid || crate::guard::ancestors(holder).contains(&pid)) {
-            ids.push(id);
+        if id != session && !others.contains(&id) && (holder == pid || crate::guard::ancestors(holder).contains(&pid)) {
+            others.push(id);
         }
     }
     let rollouts = rollout_paths(root);
-    let mut latest = UNIX_EPOCH;
-    for id in &ids {
-        let rollout = rollouts.iter().find(|p| id_of_path(p).as_deref() == Some(id.as_str()))?;
-        if busy(rollout) != Some(false) {
-            return None;
+    let find = |id: &str| rollouts.iter().find(|p| id_of_path(p).as_deref() == Some(id)).cloned();
+    let modified = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
+    let named = find(session)?;
+    (turn(&named)? == Turn::Ended).then_some(())?;
+    let mut latest = modified(&named)?;
+    for id in &others {
+        let Some(rollout) = find(id).or_else(|| archived_rollout(root, id)) else { continue };
+        match turn(&rollout)? {
+            Turn::Ended | Turn::NotStarted => latest = latest.max(modified(&rollout)?),
+            Turn::Working | Turn::Unknown => return None,
         }
-        latest = latest.max(fs::metadata(rollout).and_then(|m| m.modified()).ok()?);
     }
     Some(latest)
+}
+
+/// The rollout of conversation `id` among the ones Codex archived (`archived_sessions`, up to a few folders down).
+fn archived_rollout(root: &Path, id: &str) -> Option<PathBuf> {
+    let mut dirs = vec![(root.join("archived_sessions"), 0)];
+    while let Some((dir, depth)) = dirs.pop() {
+        for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let (p, kind) = (e.path(), e.file_type());
+            if kind.as_ref().is_ok_and(|t| t.is_dir()) && depth < 4 {
+                dirs.push((p, depth + 1));
+            } else if kind.is_ok_and(|t| t.is_file()) && id_of_path(&p).as_deref() == Some(id) {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 /// The names Codex gave conversations, by id, from `session_index.jsonl`: one line per change, the latest line for
@@ -963,6 +1098,9 @@ pub struct Reader {
     found: Mutex<HashMap<String, PathBuf>>,
     /// The working folders of lock holders asked so far, by pid (`cwd_of`).
     cwds: Mutex<HashMap<u32, String>>,
+    /// Whether each rollout read so far is part of another conversation (`is_aside`), by its path: its first record
+    /// never changes.
+    asides: Mutex<HashMap<PathBuf, bool>>,
     #[cfg(target_os = "macos")]
     lsof: Mutex<lsof::Cache>,
 }
@@ -977,6 +1115,7 @@ impl Reader {
             root,
             found: Mutex::new(HashMap::new()),
             cwds: Mutex::new(HashMap::new()),
+            asides: Mutex::new(HashMap::new()),
             #[cfg(target_os = "macos")]
             lsof: Mutex::new(lsof::Cache::default()),
         }
@@ -995,6 +1134,16 @@ impl Reader {
         let p = find_rollout(&self.root, id)?;
         found.insert(id.to_string(), p.clone());
         Some(p)
+    }
+
+    /// Is the conversation in this rollout part of another (`is_aside`)? Remembered.
+    fn aside(&self, rollout: &Path) -> bool {
+        let mut asides = self.asides.lock().unwrap_or_else(|e| e.into_inner());
+        *asides.entry(rollout.to_path_buf()).or_insert_with(|| {
+            let mut t = Transcript::default();
+            scan_head(rollout, &mut t);
+            t.aside
+        })
     }
 
     /// The working folder of process `pid` ("" when the system won't say), remembered: asked only for a conversation
@@ -1036,7 +1185,8 @@ impl Reader {
 
     /// Every conversation open right now, with the process holding it, oldest first. The holder can be Codex's
     /// shared background server: it is listed like any other process, and only a platoon host's own child is ever
-    /// treated as platoon's (see `App`).
+    /// treated as platoon's (see `App`). A side chat or a helper's chat held open (`is_aside`) is part of the
+    /// conversation it belongs to, not one of its own: it isn't listed (`idle_since` still waits for it).
     pub fn live(&self) -> Vec<Live> {
         let locks = self.locks();
         if locks.is_empty() {
@@ -1046,15 +1196,18 @@ impl Reader {
         let mut out: Vec<Live> = self
             .holders(&locks)
             .into_iter()
-            .map(|(pid, id)| {
+            .filter_map(|(pid, id)| {
                 let lock = locks.iter().find(|(l, _)| *l == id).map(|(_, p)| p.clone()).unwrap_or_default();
                 let rollout = self.rollout(&id);
+                if rollout.as_deref().is_some_and(|r| self.aside(r)) {
+                    return None;
+                }
                 // Before the first message there is no rollout to say where it runs: the holder's own folder says.
                 let cwd = match rollout.as_deref() {
                     Some(r) => rollout_cwd(r).unwrap_or_default(),
                     None => self.cwd_of(pid),
                 };
-                Live {
+                Some(Live {
                     agent: super::Agent::Codex,
                     pid,
                     cwd,
@@ -1065,7 +1218,7 @@ impl Reader {
                     name: None,
                     background: None,
                     parked: None,
-                }
+                })
             })
             .collect();
         out.sort_by_key(|l| (l.started_at, l.pid));
@@ -1230,6 +1383,7 @@ pub fn config_path(root: &Path) -> PathBuf {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::super::Agent;
     use super::*;
 
     const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex");
@@ -1343,6 +1497,196 @@ pub(crate) mod tests {
         }
         assert_eq!(rollout_cwd(&rollout(PLANNING)).as_deref(), Some("/work/repo"));
         assert_eq!(find_rollout(&data(), "01a1517c-0000-0000-0000-000000000000"), None);
+    }
+
+    /// The rollout at `plain` compressed as Codex does it (`rollout/src/compression.rs`): one zstd frame beside it,
+    /// named `<name>.zst`, with the plain file's time. The plain file is left for the caller to remove.
+    pub(crate) fn compress(plain: &Path) -> PathBuf {
+        let packed = plain.with_file_name(format!("{}.zst", plain.file_name().unwrap().to_str().unwrap()));
+        let bytes = ruzstd::encoding::compress_to_vec(File::open(plain).unwrap(), ruzstd::encoding::CompressionLevel::Fastest);
+        fs::write(&packed, bytes).unwrap();
+        let time = fs::metadata(plain).unwrap().modified().unwrap();
+        File::options().write(true).open(&packed).unwrap().set_modified(time).unwrap();
+        packed
+    }
+
+    /// The side chat and the subagent's chat in `testdata/codex/asides`.
+    const SIDE_CHAT: &str = "01a50000-0000-7000-8000-0000000051de";
+    const SUBAGENT: &str = "01a50000-0000-7000-8000-00000000a6e7";
+
+    fn aside(name: &str) -> PathBuf {
+        data().join("asides").join(name)
+    }
+
+    fn aside_rollout(id: &str) -> PathBuf {
+        fs::read_dir(data().join("asides")).unwrap().flatten().map(|e| e.path()).find(|p| id_of_path(p).as_deref() == Some(id)).unwrap()
+    }
+
+    #[test]
+    fn a_compressed_rollout_reads_as_the_same_conversation_and_while_both_are_there_the_plain_one_counts() {
+        let root = tmp("compressed");
+        let day = root.join("sessions/2026/10/18");
+        fs::create_dir_all(&day).unwrap();
+        for id in [FINISHED, INTERRUPTED, PLANNING] {
+            fs::copy(rollout(id), day.join(rollout(id).file_name().unwrap())).unwrap();
+        }
+        let plain = day.join(rollout(FINISHED).file_name().unwrap());
+        let packed = compress(&plain);
+        assert!(packed.to_string_lossy().ends_with(".jsonl.zst") && is_compressed(&packed) && !is_compressed(&plain));
+        assert_eq!(id_of_path(&packed).as_deref(), Some(FINISHED));
+        // Codex writes the compressed file, then removes the plain one: meanwhile the plain one is the conversation.
+        let listed = || {
+            let mut l = rollout_paths(&root);
+            l.sort();
+            l
+        };
+        assert_eq!(listed().len(), 3);
+        assert!(listed().contains(&plain) && !listed().contains(&packed));
+        fs::remove_file(&plain).unwrap();
+        assert_eq!(listed().len(), 3);
+        assert_eq!(find_rollout(&root, FINISHED), Some(packed.clone()));
+
+        // Everything platoon reads of a rollout reads the same from the compressed one.
+        let original = rollout(FINISHED);
+        assert_eq!(read_rollout(&packed, None), read_rollout(&original, None));
+        assert_eq!(
+            read_rollout(&packed, None).unwrap().first_prompt.as_deref(),
+            Some("Read notes.txt and tell me the colour. Keep it to one line.")
+        );
+        assert_eq!((busy(&packed), spent(&packed), started_ms(&packed)), (busy(&original), spent(&original), started_ms(&original)));
+        assert!(spent(&packed).is_some() && started_ms(&packed).is_some());
+        assert_eq!((rollout_cwd(&packed), limits_in(&packed)), (rollout_cwd(&original), limits_in(&original)));
+        assert!(limits_in(&packed).is_some());
+        let mut text = Vec::new();
+        Agent::Codex.open_transcript(&packed).unwrap().read_to_end(&mut text).unwrap();
+        assert_eq!(text, fs::read(&original).unwrap());
+        assert!(Agent::Codex.compressed(&packed) && !Agent::Codex.compressed(&original) && !Agent::Claude.compressed(&packed));
+        let (a, b) =
+            (crate::notesrun::read_session(Agent::Codex, &packed, 300), crate::notesrun::read_session(Agent::Codex, &original, 300));
+        assert_eq!(a, b);
+        assert!(a.first.is_some());
+    }
+
+    #[test]
+    fn a_long_compressed_rollout_is_read_at_both_ends_and_a_broken_one_is_passed_over() {
+        let d = tmp("compressed-long");
+        let p = d.join("rollout-2026-10-20T09-00-00-01a20000-1111-7000-8000-00000000c0de.jsonl");
+        let meta = r#"{"timestamp":"2026-10-20T09:00:00.000Z","type":"session_meta","payload":{"id":"01a20000-1111-7000-8000-00000000c0de","cwd":"/work/long","source":"cli"}}"#;
+        let ask = r#"{"timestamp":"2026-10-20T09:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"the very first words"}]}}"#;
+        let started = r#"{"timestamp":"2026-10-20T09:00:02.000Z","type":"event_msg","payload":{"type":"task_started"}}"#;
+        let total = |n: u64| {
+            format!(
+                r#"{{"timestamp":"2026-10-20T09:10:00.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{n},"cached_input_tokens":0,"output_tokens":7}},"last_token_usage":{{"input_tokens":{n}}}}}}}}}"#
+            )
+        };
+        let filler = |n: usize| {
+            (0..n)
+                .map(|i| {
+                    format!(
+                        r#"{{"timestamp":"2026-10-20T09:05:00.000Z","type":"response_item","payload":{{"type":"function_call_output","output":"{i:06} {}"}}}}"#,
+                        "x".repeat(200)
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let done = r#"{"timestamp":"2026-10-20T09:11:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}"#;
+        // Far more than the tail platoon reads: the head and the end are each found.
+        let mut lines = vec![meta.to_string(), ask.into(), started.into()];
+        lines.extend(filler(6000));
+        lines.extend([total(9_000), done.into()]);
+        fs::write(&p, lines.join("\n") + "\n").unwrap();
+        assert!(fs::metadata(&p).unwrap().len() > 2 * TAIL_BYTES);
+        let packed = compress(&p);
+        let t = read_rollout(&packed, None).unwrap();
+        assert_eq!(
+            (t.cwd.as_deref(), t.first_prompt.as_deref(), t.context_tokens),
+            (Some("/work/long"), Some("the very first words"), 9_000)
+        );
+        assert_eq!(read_rollout(&packed, None), read_rollout(&p, None));
+        assert_eq!((busy(&packed), spent(&packed).map(|s| s.input)), (Some(false), Some(9_000)));
+        // The running total far from the end: read through, as from a plain file.
+        let mut lines = vec![meta.to_string(), ask.into(), total(5_000)];
+        lines.extend(filler(6000));
+        fs::write(&p, lines.join("\n") + "\n").unwrap();
+        fs::remove_file(&packed).unwrap();
+        let packed = compress(&p);
+        assert_eq!((spent(&packed).map(|s| s.input), spent(&p).map(|s| s.input)), (Some(5_000), Some(5_000)));
+        assert_eq!(turn(&packed), Some(Turn::Unknown), "a long one with no turn record near its end can't be told");
+        // A compressed file that is cut short reads as ending where it was cut; one that isn't zstd at all can't be read.
+        let bytes = fs::read(&packed).unwrap();
+        fs::write(&packed, &bytes[..bytes.len() / 2]).unwrap();
+        let t = read_rollout(&packed, None).unwrap();
+        assert_eq!(t.first_prompt.as_deref(), Some("the very first words"));
+        fs::write(&packed, b"not zstd at all\n").unwrap();
+        assert_eq!((read_rollout(&packed, None), busy(&packed), spent(&packed), started_ms(&packed)), (None, None, None, None));
+        assert_eq!(crate::notesrun::read_session(Agent::Codex, &packed, 300), crate::notesrun::Read1::default());
+    }
+
+    #[test]
+    fn a_side_chat_and_a_subagents_chat_are_part_of_another_conversation_and_a_fork_of_ones_own_is_not() {
+        let side = read_rollout(&aside_rollout(SIDE_CHAT), None).unwrap();
+        assert!(side.aside, "a side chat Codex keeps with the chat it was opened from");
+        assert_eq!((side.cwd.as_deref(), side.first_prompt.as_deref()), (Some("/work/repo"), None), "nothing sent in it yet");
+        let sub = read_rollout(&aside_rollout(SUBAGENT), None).unwrap();
+        assert!(sub.aside, "a subagent's chat");
+        assert_eq!(sub.first_prompt.as_deref(), Some("Find where the color is read and report the file."));
+        for id in [FINISHED, INTERRUPTED, PLANNING] {
+            assert!(!read_rollout(&rollout(id), None).unwrap().aside, "{id}");
+        }
+        assert!(
+            !is_aside(&json!({"id": "x", "forked_from_id": FINISHED, "source": "cli"})),
+            "a fork the user made is a conversation of its own"
+        );
+        assert!(!is_aside(&json!({"attached_thread": true, "source": "cli"})), "attached to nothing");
+        assert!(is_aside(&json!({"source": {"subagent": "review"}})) && is_aside(&json!({"source": {"internal": "guardian"}})));
+        assert!(!is_aside(&json!({"source": "exec"})) && !is_aside(&json!({"source": {"custom": "an-app"}})));
+        // Only the first record counts: a fork that copied a side chat's records is the user's own.
+        let d = tmp("aside-first");
+        let p = d.join(format!("rollout-2026-11-20T11-00-00-{INTERRUPTED}.jsonl"));
+        let own = r#"{"timestamp":"2026-11-20T11:00:00.000Z","type":"session_meta","payload":{"id":"01a15181-5d10-7fc3-8da2-6d27c8100fb6","forked_from_id":"01a50000-0000-7000-8000-0000000051de","cwd":"/work/repo","source":"cli"}}"#;
+        fs::write(&p, format!("{own}\n{}", fs::read_to_string(aside_rollout(SIDE_CHAT)).unwrap())).unwrap();
+        assert!(!read_rollout(&p, None).unwrap().aside);
+        // What a side chat's rollout says of its turns: none yet, then one working.
+        assert_eq!(turn(&aside_rollout(SIDE_CHAT)), Some(Turn::NotStarted));
+        assert_eq!(turn(&aside("working-side-chat.jsonl")), Some(Turn::Working));
+        assert_eq!(turn(&aside_rollout(SUBAGENT)), Some(Turn::Ended));
+        assert_eq!(busy(&aside_rollout(SIDE_CHAT)), None, "a row's `working` is unchanged: nothing to say");
+    }
+
+    /// A side chat or a subagent's chat that a Codex window holds open is no running conversation of its own: it is
+    /// never listed among the live ones, whatever holds it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_side_chat_or_a_subagents_chat_held_open_is_not_a_running_conversation_of_its_own() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let root = tmp("aside-locks");
+        let (dir, day) = (root.join("thread-writer-locks"), root.join("sessions/2026/11/20"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&day).unwrap();
+        fs::copy(rollout(FINISHED), day.join(rollout(FINISHED).file_name().unwrap())).unwrap();
+        for id in [SIDE_CHAT, SUBAGENT] {
+            fs::copy(aside_rollout(id), day.join(aside_rollout(id).file_name().unwrap())).unwrap();
+        }
+        let (mut held, mut children) = (Vec::new(), Vec::new());
+        for id in [FINISHED, SIDE_CHAT, SUBAGENT] {
+            let lock = dir.join(format!("{id}.lock"));
+            fs::write(&lock, "").unwrap();
+            held.push((id.to_string(), lock.clone()));
+            children.push(Command::new("flock").arg(&lock).args(["sleep", "30"]).stdin(Stdio::null()).process_group(0).spawn().unwrap());
+        }
+        let start = std::time::Instant::now();
+        while linux::holders(&held).len() < held.len() && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let all_held = linux::holders(&held).len();
+        let ids: Vec<String> = Reader::with_root(root.clone()).live().into_iter().map(|l| l.id).collect();
+        for mut c in children {
+            unsafe { libc::kill(-(c.id() as i32), libc::SIGKILL) };
+            let _ = c.wait();
+        }
+        assert_eq!(all_held, 3);
+        assert_eq!(ids, [FINISHED]);
     }
 
     #[test]

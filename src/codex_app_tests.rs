@@ -857,3 +857,52 @@ fn the_settings_name_the_program_each_setting_is_about() {
     let shown = screen(&mut term, &app);
     assert!(shown.contains("What platoon asks Codex for when it names"), "drawn as said:\n{shown}");
 }
+
+/// Codex compresses a conversation nobody has written to for a week (`.jsonl.zst`, when that is switched on in Codex):
+/// it keeps its one row, with what it said before, and is found by what was typed in it.
+#[test]
+fn a_conversation_codex_compresses_keeps_its_row_and_is_found_as_before() {
+    let w = world("codex-zst-row");
+    let mut app = w.codex_app();
+    let row = |app: &App| {
+        let rows: Vec<_> = app.sessions.iter().filter(|s| s.id == FINISHED).collect();
+        assert_eq!(rows.len(), 1, "one row");
+        let s = rows[0];
+        (s.description.clone(), s.model.clone(), s.context_pct, s.branch.clone(), s.dir.clone(), s.last_active)
+    };
+    let ids = |app: &App| app.visible().iter().map(|&i| app.sessions[i].id.clone()).collect::<Vec<_>>();
+    let (before, order) = (row(&app), ids(&app));
+    let plain = crate::agents::codex::find_rollout(&w.codex(), FINISHED).unwrap();
+    let packed = crate::agents::codex::tests::compress(&plain);
+    app.refresh_for_test();
+    assert_eq!((row(&app), ids(&app)), (before.clone(), order.clone()), "while both files are there");
+    fs::remove_file(&plain).unwrap();
+    app.refresh_for_test();
+    assert_eq!(crate::agents::codex::find_rollout(&w.codex(), FINISHED), Some(packed));
+    assert_eq!((row(&app), ids(&app)), (before, order));
+    key(&mut app, KeyCode::Char('/'));
+    app.set_search_kind(1);
+    for c in "colour notes".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let found: Vec<String> = app.search.results.iter().map(|r| r.id.clone()).collect();
+    assert_eq!(found, [FINISHED], "what the user typed, read from the compressed file");
+}
+
+/// A side chat Codex keeps with the chat it was opened from (Codex 0.169 and later save them), and a subagent's chat,
+/// have files of their own in Codex's sessions, but Codex lists neither among the conversations to resume: nor does
+/// platoon.
+#[test]
+fn a_side_chat_and_a_subagents_chat_are_not_rows_of_their_own() {
+    let w = world("codex-asides-rows");
+    let day = w.codex().join("sessions/2026/11/20");
+    fs::create_dir_all(&day).unwrap();
+    let asides = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/asides"));
+    for f in fs::read_dir(asides).unwrap().flatten() {
+        fs::copy(f.path(), day.join(f.file_name())).unwrap();
+    }
+    let app = w.codex_app();
+    let ids: Vec<&str> = app.visible().iter().map(|&i| app.sessions[i].id.as_str()).collect();
+    assert_eq!(ids, [PLANNING, INTERRUPTED, CLAUDE, FINISHED]);
+    assert!(app.sessions.iter().all(|s| !s.id.starts_with("01a50000")), "not even archived");
+}

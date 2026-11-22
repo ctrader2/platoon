@@ -261,6 +261,23 @@ impl Agent {
         }
     }
 
+    /// A saved transcript's text from its start, however the agent keeps it (Codex may keep an old one compressed).
+    pub fn open_transcript(self, path: &Path) -> Option<Box<dyn std::io::Read + Send>> {
+        match self {
+            Agent::Claude => std::fs::File::open(path).ok().map(|f| Box::new(f) as Box<dyn std::io::Read + Send>),
+            Agent::Codex => codex::open(path),
+        }
+    }
+
+    /// Is this transcript kept compressed? Such a file is read whole (`open_transcript`), never from a byte offset, and
+    /// never grows: to go on with the conversation, the agent writes it out plain again first, under another name.
+    pub fn compressed(self, path: &Path) -> bool {
+        match self {
+            Agent::Claude => false,
+            Agent::Codex => codex::is_compressed(path),
+        }
+    }
+
     /// Read a transcript cheaply, whatever its size (see `claude::read_transcript`). `prev`: the earlier reading of the
     /// same file, whose facts are kept when they aren't found again.
     pub fn read_transcript(self, path: &Path, prev: Option<&Transcript>) -> Option<Transcript> {
@@ -961,6 +978,9 @@ pub struct Transcript {
     pub first_prompt: Option<String>,
     /// Timestamp of the latest user or assistant entry, ms since the epoch.
     pub last_active_ms: Option<u64>,
+    /// Part of another conversation rather than one of its own, so not listed: a Codex side chat kept with the chat it
+    /// was opened from, or a helper's chat (a subagent's). See `codex::is_aside`.
+    pub aside: bool,
 }
 
 /// What one conversation spent, summed from the usage records in its transcript (and its subagents' transcripts).

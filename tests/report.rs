@@ -59,7 +59,8 @@ impl World {
             ),
         )
         .unwrap();
-        let index = json!({"version": 3, "files": {transcript.to_string_lossy(): {"m": 1, "s": 1, "cwd": cwd, "dirs": [], "branch": "main",
+        // The index's format version (`index::VERSION`): an index of another version is read as no index.
+        let index = json!({"version": 4, "files": {transcript.to_string_lossy(): {"m": 1, "s": 1, "cwd": cwd, "dirs": [], "branch": "main",
             "model": "claude-opus-5-5", "tokens": 1000, "large": false, "title": "PLANTED-ai-title", "prompt": "PLANTED-prompt fix the zebra", "active": 1}}});
         fs::write(cache.join("index.json"), index.to_string()).unwrap();
         // platoon's own records of it: a name the user gave, a name and summary platoon made, an archive entry.

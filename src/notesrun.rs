@@ -344,7 +344,7 @@ pub fn read_session(agent: Agent, path: &Path, cap: usize) -> Read1 {
 /// `reply_chars` characters, its lines kept (`Agent::reply_text_in_line`). None: one line of it, as everything else
 /// reads it.
 pub fn read_session_with(agent: Agent, path: &Path, cap: usize, reply_chars: Option<usize>) -> Read1 {
-    let Ok(file) = fs::File::open(path) else { return Read1::default() };
+    let Some(file) = agent.open_transcript(path) else { return Read1::default() };
     let mut reader = BufReader::new(file);
     let mut out = Read1::default();
     let mut recent: VecDeque<String> = VecDeque::new();

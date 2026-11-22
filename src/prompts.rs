@@ -155,19 +155,22 @@ struct Read1 {
 /// Bring one file up to date, reading only what is new when that is safe.
 fn read_file(e: &Entry, cap: usize, prev: Option<&FileState>) -> Option<Read1> {
     let (agent, path, id, mtime, size) = (e.agent, e.path.as_path(), e.id.as_str(), e.mtime, e.size);
-    let mut file = File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let mut rebuilt = false;
-    let keep = match prev {
-        Some(p) if p.offset <= len && (p.fp_len == 0 || head_hash(&mut file, p.fp_len) == Some(p.fingerprint)) => Some(p),
-        Some(_) => {
-            rebuilt = true;
-            None
-        }
-        None => None,
+    // A compressed transcript (an old one of Codex's) never grows: it is read whole, and again only when it changes.
+    let mut file = if agent.compressed(path) { None } else { Some(File::open(path).ok()?) };
+    let same = match (prev, file.as_mut()) {
+        (Some(p), Some(f)) => p.offset <= f.metadata().ok()?.len() && (p.fp_len == 0 || head_hash(f, p.fp_len) == Some(p.fingerprint)),
+        _ => false,
     };
+    let keep = prev.filter(|_| same);
+    let rebuilt = prev.is_some() && !same;
     let start = keep.map_or(0, |p| p.offset);
-    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut source: Box<dyn Read> = match file.as_mut() {
+        Some(f) => {
+            f.seek(SeekFrom::Start(start)).ok()?;
+            Box::new(f.try_clone().ok()?)
+        }
+        None => agent.open_transcript(path)?,
+    };
 
     let mut prompts: Vec<String> = Vec::new();
     // The newest line that could be Claude's words, kept as text and parsed once, after the last chunk: the rest of
@@ -177,7 +180,7 @@ fn read_file(e: &Entry, cap: usize, prev: Option<&FileState>) -> Option<Read1> {
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; CHUNK];
     loop {
-        let n = file.read(&mut buf).ok()?;
+        let n = source.read(&mut buf).ok()?;
         if n == 0 {
             break;
         }
@@ -204,12 +207,14 @@ fn read_file(e: &Entry, cap: usize, prev: Option<&FileState>) -> Option<Read1> {
     }
 
     let offset = start + consumed;
-    let (fp_len, fingerprint) = match keep {
-        Some(p) if p.fp_len >= FINGERPRINT_BYTES.min(offset) => (p.fp_len, p.fingerprint),
-        _ => {
+    let (fp_len, fingerprint) = match (keep, file.as_mut()) {
+        (Some(p), _) if p.fp_len >= FINGERPRINT_BYTES.min(offset) => (p.fp_len, p.fingerprint),
+        (_, Some(f)) => {
             let n = offset.min(FINGERPRINT_BYTES);
-            (n, if n == 0 { 0 } else { head_hash(&mut file, n)? })
+            (n, if n == 0 { 0 } else { head_hash(f, n)? })
         }
+        // Compressed: never read from an offset, so nothing to recognize it by.
+        (_, None) => (0, 0),
     };
     let reply = reply_line.and_then(|l| agent.reply_in_line(&l, REPLY_CHARS));
     let (data, changed) = match keep {
@@ -1242,5 +1247,48 @@ mod tests {
         assert_eq!((got[0].prompts.len(), got[0].substantive), (6, 3));
         s.save();
         assert_eq!(Store::load(&d, 2000).snapshot()[0].substantive, 3, "and again after a restart");
+    }
+
+    /// A Codex conversation Codex compressed (`.jsonl.zst`) is searched by what the user typed in it, as its plain file
+    /// was: read whole, once, and not again while it is unchanged.
+    #[test]
+    fn a_compressed_codex_conversation_is_read_whole_once() {
+        let d = tmp("zst");
+        let day = d.join("sessions");
+        fs::create_dir_all(&day).unwrap();
+        let name = "rollout-2026-10-18T20-07-40-01a1517c-414d-7902-93d1-efa74830493d.jsonl";
+        let plain = day.join(name);
+        fs::copy(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/sessions/2026/10/18")).join(name), &plain).unwrap();
+        let codex =
+            |p: &Path| Arc::new(Entry { agent: Agent::Codex, id: "01a1517c-414d-7902-93d1-efa74830493d".into(), ..(*entry(p)).clone() });
+        let mut s = Store::load(&d, 2000);
+        let run = |s: &mut Store, p: &Path| {
+            let mut got = Vec::new();
+            let stats = s.scan(&[codex(p)], 2000, true, &mut |u| {
+                got.extend(u.upserts);
+                true
+            });
+            (stats, got)
+        };
+        let (_, got) = run(&mut s, &plain);
+        let typed = got[0].prompts.clone();
+        assert_eq!(typed, ["Read notes.txt and tell me the colour. Keep it to one line."]);
+        let packed = crate::agents::codex::tests::compress(&plain);
+        fs::remove_file(&plain).unwrap();
+        let (stats, got) = run(&mut s, &packed);
+        assert_eq!((stats.read, stats.removed), (1, 1));
+        assert_eq!(got[0].prompts, typed);
+        assert_eq!(
+            stats.bytes,
+            fs::read(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/sessions/2026/10/18")).join(name)).unwrap().len()
+                as u64,
+            "all of its text"
+        );
+        let (stats, got) = run(&mut s, &packed);
+        assert_eq!((stats.read, got.len()), (0, 0), "unchanged: not read again");
+        s.save();
+        let mut again = Store::load(&d, 2000);
+        assert_eq!(run(&mut again, &packed).0.read, 0, "nor after a restart");
+        assert_eq!(again.snapshot()[0].prompts, typed);
     }
 }

@@ -27,7 +27,8 @@ use std::{
 /// Bump when the parsing changes what an entry holds, so stale indexes are rebuilt instead of trusted.
 /// 2: the added folders (`dirs`), which only a first reading of a file looks for in its head.
 /// 3: a typed skill (`/land x`) is a conversation's first message, so its description.
-pub(crate) const VERSION: u64 = 3;
+/// 4: a Codex side chat or helper's chat is marked (`aside`), which only a first reading of its head finds.
+pub(crate) const VERSION: u64 = 4;
 /// Results are sent to the UI in batches of this many files, or this often.
 const BATCH: usize = 64;
 const BATCH_EVERY: Duration = Duration::from_millis(60);
@@ -57,8 +58,13 @@ impl Entry {
             "cwd": t.cwd, "dirs": t.extra_dirs, "branch": t.branch, "model": t.model, "tokens": t.context_tokens, "large": t.large_window,
             "title": t.ai_title, "prompt": t.first_prompt, "active": t.last_active_ms,
         });
-        if let (Some(w), Some(o)) = (t.window, v.as_object_mut()) {
-            o.insert("window".into(), json!(w));
+        if let Some(o) = v.as_object_mut() {
+            if let Some(w) = t.window {
+                o.insert("window".into(), json!(w));
+            }
+            if t.aside {
+                o.insert("aside".into(), json!(true));
+            }
         }
         v
     }
@@ -82,6 +88,7 @@ impl Entry {
                 ai_title: text("title"),
                 first_prompt: text("prompt"),
                 last_active_ms: v["active"].as_u64(),
+                aside: v["aside"].as_bool().unwrap_or(false),
             },
         })
     }
@@ -160,9 +167,10 @@ impl Scanner {
         Self { agent, root: root.to_path_buf(), file, map, unsaved: false, last_save: None, names: None }
     }
 
-    /// What was loaded from disk, for showing rows before the first scan finishes.
+    /// What was loaded from disk, for showing rows before the first scan finishes: the conversations, not the side
+    /// chats and helpers' chats (`Transcript::aside`), which the map keeps only so that they aren't read again.
     pub fn entries(&self) -> Vec<Arc<Entry>> {
-        self.map.values().cloned().collect()
+        self.map.values().filter(|e| !e.t.aside).cloned().collect()
     }
 
     /// The agent's transcripts (`Agent::transcript_paths`), with their (modified time, size).
@@ -450,6 +458,13 @@ impl Indexer {
                 }
             }
             for e in u.upserts {
+                // Part of another conversation (a Codex side chat, a subagent's chat): never a row of its own.
+                if e.t.aside {
+                    if self.entries.remove(&e.path).is_some() {
+                        self.generation += 1;
+                    }
+                    continue;
+                }
                 if let (Some(h), Some(cwd)) = (&self.hidden, &e.t.cwd) {
                     let hidden = *self.hidden_memo.entry(cwd.clone()).or_insert_with(|| h.covers(cwd));
                     if hidden {
@@ -740,5 +755,90 @@ mod tests {
         again.poll();
         assert_eq!(ids(&again), ["near", "real"]);
         let _ = fs::remove_dir_all(&d);
+    }
+
+    const CODEX_DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex");
+    const FINISHED: &str = "01a1517c-414d-7902-93d1-efa74830493d";
+
+    /// The sample Codex conversations in a Codex folder of the test's own: (that folder, a cache folder, `FINISHED`'s file).
+    fn codex_world(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let (root, cache) = (tmp(&format!("{name}-c")), tmp(&format!("{name}-i")));
+        let day = root.join("sessions/2026/10/18");
+        fs::create_dir_all(&day).unwrap();
+        for f in fs::read_dir(Path::new(CODEX_DATA).join("sessions/2026/10/18")).unwrap().flatten() {
+            fs::copy(f.path(), day.join(f.file_name())).unwrap();
+        }
+        let plain = codex::rollout_paths(&root).into_iter().find(|p| codex::id_of_path(p).as_deref() == Some(FINISHED)).unwrap();
+        (root, cache, plain)
+    }
+
+    fn codex_ids(ix: &Indexer) -> Vec<(String, PathBuf)> {
+        let mut v: Vec<(String, PathBuf)> = ix.entries.values().map(|e| (e.id.clone(), e.path.clone())).collect();
+        v.sort();
+        v
+    }
+
+    /// Codex compresses a conversation nobody has written to for a week (`.jsonl` to `.jsonl.zst`), and writes it out
+    /// plain again when it is resumed: the conversation stays one entry with the same id and the same facts, read once
+    /// for each change of file.
+    #[test]
+    fn a_codex_conversation_keeps_its_one_entry_as_codex_compresses_it_and_resumes_it() {
+        let (root, cache, plain) = codex_world("codex-zst");
+        let mut ix = Indexer::inline(Path::new("/nonexistent-claude"), Some(&root), &cache);
+        ix.poll();
+        let before = ix.entries.values().find(|e| e.id == FINISHED).unwrap().t.clone();
+        assert_eq!(ix.entries.len(), 3);
+        // Both there for a moment, then only the compressed one.
+        let packed = crate::agents::codex::tests::compress(&plain);
+        ix.poll();
+        assert!(codex_ids(&ix).contains(&(FINISHED.into(), plain.clone())), "the plain one while both are there");
+        assert_eq!(ix.entries.len(), 3);
+        fs::remove_file(&plain).unwrap();
+        ix.poll();
+        let ids = codex_ids(&ix);
+        assert_eq!(ids.iter().filter(|(id, _)| id == FINISHED).count(), 1, "{ids:?}");
+        assert!(ids.contains(&(FINISHED.into(), packed.clone())));
+        assert_eq!(ix.entries.values().find(|e| e.id == FINISHED).unwrap().t, before, "read as before");
+        // Saved and loaded again: nothing is read again (the compressed file is decompressed once).
+        let mut s = Scanner::load_for(Agent::Codex, &root, &cache);
+        scan(&mut s);
+        s.save();
+        let mut s = Scanner::load_for(Agent::Codex, &root, &cache);
+        assert_eq!(scan(&mut s).0, Stats { listed: 3, parsed: 0, removed: 0 });
+        // Resumed: plain again.
+        fs::copy(Path::new(CODEX_DATA).join("sessions/2026/10/18").join(plain.file_name().unwrap()), &plain).unwrap();
+        fs::remove_file(&packed).unwrap();
+        ix.poll();
+        let ids = codex_ids(&ix);
+        assert_eq!(ids.iter().filter(|(id, _)| id == FINISHED).count(), 1, "{ids:?}");
+        assert!(ids.contains(&(FINISHED.into(), plain)));
+    }
+
+    /// A Codex side chat and a subagent's chat have rollouts of their own but are part of another conversation: never an
+    /// entry, and, being remembered, not read again on every pass.
+    #[test]
+    fn a_codex_side_chat_or_a_subagents_chat_is_never_an_entry_and_is_read_once() {
+        let (root, cache, _) = codex_world("codex-asides");
+        let day = root.join("sessions/2026/11/20");
+        fs::create_dir_all(&day).unwrap();
+        for f in fs::read_dir(Path::new(CODEX_DATA).join("asides")).unwrap().flatten() {
+            fs::copy(f.path(), day.join(f.file_name())).unwrap();
+        }
+        let mut s = Scanner::load_for(Agent::Codex, &root, &cache);
+        let (stats, got) = scan(&mut s);
+        assert_eq!((stats.listed, stats.parsed), (5, 5), "the two have rollout names: the third file in asides/ doesn't");
+        assert_eq!(got.iter().filter(|e| e.t.aside).count(), 2);
+        assert_eq!(s.entries().len(), 3, "only the conversations");
+        assert_eq!(scan(&mut s).0.parsed, 0, "nothing read again");
+        s.save();
+        let mut ix = Indexer::inline(Path::new("/nonexistent-claude"), Some(&root), &cache);
+        assert_eq!(ix.entries.len(), 3, "nor loaded from the saved index");
+        ix.poll();
+        let mut ids: Vec<String> = ix.entries.values().map(|e| e.id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            ["01a1517c-414d-7902-93d1-efa74830493d", "01a15181-5d10-7fc3-8da2-6d27c8100fb6", "01a15181-dc6f-7b73-81cf-c041b14f6432"]
+        );
     }
 }

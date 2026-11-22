@@ -158,7 +158,10 @@ and is found by both searches.
 
 When OpenAI's Codex CLI is on this computer, its conversations are in the list too, mixed in with Claude Code's by when
 they were last used. platoon reads them from Codex's own folder (`~/.codex`, or `$CODEX_HOME`): the saved sessions in
-`sessions/` and the names Codex gives them in `session_index.jsonl`. A Codex row looks like any other:
+`sessions/` (compressed ones too: Codex can compress a conversation nobody has used for a week, when that is switched on
+in Codex) and the names Codex gives them in `session_index.jsonl`. A side chat and a subagent's chat are not rows of
+their own: they belong to the chat they came from and open with it, and Codex's own list of conversations to resume
+leaves them out too. A Codex row looks like any other:
 
 - **MODEL** is the model's name (`GPT-6-Luna`), or `Codex` before the first reply (where a Claude Code row shows `-`).
 - The name Codex gave the conversation is its description line, as Claude Code's own titles are.
@@ -268,7 +271,8 @@ Details worth knowing:
   you saved to run in later sessions too (in `.claude/scheduled_tasks.json`) runs again when you open the session.
 - For a Codex session, idle is what Codex's saved session says (its last reply has finished), and a command Codex started
   (it runs each one in a shell of its own too) keeps it running, as for Claude. One Codex window can have several chats
-  open (Codex's command center): the session is stopped only once every one of them has finished its reply.
+  open (Codex's command center, side chats, subagents' chats): the session is stopped only once every one of them has
+  finished its reply. A chat nothing has been sent in yet (a new one, or a side chat just opened) doesn't keep it.
 - The row of a running session that has been quiet that long but is still running says why when you pick it: `Kept
   running: a command Claude started is still going (npm run dev)`, `a window is open on it`, `Claude Code doesn't say it's
   idle`, `a tool Claude started is still working in the background`, `it has a scheduled task or /loop that runs later`.
