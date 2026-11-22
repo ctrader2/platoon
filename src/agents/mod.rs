@@ -119,6 +119,24 @@ impl Agent {
         }
     }
 
+    /// What the environment of the agent's program in a host changes besides platoon's own: each variable set to
+    /// `Some(value)` or taken away (`None`). For a Claude Code session that is not a task's, its exit hint names
+    /// `platoon --resume <id>` when that reaches this platoon (`claude::resume_hint`). A task's session is opened from
+    /// its task in platoon (`platoon open` would resume it without the task's settings): it, and a session where the
+    /// hint can't name platoon, gets no such variable, not even one platoon inherited.
+    pub fn host_env(self, task: bool) -> Vec<(&'static str, Option<String>)> {
+        match self {
+            Agent::Claude => {
+                let hint = std::env::current_exe()
+                    .ok()
+                    .filter(|_| !task)
+                    .and_then(|exe| claude::resume_hint(&exe, std::env::var_os("PATH").as_deref()));
+                vec![(claude::RESUME_HINT_ENV, hint)]
+            }
+            Agent::Codex => Vec::new(),
+        }
+    }
+
     /// Do a host's arguments show a background session (`Start::Attach`)?
     pub fn attaches(self, args: &[String]) -> bool {
         match self {
@@ -502,6 +520,9 @@ pub struct TurnEnd {
     /// A tool call goes on in the background (Claude Code's MCP tasks): the agent is told when it finishes, and a turn
     /// about it follows. Stopping the agent meanwhile would end it.
     pub background_tool: bool,
+    /// The session has work scheduled for later that only runs while it does (Claude Code's scheduled tasks and
+    /// `/loop`): stopping the agent would drop it.
+    pub scheduled: bool,
 }
 
 /// What platoon answers a hook with.

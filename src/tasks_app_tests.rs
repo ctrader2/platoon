@@ -780,8 +780,8 @@ fn a_projects_screen_lists_its_sessions_and_its_tasks_apart_and_enter_on_a_task_
         assert_eq!(fg_after(&term, row, word), color, "{row}: {word}");
     }
     // A session's row says how full its context is, as on the Sessions tab.
-    assert!(lines[line_of("tmp")].contains(" 25% "), "{shown}");
-    assert_eq!(fg_after(&term, "/tmp", "25%"), t.subtext);
+    assert!(lines[line_of("tmp")].contains(" 5% "), "{shown}");
+    assert_eq!(fg_after(&term, "/tmp", "5%"), t.subtext);
 
     // The task rows come after the sessions in one list. On one, enter is its only key.
     let pick = |app: &mut App, n: u32| {

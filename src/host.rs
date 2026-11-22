@@ -337,6 +337,12 @@ pub fn run(args: &[String]) -> i32 {
     for k in crate::agents::inherited_session_markers() {
         cmd.env_remove(k);
     }
+    for (k, v) in agent.host_env(std::env::var_os(crate::agents::TASK_ENV).is_some()) {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        }
+    }
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => return fail("program", format!("couldn't start {program}: {e}")),
@@ -551,8 +557,9 @@ enum Reason {
     RecentOutput,
     /// A task's session whose task is Working: its subagents may be at work while nobody watches.
     TaskAtWork,
-    /// The last turn ended with a tool call still at work in the background (`idle::background_tool`).
-    BackgroundTool,
+    /// The last turn ended with a tool call still at work in the background, or with work scheduled for later
+    /// (`idle::waits_on`).
+    Waits(idle::Waits),
     /// The process table couldn't be read, so what runs under claude is unknown.
     ProcessesUnknown,
     /// A command claude started is still running (`idle::under`); its short form, when it has one.
@@ -568,7 +575,8 @@ impl Reason {
             Reason::NotIdle => "not-idle",
             Reason::RecentOutput => "recent-output",
             Reason::TaskAtWork => "task-at-work",
-            Reason::BackgroundTool => "background-tool",
+            Reason::Waits(idle::Waits::BackgroundTool) => "background-tool",
+            Reason::Waits(idle::Waits::Scheduled) => "scheduled",
             Reason::ProcessesUnknown => "processes-unknown",
             Reason::Command(_) => "command",
         }
@@ -582,7 +590,7 @@ impl Reason {
             Reason::Viewer => quiet.then_some(Kept::Window),
             Reason::NotIdle => quiet.then_some(Kept::NotIdle),
             Reason::TaskAtWork => Some(Kept::TaskAtWork),
-            Reason::BackgroundTool => Some(Kept::BackgroundTool),
+            Reason::Waits(what) => Some(what.kept()),
             Reason::ProcessesUnknown => Some(Kept::Unknown),
             Reason::Command(what) => Some(Kept::Command(what.clone())),
         }
@@ -594,7 +602,8 @@ impl Reason {
 /// Idle means all of: no window attached for the whole threshold, claude's own registry entry saying
 /// `idle` the whole time (missing, unreadable or any other status is NOT idle, so uncertainty never
 /// stops anything), no output from claude for the threshold, its last turn not ended with a tool call still at work in
-/// the background (an MCP task: `idle::background_tool`), and no command claude started still running (`idle::under`:
+/// the background (an MCP task) nor with work scheduled for later (a scheduled task or `/loop`: `idle::waits_on`), and
+/// no command claude started still running (`idle::under`:
 /// its MCP servers and other helpers don't count).
 /// Stopping is SIGTERM to claude, which shuts down cleanly; the host then exits like it always does.
 /// The conversation is untouched, and Enter resumes it.
@@ -677,8 +686,8 @@ impl Watchdog {
         }
         // The conversation open now (one started new names none in the arguments, and one can switch to another).
         let open = self.agent.open_session(&self.root, self.claude_pid).or_else(|| self.session.clone());
-        if open.is_some_and(|s| idle::background_tool(&self.cache, &s, self.started, SystemTime::now())) {
-            return Decision::Keep(Reason::BackgroundTool);
+        if let Some(what) = open.and_then(|s| idle::waits_on(&self.cache, &s, self.started, SystemTime::now())) {
+            return Decision::Keep(Reason::Waits(what));
         }
         self.decide_processes()
     }
@@ -1363,7 +1372,8 @@ mod tests {
         assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, t0), Some(Kept::NotIdle));
         assert_eq!(rig.dog.kept(&keep(Reason::NotIdle), later, later - MIN), None, "working away");
         assert_eq!(rig.dog.kept(&keep(Reason::TaskAtWork), later, t0), Some(Kept::TaskAtWork));
-        assert_eq!(rig.dog.kept(&keep(Reason::BackgroundTool), later, t0), Some(Kept::BackgroundTool));
+        assert_eq!(rig.dog.kept(&keep(Reason::Waits(idle::Waits::BackgroundTool)), later, t0), Some(Kept::BackgroundTool));
+        assert_eq!(rig.dog.kept(&keep(Reason::Waits(idle::Waits::Scheduled)), later, t0), Some(Kept::Scheduled));
         assert_eq!(rig.dog.kept(&keep(Reason::ProcessesUnknown), later, t0), Some(Kept::Unknown));
         assert_eq!(rig.dog.kept(&keep(Reason::RecentOutput), later, t0), None);
         assert_eq!(rig.dog.kept(&Decision::Stop(Vec::new()), later, t0), None);
@@ -1385,9 +1395,21 @@ mod tests {
         assert_eq!(rig.dog.decide(later, 0, &mut { later - MIN }), Decision::Keep(Reason::RecentOutput));
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
         // The conversation the registry says is open ended its last turn with a tool still at work in the background.
-        idle::note_turn_end(&rig.dog.cache, "s", true, SystemTime::now());
-        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::BackgroundTool));
-        idle::note_turn_end(&rig.dog.cache, "s", false, SystemTime::now());
+        let turn = |background_tool: bool, scheduled: bool| crate::agents::TurnEnd {
+            planning: false,
+            last_message: None,
+            subagents_working: false,
+            background_tool,
+            scheduled,
+        };
+        idle::note_turn_end(&rig.dog.cache, "s", &turn(true, false), SystemTime::now());
+        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::Waits(idle::Waits::BackgroundTool)));
+        idle::note_turn_end(&rig.dog.cache, "s", &turn(false, false), SystemTime::now());
+        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
+        // Its last turn ended with a /loop or a scheduled task still to run.
+        idle::note_turn_end(&rig.dog.cache, "s", &turn(false, true), SystemTime::now());
+        assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::Waits(idle::Waits::Scheduled)));
+        idle::note_turn_end(&rig.dog.cache, "s", &turn(false, false), SystemTime::now());
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
         save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, ..Settings::default() }).unwrap();
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::IdleStopOff));

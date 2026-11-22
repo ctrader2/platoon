@@ -139,6 +139,27 @@ pub fn start_args(start: Start) -> Vec<String> {
     }
 }
 
+/// The variable that has Claude Code's exit hint ("Resume this session with: ...") name the program that started it
+/// (Claude Code 2.1.323 and later; an older one ignores it).
+pub const RESUME_HINT_ENV: &str = "CLAUDE_CODE_RESUME_HINT_COMMAND";
+
+/// What `RESUME_HINT_ENV` is set to for a session platoon's host starts: platoon's name as typed in a shell, when
+/// the first program by that name on `path` (a `PATH` value) is `exe` itself (by their real paths); else None, and
+/// Claude Code's own hint (`claude --resume <id>`) stands. Read from Claude Code 2.1.330's own code: the value is
+/// used only when it is one plain word (`^\w[\w-]*$`, so no folder and no arguments), and the hint is then
+/// `<word> --resume <id>`, which platoon takes as `platoon open <id>` (`main.rs`). A full path would be ignored.
+pub fn resume_hint(exe: &Path, path: Option<&std::ffi::OsStr>) -> Option<String> {
+    let name = exe.file_name()?.to_str()?;
+    let word = name.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+    if !word || !name.is_ascii() {
+        return None;
+    }
+    let me = fs::canonicalize(exe).ok()?;
+    let first = std::env::split_paths(path?).map(|d| d.join(name)).find(|p| p.is_file())?;
+    (fs::canonicalize(first).ok()? == me).then(|| name.to_string())
+}
+
 /// Do these arguments show a background session (`claude attach <id>`)?
 pub fn attaches(args: &[String]) -> bool {
     args.first().is_some_and(|a| a == "attach")
@@ -192,6 +213,7 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             last_message: text("last_assistant_message").map(String::from),
             subagents_working: still_working(v.get("background_tasks")),
             background_tool: mcp_task_running(v.get("background_tasks")),
+            scheduled: crons_scheduled(v.get("session_crons")),
         }),
     };
     Some(HookInput { session, cwd, event })
@@ -254,6 +276,14 @@ fn still_working(v: Option<&Value>) -> bool {
         Some(Value::Bool(b)) => *b,
         _ => false,
     }
+}
+
+/// Does the session have work scheduled that will wake it later: the `Stop` input's `session_crons` (Claude Code
+/// 2.1.322 and later: "Session-scoped cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake this session
+/// later", each `{id, schedule, recurring, prompt}`), not empty? Such jobs live in the session's process: since 2.1.330
+/// a recurring one runs up to 30 days while the session keeps running, and is gone when it stops.
+fn crons_scheduled(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::Array(jobs)) if jobs.iter().any(Value::is_object))
 }
 
 /// Does Claude Code's `background_tasks` hold an MCP task in flight (since 2.1.319: an MCP server runs a tool call as a
@@ -362,8 +392,8 @@ fn cut(s: &str, n: usize) -> String {
 //   `permissions.ask` rules so pushing, opening or merging pull requests and publishing wait at Claude Code's own
 //   permission prompt (`ASK`), and its file tools kept to its folders (`CONFINED`);
 // - `--append-system-prompt-file <task folder>/squad.md`: platoon's fixed rules and the squad's steps;
-// - `--add-dir <task folder>`, so the session can read those files (and write there: the only folder besides its
-//   worktree it may);
+// - the task folder as a working folder of the session's (`permissions.additionalDirectories` in `--settings`, see
+//   `settings_json`), so it can read those files and write there (the only folder besides its worktree it may);
 // - the task's text as its first message.
 
 /// Commands that publish: they wait at Claude Code's permission prompt (`permissions.ask`), whatever mode the session
@@ -408,15 +438,28 @@ pub const ASK: &[&str] = &[
 
 /// `permissions.blockWritesOutsideWorkingDirectories` (Claude Code 2.1.314 and later): Write, Edit and NotebookEdit refuse
 /// a path outside the session's working folders (its worktree, or its folder outside git, and the task's own folder
-/// from `--add-dir`) in every permission mode, as Codex's `workspace-write` does for a Codex task, so a slip can't edit
-/// the main checkout. Read from Claude Code 2.1.322's own code, it lets through what the session keeps for itself (its
-/// plan files, which plan mode writes outside, its scratchpad, a background job's folder, the project's auto-memory);
+/// from `permissions.additionalDirectories`) in every permission mode, as Codex's `workspace-write` does for a Codex
+/// task, so a slip can't edit the main checkout. Read from Claude Code 2.1.322's own code, it lets through what the
+/// session keeps for itself (its plan files, which plan mode writes outside, its scratchpad, a background job's folder,
+/// the project's auto-memory);
 /// refuses its settings files (`.claude/settings.json`, `.claude/settings.local.json`) inside the folders too; takes
 /// away `EnterWorktree` and `ExitWorktree`; and leaves shell commands, MCP tools and hooks as they were (platoon's own
 /// `plan.md` is written by its hook). A folder the user adds with `/add-dir` is a working folder too. Before 2.1.314 the
 /// key means nothing: 2.1.314's settings keep a `permissions` key they don't know (`passthrough`), and older versions
 /// are taken to do the same (not seen).
 const CONFINED: &str = "blockWritesOutsideWorkingDirectories";
+
+/// How a task's session gets its task folder as a working folder: `permissions.additionalDirectories` in its
+/// `--settings`, not `--add-dir`. Read from Claude Code 2.1.330's own code: since 2.1.326 a folder given with `--add-dir`
+/// asks the trust question at start unless it is trusted already (its own record, or one of the folders above it up to
+/// the top of its git repository, in `~/.claude.json`) or it lies inside the session's folder, and the task folder in
+/// platoon's config is a new folder for every task, so every task's session would stop at that question. A folder in
+/// `additionalDirectories` of `--settings` is a working folder all the same (Write, Edit and `CONFINED` count it) and
+/// asks nothing (only a repository's own `.claude/settings*.json` are held back until the folder is trusted). Unlike
+/// `--add-dir`, no `CLAUDE.md`, skills or commands are read from it: the task folder has none. The worktree itself asks
+/// nothing new: its trust is its repository's (Claude Code keys a folder's trust by its repository's main folder, so a
+/// trusted repository's worktrees are trusted).
+const TASK_FOLDER_KEY: &str = "additionalDirectories";
 
 /// How much longer than the check of the work may take the `Stop` hook is given before Claude Code gives up on it, in
 /// seconds.
@@ -436,12 +479,15 @@ pub fn shell_word(s: &str) -> String {
 pub const STATUS_EVERY: u64 = 2;
 
 /// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, the `ask` rules, and its file tools
-/// kept to its folders (`CONFINED`); platoon's own
+/// kept to its folders (`CONFINED`), the task's own folder `task_dir` one of them (`TASK_FOLDER_KEY`); platoon's own
 /// status line (the task's line: `platoon statusline`), run again every `STATUS_EVERY` seconds, in place of the user's
 /// in this session only; and `exe task step` allowed without a permission prompt (the rules have the session run it
 /// at each step, written as here). The `Stop` hook waits as long as the check of the work may take, and a little more,
 /// and Claude Code shows while it runs that `checker` (the check's model, by name) is checking the work.
-pub fn settings_json(exe: &str, checker: &str) -> String {
+pub fn settings_json(exe: &str, checker: &str, task_dir: &Path) -> String {
+    // By its real path: Claude Code judges what lies inside a working folder by the path as written, and a link on the
+    // way (macOS's `/var` is one) would leave the task's files outside it.
+    let folder = fs::canonicalize(task_dir).unwrap_or_else(|_| task_dir.to_path_buf());
     let exe = shell_word(exe);
     let cmd = |name: &str| json!({"type": "command", "command": format!("{exe} hook {name}")});
     let mut stop = cmd("task-stop");
@@ -450,7 +496,12 @@ pub fn settings_json(exe: &str, checker: &str) -> String {
         o.insert("statusMessage".into(), json!(format!("{checker} is checking the work against \"Done when\"…")));
     }
     json!({
-        "permissions": {"ask": ASK, "allow": [format!("Bash({exe} task step:*)")], CONFINED: true},
+        "permissions": {
+            "ask": ASK,
+            "allow": [format!("Bash({exe} task step:*)")],
+            CONFINED: true,
+            TASK_FOLDER_KEY: [folder.to_string_lossy()],
+        },
         "statusLine": {"type": "command", "command": format!("{exe} statusline"), "refreshInterval": STATUS_EVERY},
         "hooks": {
             "PreToolUse": [
@@ -466,10 +517,9 @@ pub fn settings_json(exe: &str, checker: &str) -> String {
     .to_string()
 }
 
-/// The arguments `claude` gets for a task's session. `--add-dir` comes first, so it can't take the first message for
-/// a folder.
+/// The arguments `claude` gets for a task's session.
 pub fn task_args(l: &TaskLaunch) -> Vec<String> {
-    let mut a: Vec<String> = vec!["--add-dir".into(), l.task_dir.to_string_lossy().into_owned()];
+    let mut a: Vec<String> = Vec::new();
     if l.resume {
         a.extend(["--resume".into(), l.session.clone()]);
     } else {
@@ -481,7 +531,7 @@ pub fn task_args(l: &TaskLaunch) -> Vec<String> {
         "--permission-mode".into(),
         if l.plan { "plan" } else { "acceptEdits" }.into(),
         "--settings".into(),
-        settings_json(&l.exe, &l.checker),
+        settings_json(&l.exe, &l.checker, &l.task_dir),
         "--append-system-prompt-file".into(),
         l.task_dir.join(crate::taskrun::SQUAD_FILE).to_string_lossy().into_owned(),
     ]);
@@ -665,13 +715,20 @@ fn says_large_window(model: &str) -> bool {
     m.ends_with("[1m]") || m.contains("context-1m")
 }
 
-/// Does Claude Code give this model the 1M-token window without `[1m]` in its id: Opus 4.7 and newer, Sonnet and
-/// Haiku 5.5 and newer, every Fable and Mythos? Ids as any provider writes them: `claude-opus-5-5`,
-/// `us.anthropic.claude-opus-4-7-v1:0`, `claude-opus-4-7@20260416`.
-fn large_by_default(model: &str) -> bool {
+/// The window Claude Code gives a model it recognizes, without `[1m]` in its id: true for 1M, false for 200k; None for
+/// a model it doesn't recognize. As Claude Code 2.1.330's own model catalog has them: 1M for Opus 4.7, 4.8, 5 and 5.5,
+/// Sonnet 5 and 5.5, Haiku 5.5, every Fable and Mythos (and `claude-mythos-preview`); 200k for Opus 4, 4.1, 4.5 and
+/// 4.6, Sonnet 4, 4.5 and 4.6, Haiku 4.5 and the Claude 3 models (`claude-3-5-sonnet-...`, `claude-3-opus`, ...). Ids
+/// as any provider writes them: `claude-opus-5-5`, `us.anthropic.claude-opus-4-7-v1:0`, `claude-opus-4-7@20260416`,
+/// `claude-opus-4-20250514`. A Fable or Mythos is 1M whatever its version (one Claude Code doesn't know yet gets 1M
+/// too, below).
+fn known_window(model: &str) -> Option<bool> {
     let m = model.to_ascii_lowercase();
-    let Some((_, rest)) = m.split_once("claude-") else { return false };
+    let (_, rest) = m.split_once("claude-")?;
     let rest = rest.split(['@', '[', ':']).next().unwrap_or_default();
+    if rest == "mythos-preview" {
+        return Some(true);
+    }
     let mut family = None;
     let mut version = Vec::new();
     for t in rest.split('-') {
@@ -681,20 +738,24 @@ fn large_by_default(model: &str) -> bool {
             family = Some(t);
         }
     }
-    let v = (version.first().copied().unwrap_or(0), version.get(1).copied().unwrap_or(0));
-    match family {
-        Some("fable" | "mythos") => true,
-        Some("opus") => v >= (4, 7),
-        Some("sonnet" | "haiku") => v >= (5, 5),
-        _ => false,
+    let v = (version.first().copied()?, version.get(1).copied().unwrap_or(0));
+    match (family?, v) {
+        ("fable" | "mythos", _) => Some(true),
+        ("opus", (4, 7) | (4, 8) | (5, 0) | (5, 5)) | ("sonnet", (5, 0) | (5, 5)) | ("haiku", (5, 5)) => Some(true),
+        ("opus", (4, 0) | (4, 1) | (4, 5) | (4, 6)) | ("sonnet", (4, 0) | (4, 5) | (4, 6)) | ("haiku", (4, 5)) => Some(false),
+        // Claude 3 ids put the version first: `claude-3-5-sonnet-20241022`, `claude-3-opus`.
+        ("sonnet", (3, 5) | (3, 7)) | ("haiku", (3, 5)) | ("opus" | "sonnet" | "haiku", (3, 0)) => Some(false),
+        _ => None,
     }
 }
 
-/// The transcript doesn't record the model's window size, so infer it: 1M when Claude Code gives the model 1M
-/// (`large_by_default`, unless `large_off`: `large_window_off`), when the model id names the 1M window, or once the
-/// session is seen past 200k tokens (for good: compaction shrinks usage but not the window); else 200k.
+/// The transcript doesn't record the model's window size, so infer it as Claude Code does: 1M when the model id names
+/// the 1M window, or once the session is seen past 200k tokens (for good: compaction shrinks usage but not the window);
+/// else, unless `large_off` (`large_window_off`), 1M when Claude Code gives the model 1M (`known_window`) and, since
+/// Claude Code 2.1.323, for a model it doesn't recognize; else 200k (no model read yet included).
 pub fn window_size(t: &Transcript, large_off: bool) -> u64 {
-    let large = t.large_window || t.context_tokens > DEFAULT_WINDOW || !large_off && t.model.as_deref().is_some_and(large_by_default);
+    let by_model = t.model.as_deref().filter(|m| *m != "<synthetic>").is_some_and(|m| known_window(m).unwrap_or(true));
+    let large = t.large_window || t.context_tokens > DEFAULT_WINDOW || !large_off && by_model;
     if large { LARGE_WINDOW } else { DEFAULT_WINDOW }
 }
 
@@ -953,7 +1014,12 @@ pub struct ToTicketsTail {
 /// for that block's id (`"is_error": true` when the user said no); a typed skill as a user entry of tags (see
 /// `skill_typed`); the Skill tool as a `tool_use` named `Skill` with `{"skill": "hand-to-squad"}` (or an old name,
 /// `"to-tasks"` or `"to-tickets"`, in conversations from before the rename or where setup hasn't run since).
-/// Subagents' entries don't count. A line is parsed only when a substring test says it may matter. An entry without a
+/// In Code Mode (Claude Code 2.1.323 and later, opt-in) Claude may call the Skill tool from a script it writes instead:
+/// read from 2.1.330's own code, the transcript then holds a `tool_use` named `REPL` whose `input.code` is the script
+/// (`tools.Skill({skill: "hand-to-squad"})`), and sometimes a `progress` entry `{"data": {"type": "repl_tool_call",
+/// "toolName": "Skill", "toolInput": {...}}}` (one in a row of them is kept, so not every call has one): either counts
+/// (`script_runs_skill`). A plan approved from a script is not recorded at all (the script gets the answer), so that
+/// one goes unseen. Subagents' entries don't count. A line is parsed only when a substring test says it may matter. An entry without a
 /// time takes the file's. Anything unreadable: nothing found.
 pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
     // The skill's names, without the slash: today's and its old ones (`skill::OLD_COMMANDS`).
@@ -998,8 +1064,20 @@ pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
                         Some("Skill") if b["input"]["skill"].as_str().is_some_and(|s| names.contains(&s.trim())) => {
                             out.to_tickets_used = Some(at);
                         }
+                        Some("REPL" | "Eval") if b["input"]["code"].as_str().is_some_and(|c| script_runs_skill(c, &names)) => {
+                            out.to_tickets_used = Some(at);
+                        }
                         _ => {}
                     }
+                }
+            }
+            Some("progress") => {
+                let d = &v["data"];
+                if d["type"].as_str() == Some("repl_tool_call")
+                    && d["toolName"].as_str() == Some("Skill")
+                    && d["toolInput"]["skill"].as_str().is_some_and(|s| names.contains(&s.trim()))
+                {
+                    out.to_tickets_used = Some(at);
                 }
             }
             Some("user") => {
@@ -1021,6 +1099,12 @@ pub fn to_tickets_tail(path: &Path) -> ToTicketsTail {
         }
     }
     out
+}
+
+/// Does a Code Mode script call the Skill tool with one of the skill's `names`: `Skill` in it, and a name as a quoted
+/// string (`tools.Skill({skill: "hand-to-squad"})`, single quotes or backticks too)?
+fn script_runs_skill(code: &str, names: &[&str]) -> bool {
+    code.contains("Skill") && names.iter().any(|n| ['"', '\'', '`'].iter().any(|q| code.contains(&format!("{q}{n}{q}"))))
 }
 
 fn sum(u: &Usages) -> Spent {
@@ -1325,6 +1409,32 @@ mod tests {
     }
 
     #[test]
+    fn the_exit_hint_names_platoon_only_when_a_shell_would_run_this_platoon_by_its_name() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-hint-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        for sub in ["bin", "other", "link", "empty", "odd"] {
+            fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        let exe = d.join("bin/platoon");
+        fs::write(&exe, "").unwrap();
+        fs::write(d.join("other/platoon"), "").unwrap();
+        std::os::unix::fs::symlink(&exe, d.join("link/platoon")).unwrap();
+        let path = |dirs: &[&str]| std::env::join_paths(dirs.iter().map(|x| d.join(x))).unwrap();
+        let hint = |exe: &Path, dirs: &[&str]| resume_hint(exe, Some(&path(dirs)));
+        assert_eq!(hint(&exe, &["bin"]).as_deref(), Some("platoon"));
+        assert_eq!(hint(&exe, &["empty", "link"]).as_deref(), Some("platoon"), "a link to it, as Homebrew and cargo make");
+        assert_eq!(hint(&exe, &["other", "bin"]), None, "a shell would run another platoon");
+        assert_eq!(hint(&exe, &["empty"]), None, "not on the PATH: run from target/, say");
+        assert_eq!(resume_hint(&exe, None), None);
+        // Claude Code takes one plain word only.
+        let odd = d.join("odd/platoon tui");
+        fs::write(&odd, "").unwrap();
+        assert_eq!(hint(&odd, &["odd"]), None);
+        assert_eq!(resume_hint(&d.join("bin/gone"), Some(&path(&["bin"]))), None);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn the_calling_sessions_markers_are_dropped_and_what_configures_claude_is_kept() {
         // Everything a Claude Code 2.1.283 session gave its shell, plus the user's own settings.
         let seen = [
@@ -1498,7 +1608,8 @@ mod tests {
                 planning: true,
                 last_message: Some("Red or blue?".into()),
                 subagents_working: true,
-                background_tool: false
+                background_tool: false,
+                scheduled: false,
             })
         );
         // Claude Code 2.1.322's `background_tasks` entries: a tool call an MCP server runs as a task, in flight.
@@ -1518,8 +1629,29 @@ mod tests {
         let plain = read(HookKind::Stop, json!({"session_id": "s1", "background_tasks": []})).unwrap();
         assert_eq!(
             plain.event,
-            HookEvent::Stop(TurnEnd { planning: false, last_message: None, subagents_working: false, background_tool: false })
+            HookEvent::Stop(TurnEnd {
+                planning: false,
+                last_message: None,
+                subagents_working: false,
+                background_tool: false,
+                scheduled: false
+            })
         );
+        // Claude Code 2.1.330's `session_crons`: a `/loop` or a scheduled task that wakes the session later.
+        let cron = json!({"id": "c1", "schedule": "*/10 * * * *", "recurring": true, "prompt": "/check-the-deploy"});
+        let scheduled = |crons: Value| match read(HookKind::Stop, json!({"session_id": "s1", "session_crons": crons})).unwrap().event {
+            HookEvent::Stop(end) => end.scheduled,
+            other => panic!("{other:?}"),
+        };
+        assert!(scheduled(json!([cron])));
+        assert!(scheduled(json!([{"id": "w1", "schedule": "30 14 22 11 *", "recurring": false, "prompt": "go on"}])), "a one-off wake-up");
+        assert!(!scheduled(json!([])), "none scheduled");
+        assert!(!scheduled(json!({"c1": cron})), "not the shape Claude Code sends");
+        assert!(!scheduled(Value::Null));
+        match read(HookKind::Stop, json!({"session_id": "s1"})).unwrap().event {
+            HookEvent::Stop(end) => assert!(!end.scheduled, "older Claude Code: no session_crons"),
+            other => panic!("{other:?}"),
+        }
         for bad in ["", "{", "[]", "null", r#"{"cwd":"/x"}"#, r#"{"session_id":5}"#] {
             assert_eq!(hook_input(HookKind::Prompt, bad), None, "{bad}");
         }
@@ -1548,13 +1680,17 @@ mod tests {
 
     #[test]
     fn a_claude_tasks_settings_keep_what_they_had_and_add_platoons_status_line_the_step_command_and_the_checks_words() {
-        let mut now: Value = serde_json::from_str(&settings_json("/opt/platoon/bin/platoon", "Fable")).unwrap();
+        let mut now: Value =
+            serde_json::from_str(&settings_json("/opt/platoon/bin/platoon", "Fable", Path::new("/c/tasks/05-work"))).unwrap();
         // The task's status line: platoon's, run again every 2 seconds.
         assert_eq!(now["statusLine"], json!({"type": "command", "command": "/opt/platoon/bin/platoon statusline", "refreshInterval": 2}));
         // `task step` by platoon's path, as the rules write it, needs no permission prompt.
         assert_eq!(now["permissions"]["allow"], json!(["Bash(/opt/platoon/bin/platoon task step:*)"]));
         // Its file tools write only in its worktree and the task's folder, in every permission mode.
         assert_eq!(now["permissions"]["blockWritesOutsideWorkingDirectories"], json!(true));
+        // The task's folder is one of its working folders, by its settings (not `--add-dir`, which asks the trust
+        // question for a new folder since Claude Code 2.1.326).
+        assert_eq!(now["permissions"]["additionalDirectories"], json!(["/c/tasks/05-work"]));
         // While the stop's check runs, Claude Code says who checks.
         let stop = &now["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["statusMessage"], "Fable is checking the work against \"Done when\"…");
@@ -1565,13 +1701,14 @@ mod tests {
         if let Some(p) = now.get_mut("permissions").and_then(Value::as_object_mut) {
             p.remove("allow");
             p.remove("blockWritesOutsideWorkingDirectories");
+            p.remove("additionalDirectories");
         }
         if let Some(h) = now.pointer_mut("/hooks/Stop/0/hooks/0").and_then(Value::as_object_mut) {
             h.remove("statusMessage");
         }
         assert_eq!(now.to_string(), SETTINGS_BEFORE);
         // A path with a space: the rule is written as the command is, quoted.
-        let quoted: Value = serde_json::from_str(&settings_json("/opt/my tools/platoon", "GPT-6-Luna")).unwrap();
+        let quoted: Value = serde_json::from_str(&settings_json("/opt/my tools/platoon", "GPT-6-Luna", Path::new("/c"))).unwrap();
         assert_eq!(quoted["permissions"]["allow"], json!(["Bash('/opt/my tools/platoon' task step:*)"]));
         assert_eq!(quoted["statusLine"]["command"], "'/opt/my tools/platoon' statusline");
     }
@@ -1591,13 +1728,11 @@ mod tests {
             tag: "5:p1".into(),
             checker: "Fable".into(),
         };
-        let settings = settings_json("/opt/platoon/bin/platoon", "Fable");
+        let settings = settings_json("/opt/platoon/bin/platoon", "Fable", Path::new("/c/tasks/05-work"));
         let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert_eq!(
             task_args(&l),
             v(&[
-                "--add-dir",
-                "/c/tasks/05-work",
                 "--session-id",
                 "abc",
                 "-n",
@@ -1617,8 +1752,6 @@ mod tests {
         assert_eq!(
             task_args(&again),
             v(&[
-                "--add-dir",
-                "/c/tasks/05-work",
                 "--resume",
                 "abc",
                 "--model",
@@ -1632,6 +1765,7 @@ mod tests {
             ])
         );
         assert_eq!(session_of_args(&task_args(&again)).as_deref(), Some("abc"));
+        assert!(!task_args(&again).iter().any(|a| a == "--add-dir"), "no folder that asks the trust question");
     }
 
     #[test]
@@ -1749,36 +1883,57 @@ mod tests {
         for model in [
             "claude-opus-5-5",
             "claude-sonnet-5-5",
+            "claude-sonnet-5",
             "claude-haiku-5-5",
             "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
+            "claude-fable-5-2",
             "claude-fable-5-1",
             "claude-fable-5",
             "claude-mythos-5-1",
+            "claude-mythos-preview",
             "anthropic.claude-opus-5-5",
             "us.anthropic.claude-opus-4-7-v1:0",
             "claude-opus-4-7@20260416",
             "claude-haiku-5-5-20261001",
             "Claude-Sonnet-5-5",
         ] {
+            assert_eq!(known_window(model), Some(true), "{model}");
             assert_eq!(pct(model, false), 15, "{model}");
             assert_eq!(pct(model, true), 75, "{model}, with CLAUDE_CODE_DISABLE_1M_CONTEXT");
         }
+        // The models Claude Code knows with a 200k window stay at 200k.
         for model in [
             "claude-haiku-4-5",
             "claude-haiku-4-5-20251001",
-            "claude-sonnet-5",
             "claude-sonnet-4-6",
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-20250514",
             "claude-opus-4-6",
             "claude-opus-4-5-20251101",
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-20250514",
             "claude-3-5-sonnet-20241022",
+            "claude-3-7-sonnet-20250219",
+            "claude-3-opus-20240229",
             "anthropic.claude-sonnet-4-6",
-            "some-other-model",
-            "<synthetic>",
+            "us.anthropic.claude-opus-4-6-v1",
         ] {
+            assert_eq!(known_window(model), Some(false), "{model}");
             assert_eq!(pct(model, false), 75, "{model}");
+            assert_eq!(pct(model, true), 75, "{model}");
         }
+        // A model Claude Code doesn't recognize is given 1M since 2.1.323 (200k with 1M switched off).
+        for model in ["claude-opus-6", "claude-sonnet-4-9", "some-other-model", "glm-4.6"] {
+            assert_eq!(known_window(model), None, "{model}");
+            assert_eq!(pct(model, false), 15, "{model}");
+            assert_eq!(pct(model, true), 75, "{model}");
+        }
+        // No model read yet, or only Claude Code's own synthetic entries: 200k.
+        assert_eq!(pct("<synthetic>", false), 75);
+        let none = Transcript { context_tokens: 150_000, ..Transcript::default() };
+        assert_eq!(window_size(&none, false), 200_000);
     }
 
     #[test]
@@ -2266,6 +2421,31 @@ mod hidden_tests {
             assert_eq!(read(&[typed(&format!("Should I run /{name} for this?"), 300)]).to_tickets_used, None, "{name}");
             let meta = json!({"type":"user","isMeta":true,"timestamp":at(300),"message":{"role":"user","content":format!("Base directory for this skill: /x/{name}")}}).to_string();
             assert_eq!(read(&[meta]).to_tickets_used, None, "the skill's own text that follows a typed one");
+            // Code Mode: the Skill tool called from a script Claude wrote (the REPL tool's code), with any quotes, and
+            // the progress entry of a script's call when there is one.
+            let script = |code: &str, side: bool| {
+                json!({"type":"assistant","isSidechain":side,"timestamp":at(450),"message":{"role":"assistant","content":[
+                    {"type":"tool_use","id":"t10","name":"REPL","input":{"code":code}}]}})
+                .to_string()
+            };
+            for code in [
+                format!("const r = await tools.Skill({{skill: \"{name}\"}});\nr"),
+                format!("await tools.Skill({{ skill: '{name}', args: 'just the mails' }})"),
+                format!("await tools.Skill({{skill: `{name}`}})"),
+            ] {
+                assert_eq!(read(&[script(&code, false)]).to_tickets_used, Some(450), "{code}");
+                assert_eq!(read(&[script(&code, true)]).to_tickets_used, None, "a subagent's: {code}");
+            }
+            for code in [format!("// run /{name} later?\n1"), format!("await tools.Skill({{skill: \"{name}-later\"}})")] {
+                assert_eq!(read(&[script(&code, false)]).to_tickets_used, None, "{code}");
+            }
+            let progress = |tool: &str, skill: &str| {
+                json!({"type":"progress","timestamp":at(460),"parentToolUseID":"t10","toolUseID":"t11","data":{
+                    "type":"repl_tool_call","toolName":tool,"toolInput":{"skill":skill},"toolUseId":"t11","phase":"start"}})
+                .to_string()
+            };
+            assert_eq!(read(&[progress("Skill", name)]).to_tickets_used, Some(460), "{name}");
+            assert_eq!(read(&[progress("Read", name)]).to_tickets_used, None, "{name}");
         }
         for other in ["hand-to-squad-later", "to-tasks-later"] {
             let other = format!("<command-message>{other}</command-message>\n<command-name>/{other}</command-name>");

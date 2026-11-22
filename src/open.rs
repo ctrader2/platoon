@@ -222,6 +222,8 @@ fn parse_args(args: &[String]) -> Result<(Option<&str>, Option<&str>), String> {
         match a.as_str() {
             "--project" | "-p" => project = Some(it.next().map(String::as_str).ok_or("--project needs a project's name")?),
             other if other.starts_with("--project=") => project = Some(&other["--project=".len()..]),
+            // As Claude Code's exit hint has it (`platoon --resume <id>`).
+            "--resume" if id.is_none() => id = Some(it.next().map(String::as_str).ok_or("--resume needs a session id")?),
             other if id.is_none() && !other.starts_with('-') => id = Some(other),
             other => return Err(format!("don't know what \"{other}\" means here")),
         }
@@ -423,6 +425,11 @@ mod tests {
         assert!(a(&["--project"]).is_err());
         assert!(a(&["abcd", "--project", "x"]).is_err());
         assert!(a(&["--nope"]).is_err());
+        // Claude Code's exit hint, `platoon --resume <id>`, opens the same as `platoon open <id>`.
+        assert_eq!(a(&["--resume", "abcd"]).unwrap(), (Some("abcd".into()), None));
+        assert!(a(&["--resume"]).is_err());
+        assert!(a(&["abcd", "--resume", "efgh"]).is_err(), "one id");
+        assert!(a(&["--resume", "abcd", "--project", "x"]).is_err());
     }
 
     #[test]

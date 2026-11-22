@@ -885,7 +885,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             checker: "Fable".into(),
         };
         let a = Agent::Claude.task_args(&l);
-        assert_eq!(&a[..2], ["--add-dir", "/c/tasks/05-work"], "first, so it can't take the message");
+        assert!(!a.iter().any(|x| x == "--add-dir"), "the task's folder is in its settings: --add-dir asks the trust question");
         let at = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].clone());
         assert_eq!(at("--session-id").as_deref(), Some("abc"));
         assert_eq!(at("-n").as_deref(), Some("#5 Login"));
@@ -895,6 +895,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         assert_eq!(a.last().map(String::as_str), Some("Task #5: Login\n\nDo it."));
         assert!(!a.iter().any(|x| x == "--agents" || x == "--agent"), "no agents of platoon's");
         let s: Value = serde_json::from_str(&at("--settings").unwrap()).unwrap();
+        assert_eq!(s["permissions"]["additionalDirectories"], json!(["/c/tasks/05-work"]), "so it can read squad.md and write there");
         let hooks = &s["hooks"];
         assert_eq!(hooks["PreToolUse"][0]["matcher"], "ExitPlanMode");
         assert_eq!(hooks["PreToolUse"][0]["hooks"][0]["command"], "/opt/platoon/bin/platoon hook task-plan");

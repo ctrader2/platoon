@@ -171,6 +171,13 @@ fn main() -> io::Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(open::run(&args));
         }
+        // `platoon --resume <id>`: what Claude Code's exit hint names when platoon started the session
+        // (`claude::resume_hint`), the same as `platoon open <id>`.
+        Some("--resume") => {
+            require_setup();
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            std::process::exit(open::run(&args));
+        }
         // Claude Code's hooks name no agent; Codex's say `--agent codex`.
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => timed_hook("guard", guard::run_guard),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => timed_hook("session-start", sessionhook::run),
@@ -273,7 +280,7 @@ fn start_log(command: Option<&str>) {
         Some("statusline") => "statusline",
         Some("notes-update") => "notes",
         Some("setup") => "setup",
-        Some("open") => "open",
+        Some("open" | "--resume") => "open",
         Some("task") => "task",
         Some("tokens") => "tokens",
         // Not `report`, which only reads, and `uninstall`, which deletes the cache the log is in.
@@ -858,7 +865,7 @@ mod tests {
         assert!(old.procs.is_empty() && old.status == Status::Idle && !old.unread);
         assert_eq!(
             (old.branch.as_deref(), old.model.as_deref(), old.context_pct, old.context_exact),
-            (Some("main"), Some("Sonnet 5"), 25, false)
+            (Some("main"), Some("Sonnet 5"), 5, false)
         );
         // Running conversations carry their process.
         assert_eq!(by("mid-2").procs.iter().map(|p| p.pid).collect::<Vec<_>>(), [pid]);
@@ -918,7 +925,7 @@ mod tests {
             "write the docs",
             "Sonnet 5",
             "main",
-            "25%",
+            " 5%",
         ] {
             assert!(flat(&text).contains(want), "missing {want:?}:\n{text}");
         }
@@ -947,7 +954,7 @@ mod tests {
         assert_eq!((s.context_pct, s.context_exact), (61, true));
         let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
         let text = draw(&mut term, &app);
-        assert!(text.contains(" 61%") && !text.contains("25%") && !text.contains("~"), "{text}");
+        assert!(text.contains(" 61%") && !text.contains(" 5%") && !text.contains("~"), "{text}");
     }
 
     /// A conversation at 150,000 tokens, on `model`, as Claude Code saves it.
@@ -974,7 +981,8 @@ mod tests {
             ("bbb", "claude-sonnet-5-5", 15),
             ("ccc", "claude-haiku-5-5", 15),
             ("ddd", "claude-haiku-4-5", 75),
-            ("eee", "claude-sonnet-5", 75),
+            ("eee", "claude-sonnet-5", 15),
+            ("fff", "claude-sonnet-4-6", 75),
         ];
         for (i, (id, model, _)) in rows.iter().enumerate() {
             at_150k(&w, id, model, i as u64 + 1);
@@ -986,7 +994,7 @@ mod tests {
         }
         let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
         let text = draw(&mut term, &app);
-        assert_eq!((text.matches(" 15%").count(), text.matches(" 75%").count()), (3, 2), "{text}");
+        assert_eq!((text.matches(" 15%").count(), text.matches(" 75%").count()), (4, 2), "{text}");
     }
 
     #[test]

@@ -64,7 +64,11 @@ fn codex_conversations_are_rows_beside_claudes_in_the_order_of_their_last_activi
     assert_eq!(s.context_pct, 5, "14,144 of the 258,400 tokens the rollout says the window has");
     assert_eq!((s.status, s.procs.len(), s.branch.as_deref()), (Status::Idle, 0, Some("master")));
     let c = app.sessions.iter().find(|s| s.id == CLAUDE).unwrap();
-    assert_eq!((c.agent, c.model.as_deref(), c.context_pct), (Agent::Claude, Some("Sonnet 5"), 10), "Claude Code's row as ever");
+    assert_eq!(
+        (c.agent, c.model.as_deref(), c.context_pct),
+        (Agent::Claude, Some("Sonnet 5"), 2),
+        "Claude Code's row as ever: 20,000 of Sonnet 5's 1M"
+    );
 
     let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
     let shown = screen(&mut term, &app);

@@ -140,6 +140,11 @@ impl Rig {
     /// Run `platoon hook stop` as Claude Code does at the end of a turn of the session `pid` runs (its registry's
     /// `sessionId`, see `register`), with what it says is still at work in the background.
     fn stop_hook(&self, pid: u32, background_tasks: serde_json::Value) {
+        self.stop_hook_says(pid, serde_json::json!({"background_tasks": background_tasks}));
+    }
+
+    /// The same, with the Stop input's other fields as `fields` says (`session_crons`, ...).
+    fn stop_hook_says(&self, pid: u32, fields: serde_json::Value) {
         use std::io::Write;
         let mut cmd = Command::new(BIN);
         cmd.env("PLATOON_NO_UPDATE_CHECK", "1").env("PLATOON_NOTES_HELPER", "off");
@@ -148,8 +153,11 @@ impl Rig {
         }
         cmd.args(["hook", "stop"]).envs(self.env()).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
         let mut child = cmd.spawn().unwrap();
-        let input = serde_json::json!({"session_id": format!("s-{pid}"), "cwd": self.work, "hook_event_name": "Stop",
-            "stop_hook_active": false, "background_tasks": background_tasks});
+        let mut input = serde_json::json!({"session_id": format!("s-{pid}"), "cwd": self.work, "hook_event_name": "Stop",
+            "stop_hook_active": false});
+        if let (Some(o), Some(more)) = (input.as_object_mut(), fields.as_object()) {
+            o.extend(more.clone());
+        }
         child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
         assert!(child.wait().unwrap().success());
     }
@@ -294,6 +302,22 @@ fn a_tool_claude_runs_in_the_background_keeps_the_session_until_a_turn_ends_with
     // The task finished: Claude Code told Claude, whose turn about it ended with no such tool left in the background
     // (a memory save or a dream is Claude Code's own and ends by itself).
     r.stop_hook(pid, serde_json::json!([{"id": "d1", "type": "dream", "status": "running", "description": "x"}]));
+    r.wait_stopped(pid);
+}
+
+#[test]
+fn a_loop_or_a_scheduled_task_keeps_the_session_until_a_turn_ends_without_one() {
+    let mut r = Rig::new("idle-loop", 1);
+    let pid = r.start("sleep", &["600"]);
+    r.register(pid, "idle");
+    // `/loop 10m /check-the-deploy`: Claude Code keeps the job in the session's process (up to 30 days since 2.1.330)
+    // and the registry says idle between its runs; the Stop hook's `session_crons` names it.
+    let loop_job = serde_json::json!([{"id": "c1", "schedule": "*/10 * * * *", "recurring": true, "prompt": "/check-the-deploy"}]);
+    r.stop_hook_says(pid, serde_json::json!({"background_tasks": [], "session_crons": loop_job}));
+    r.stays_up(pid, STAY);
+    assert_eq!(r.host_file(pid)["kept"], serde_json::json!({"why": "scheduled"}), "why it is kept, for the session's row");
+    // The job was deleted (or had its last run): the turn's end names none.
+    r.stop_hook_says(pid, serde_json::json!({"background_tasks": [], "session_crons": []}));
     r.wait_stopped(pid);
 }
 

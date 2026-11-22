@@ -39,10 +39,12 @@ says `/land the parser fix` on its prompt line. Conversations that only ever hel
 **CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning color
 above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has
 reported one, else platoon's: the last reply's input (what it read from the cache, what it wrote to it, and the rest)
-over the window. The window is 1,000,000 tokens for the models Claude Code gives 1M (Opus 4.7 and newer, Sonnet 5.5,
-Haiku 5.5, Fable), when the model's name says so (`[1m]`) or when the conversation has already gone past 200,000; else
-it is 200,000, as it is for every model when `CLAUDE_CODE_DISABLE_1M_CONTEXT` is set (in platoon's environment or in
-the `env` of Claude Code's `settings.json`). It is left blank for a conversation with no reply yet. A project's screen shows it too. A Codex conversation's window
+over the window. The window is 1,000,000 tokens for the models Claude Code gives 1M (Opus 4.7 and newer, Sonnet 5 and
+5.5, Haiku 5.5, Fable, Mythos), for a model Claude Code doesn't know (as Claude Code itself assumes since 2.1.323), when
+the model's name says so (`[1m]`) or when the conversation has already gone past 200,000. It is 200,000 for the older
+models Claude Code knows with that window (Opus 4.6 and older, Sonnet 4.6 and older, Haiku 4.5, Claude 3), and for
+every model when `CLAUDE_CODE_DISABLE_1M_CONTEXT` is set (in platoon's environment or in the `env` of Claude Code's
+`settings.json`). It is left blank for a conversation with no reply yet. A project's screen shows it too. A Codex conversation's window
 is the one Codex itself wrote down for it, so its figure is never a guess about the window.
 
 Status is `working`, `done` (the session finished and you haven't looked yet), `idle` (running, waiting for you: `●`),
@@ -241,7 +243,7 @@ itself does delete old conversations: see [below](#claude-code-deletes-old-conve
 
 | What | When | What you see |
 | --- | --- | --- |
-| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours, and no command or background tool it started is still going | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
+| A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours, and no command or background tool it started is still going, nor a `/loop` or scheduled task it has to run | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
 | A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 sessions idle for 2+ days. Find them in Archived.`) that stays until you press a key; the first time you run platoon, many old conversations can be archived at once |
 
 Details worth knowing:
@@ -259,12 +261,18 @@ Details worth knowing:
   tool call as a task: Claude Code moves it to the background and tells Claude when it is done, and meanwhile says the
   session is idle. platoon keeps the session until a turn of Claude's ends without such a tool still at work (after a
   day it no longer counts).
+- So does work scheduled for later: a `/loop`, or a task Claude scheduled to run again (Claude Code's scheduled tasks
+  and wake-ups). Claude Code keeps such work in the running session only (since 2.1.330 a recurring one runs for up to
+  30 days), and stopping the session would end it. platoon keeps the session until a turn of Claude's ends with nothing
+  scheduled (a deleted job, or one that had its last run), and for a month at most after the last turn. A scheduled task
+  you saved to run in later sessions too (in `.claude/scheduled_tasks.json`) runs again when you open the session.
 - For a Codex session, idle is what Codex's saved session says (its last reply has finished), and a command Codex started
   (it runs each one in a shell of its own too) keeps it running, as for Claude. One Codex window can have several chats
   open (Codex's command center): the session is stopped only once every one of them has finished its reply.
 - The row of a running session that has been quiet that long but is still running says why when you pick it: `Kept
   running: a command Claude started is still going (npm run dev)`, `a window is open on it`, `Claude Code doesn't say it's
-  idle`, `a tool Claude started is still working in the background`. Only the command's name and its first word or two
+  idle`, `a tool Claude started is still working in the background`, `it has a scheduled task or /loop that runs later`.
+  Only the command's name and its first word or two
   are shown, never all of it.
 - A session that an older platoon started (it keeps running after you update platoon) still follows the older rules on its
   own. platoon checks such sessions itself once a minute, by these rules, and stops the ones that have been idle for the
@@ -384,6 +392,11 @@ smallest window attached. The [back key](settings-and-keys.md#keys-back-and-quit
 keeps running. A session running in a plain `claude` platoon doesn't own can't be shared, so opening it asks before ending
 it and reopening the same conversation from its saved history. A Codex conversation open in another Codex window is never
 ended: `platoon open` says where it is and stops.
+
+When you quit Claude Code in a session platoon started, Claude Code (2.1.323 and later) prints how to get back to it as
+`platoon --resume <id>`, which does the same as `platoon open <id>`. It names platoon only when typing `platoon` in a
+shell runs this same platoon (it is on your `PATH`); otherwise the hint stays Claude Code's own `claude --resume <id>`,
+which resumes the conversation outside platoon. A task's session keeps Claude Code's own hint: open it from its task.
 
 ## Opening the editor (`v`)
 

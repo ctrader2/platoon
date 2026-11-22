@@ -17,7 +17,7 @@
 //! been quiet. A shell younger than `settle` (half a minute) is therefore not counted yet. Where a process's age can't
 //! be read it counts.
 
-use crate::agents::Agent;
+use crate::agents::{Agent, TurnEnd};
 use crate::host::HostInfo;
 use crate::mcp::Tracked;
 use crate::procs::{self, Row};
@@ -260,8 +260,10 @@ pub enum Kept {
     NotIdle,
     /// A task's session whose task is being worked on.
     TaskAtWork,
-    /// A tool call the agent made goes on in the background (`background_tool`).
+    /// A tool call the agent made goes on in the background (`Waits::BackgroundTool`).
     BackgroundTool,
+    /// It has work scheduled for later: a scheduled task or a `/loop` (`Waits::Scheduled`).
+    Scheduled,
     /// What runs under it couldn't be seen.
     Unknown,
 }
@@ -280,6 +282,7 @@ impl Kept {
             Kept::NotIdle => format!("{program} doesn't say it's idle"),
             Kept::TaskAtWork => "its task is still being worked on".into(),
             Kept::BackgroundTool => format!("a tool {who} started is still working in the background"),
+            Kept::Scheduled => "it has a scheduled task or /loop that runs later".into(),
             Kept::Unknown => "platoon couldn't see what it is running".into(),
         };
         format!("Kept running: {why}")
@@ -293,6 +296,7 @@ impl Kept {
             Kept::NotIdle => "not-idle",
             Kept::TaskAtWork => "task-at-work",
             Kept::BackgroundTool => "background-tool",
+            Kept::Scheduled => "scheduled",
             Kept::Unknown => "unknown",
         }
     }
@@ -305,6 +309,7 @@ impl Kept {
             Kept::NotIdle => json!({"why": "not-idle"}),
             Kept::TaskAtWork => json!({"why": "task"}),
             Kept::BackgroundTool => json!({"why": "background-tool"}),
+            Kept::Scheduled => json!({"why": "scheduled"}),
             Kept::Unknown => json!({"why": "unknown"}),
         }
     }
@@ -317,31 +322,84 @@ impl Kept {
             "not-idle" => Kept::NotIdle,
             "task" => Kept::TaskAtWork,
             "background-tool" => Kept::BackgroundTool,
+            "scheduled" => Kept::Scheduled,
             "unknown" => Kept::Unknown,
             _ => return None,
         })
     }
 }
 
-// ---- a tool at work in the background -----------------------------------------------------------------------------
+// ---- work a session waits on after its turn -------------------------------------------------------------------------
 
-/// The marks that a session's last turn ended with a tool call still at work in the background (see
-/// `agents::TurnEnd::background_tool`): `<cache>/background-tool/<session id>`, holding when (ms since the epoch).
-const BACKGROUND_DIR: &str = "background-tool";
-/// The longest a mark keeps a session: the turn that would put it away may never come (the agent ended in between, or
-/// its turn failed), and a session must not be kept for ever on that account.
+/// What the end of a session's last turn left it waiting on, which stopping the agent would end (see
+/// `agents::TurnEnd`). Each is a mark, `<cache>/<dir>/<session id>`, holding when it was made (ms since the epoch),
+/// made and taken away by the `Stop` hook at every turn's end (`note_turn_end`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Waits {
+    /// A tool call goes on in the background (`TurnEnd::background_tool`).
+    BackgroundTool,
+    /// Work scheduled for later runs in the session (`TurnEnd::scheduled`).
+    Scheduled,
+}
+
+impl Waits {
+    pub const ALL: [Waits; 2] = [Waits::BackgroundTool, Waits::Scheduled];
+
+    fn dir(self) -> &'static str {
+        match self {
+            Waits::BackgroundTool => "background-tool",
+            Waits::Scheduled => "scheduled",
+        }
+    }
+
+    /// The longest a mark keeps a session: the turn that would put it away may never come (the agent ended in between,
+    /// or its turn failed), and a session must not be kept for ever on that account. A tool in the background has a
+    /// day. Scheduled work makes a turn each time it runs, and each turn's end makes the mark again: since Claude Code
+    /// 2.1.330 a recurring job ends after 30 days (with a last turn, which takes the mark away), and a job that runs
+    /// once a month still comes round within `SCHEDULED_MAX`.
+    pub fn max(self) -> Duration {
+        match self {
+            Waits::BackgroundTool => BACKGROUND_TOOL_MAX,
+            Waits::Scheduled => SCHEDULED_MAX,
+        }
+    }
+
+    fn of(self, end: &TurnEnd) -> bool {
+        match self {
+            Waits::BackgroundTool => end.background_tool,
+            Waits::Scheduled => end.scheduled,
+        }
+    }
+
+    pub fn kept(self) -> Kept {
+        match self {
+            Waits::BackgroundTool => Kept::BackgroundTool,
+            Waits::Scheduled => Kept::Scheduled,
+        }
+    }
+}
+
+/// See `Waits::max`.
 pub const BACKGROUND_TOOL_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+/// See `Waits::max`.
+pub const SCHEDULED_MAX: Duration = Duration::from_secs(32 * 24 * 60 * 60);
 
-/// Keep what the end of a turn of `session` says, at `at` (the `Stop` hook): a tool still at work in the background
-/// leaves a mark (`still_at_work`), a turn without one takes it away. Marks left past `BACKGROUND_TOOL_MAX` are
-/// tidied away as a new one is made. Every failure is skipped: the worst is a session stopped as before.
-pub fn note_turn_end(cache: &Path, session: &str, still_at_work: bool, at: SystemTime) {
+/// Keep what the end of a turn of `session` says, at `at` (the `Stop` hook): each thing it is left waiting on leaves
+/// a mark, a turn without it takes the mark away. Marks left past their longest are tidied away as a new one is made.
+/// Every failure is skipped: the worst is a session stopped as before.
+pub fn note_turn_end(cache: &Path, session: &str, end: &TurnEnd, at: SystemTime) {
     if !crate::sessionhook::safe_name(session) {
         return;
     }
-    let dir = cache.join(BACKGROUND_DIR);
+    for what in Waits::ALL {
+        note(cache, session, what, what.of(end), at);
+    }
+}
+
+fn note(cache: &Path, session: &str, what: Waits, waits: bool, at: SystemTime) {
+    let dir = cache.join(what.dir());
     let mark = dir.join(session);
-    if !still_at_work {
+    if !waits {
         let _ = std::fs::remove_file(&mark);
         return;
     }
@@ -349,7 +407,7 @@ pub fn note_turn_end(cache: &Path, session: &str, still_at_work: bool, at: Syste
     let marks =
         std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| crate::sessionhook::safe_name(&e.file_name().to_string_lossy()));
     for old in marks {
-        if read_mark(&old.path()).is_none_or(|t| at.duration_since(t).is_ok_and(|d| d > BACKGROUND_TOOL_MAX)) {
+        if read_mark(&old.path()).is_none_or(|t| at.duration_since(t).is_ok_and(|d| d > what.max())) {
             let _ = std::fs::remove_file(old.path());
         }
     }
@@ -362,14 +420,15 @@ fn read_mark(path: &Path) -> Option<SystemTime> {
     Some(SystemTime::UNIX_EPOCH + Duration::from_millis(ms))
 }
 
-/// Did the last turn of `session` end with a tool still at work in the background, in the agent process started at
-/// `since` (a mark from before it is an earlier process's), less than `BACKGROUND_TOOL_MAX` before `now`?
-pub fn background_tool(cache: &Path, session: &str, since: SystemTime, now: SystemTime) -> bool {
+/// What the last turn of `session` left it waiting on, in the agent process started at `since` (a mark from before it
+/// is an earlier process's), marked less than its longest before `now`: the first of `Waits::ALL`, or None.
+pub fn waits_on(cache: &Path, session: &str, since: SystemTime, now: SystemTime) -> Option<Waits> {
     if !crate::sessionhook::safe_name(session) {
-        return false;
+        return None;
     }
-    read_mark(&cache.join(BACKGROUND_DIR).join(session))
-        .is_some_and(|t| t >= since && now.duration_since(t).map_or(true, |d| d < BACKGROUND_TOOL_MAX))
+    Waits::ALL.into_iter().find(|w| {
+        read_mark(&cache.join(w.dir()).join(session)).is_some_and(|t| t >= since && now.duration_since(t).map_or(true, |d| d < w.max()))
+    })
 }
 
 // ---- sessions whose host an older platoon started ----------------------------------------------------------------
@@ -719,6 +778,7 @@ mod tests {
             Kept::NotIdle,
             Kept::TaskAtWork,
             Kept::BackgroundTool,
+            Kept::Scheduled,
             Kept::Unknown,
         ];
         for k in &all {
@@ -735,8 +795,13 @@ mod tests {
         assert_eq!(all[0].words(Agent::Codex), "Kept running: a command Codex started is still going (npm run dev)");
         assert_eq!(Kept::NotIdle.words(Agent::Claude), "Kept running: Claude Code doesn't say it's idle");
         assert_eq!(Kept::BackgroundTool.words(Agent::Claude), "Kept running: a tool Claude started is still working in the background");
+        assert_eq!(Kept::Scheduled.words(Agent::Claude), "Kept running: it has a scheduled task or /loop that runs later");
         assert_eq!(Kept::from_json(&json!({"why": "something newer"})), None);
         assert_eq!(Kept::from_json(&json!(5)), None);
+    }
+
+    fn turn(background_tool: bool, scheduled: bool) -> TurnEnd {
+        TurnEnd { planning: false, last_message: None, subagents_working: false, background_tool, scheduled }
     }
 
     #[test]
@@ -744,21 +809,44 @@ mod tests {
         let cache = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-idle-bg-{}", std::process::id())));
         let t0 = SystemTime::now();
         let (started, later) = (t0 - Duration::from_secs(60), t0 + Duration::from_secs(600));
-        assert!(!background_tool(&cache, "s1", started, later), "no turn has said so");
-        note_turn_end(&cache, "s1", true, t0);
-        assert!(background_tool(&cache, "s1", started, later));
-        assert!(!background_tool(&cache, "s2", started, later), "another conversation's");
-        assert!(!background_tool(&cache, "s1", t0 + Duration::from_secs(1), later), "left by an earlier process: a resumed one");
-        assert!(!background_tool(&cache, "s1", started, t0 + BACKGROUND_TOOL_MAX), "the turn that would put it away never came");
-        note_turn_end(&cache, "s1", false, later);
-        assert!(!background_tool(&cache, "s1", started, later), "a turn ended without one");
+        let background_tool = |s: &str, since, now| waits_on(&cache, s, since, now) == Some(Waits::BackgroundTool);
+        assert!(!background_tool("s1", started, later), "no turn has said so");
+        note_turn_end(&cache, "s1", &turn(true, false), t0);
+        assert!(background_tool("s1", started, later));
+        assert!(!background_tool("s2", started, later), "another conversation's");
+        assert!(!background_tool("s1", t0 + Duration::from_secs(1), later), "left by an earlier process: a resumed one");
+        assert!(!background_tool("s1", started, t0 + BACKGROUND_TOOL_MAX), "the turn that would put it away never came");
+        note_turn_end(&cache, "s1", &turn(false, false), later);
+        assert!(!background_tool("s1", started, later), "a turn ended without one");
         // A new mark tidies away the ones left past the longest a mark counts.
-        note_turn_end(&cache, "s3", true, t0);
-        note_turn_end(&cache, "s4", true, t0 + BACKGROUND_TOOL_MAX + Duration::from_secs(1));
-        assert!(!cache.join(BACKGROUND_DIR).join("s3").exists());
+        note_turn_end(&cache, "s3", &turn(true, false), t0);
+        note_turn_end(&cache, "s4", &turn(true, false), t0 + BACKGROUND_TOOL_MAX + Duration::from_secs(1));
+        assert!(!cache.join("background-tool").join("s3").exists());
         // Never a path out of the folder.
-        note_turn_end(&cache, "../x", true, t0);
-        assert!(!cache.join("x").exists() && !background_tool(&cache, "../x", started, later));
+        note_turn_end(&cache, "../x", &turn(true, true), t0);
+        assert!(!cache.join("x").exists() && waits_on(&cache, "../x", started, later).is_none());
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn work_scheduled_for_later_keeps_its_session_until_a_turn_ends_without_it_and_for_a_month_at_most() {
+        let cache = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-idle-cron-{}", std::process::id())));
+        let t0 = SystemTime::now();
+        let day = Duration::from_secs(24 * 60 * 60);
+        let started = t0 - Duration::from_secs(60);
+        note_turn_end(&cache, "s1", &turn(false, true), t0);
+        assert_eq!(waits_on(&cache, "s1", started, t0 + 2 * day), Some(Waits::Scheduled), "longer than a tool's day");
+        assert_eq!(waits_on(&cache, "s1", started, t0 + 31 * day), Some(Waits::Scheduled), "a job that runs once a month");
+        assert_eq!(waits_on(&cache, "s1", started, t0 + SCHEDULED_MAX), None, "past the longest");
+        assert_eq!(waits_on(&cache, "s1", t0 + Duration::from_secs(1), t0 + day), None, "an earlier process's jobs ended with it");
+        assert_eq!(Waits::Scheduled.kept(), Kept::Scheduled);
+        // Both at once: each has its own mark; the tool's is said first.
+        note_turn_end(&cache, "s1", &turn(true, true), t0);
+        assert_eq!(waits_on(&cache, "s1", started, t0 + Duration::from_secs(5)), Some(Waits::BackgroundTool));
+        assert_eq!(waits_on(&cache, "s1", started, t0 + 2 * day), Some(Waits::Scheduled), "the tool's day is over");
+        // The job deleted (or its last run done): the next turn's end takes the mark away.
+        note_turn_end(&cache, "s1", &turn(false, false), t0 + day);
+        assert_eq!(waits_on(&cache, "s1", started, t0 + day), None);
         let _ = std::fs::remove_dir_all(&cache);
     }
 

@@ -14,6 +14,11 @@ use std::{
 };
 
 fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
+    start_host_with(cache, program, &[])
+}
+
+/// The same, with `env` added to the host's environment (which the program in it inherits).
+fn start_host_with(cache: &Path, program: &str, env: &[(&str, std::ffi::OsString)]) -> (u32, PathBuf) {
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
     for (k, v) in common::NO_REAL_CODEX {
@@ -24,6 +29,7 @@ fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
         // The host reads Claude's registry and platoon's settings: point them at nothing real.
         .env("CLAUDE_CONFIG_DIR", cache.join("claude"))
         .env("PLATOON_CONFIG_DIR", cache.join("config"))
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -495,6 +501,48 @@ fn platoon_open_asks_before_ending_a_copy_running_in_a_plain_terminal() {
     unsafe { libc::kill(plain_pid as i32, libc::SIGKILL) };
     let _ = reaper.join();
     thread::sleep(Duration::from_millis(100));
+}
+
+#[test]
+fn claude_codes_exit_hint_names_platoon_when_a_shell_runs_this_platoon_by_its_name_and_never_in_a_tasks_session() {
+    // A folder on the PATH where `platoon` is this platoon (as `~/.cargo/bin` or Homebrew's is after installing).
+    let base = tmp("resume-hint");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(BIN, bin.join("platoon")).unwrap();
+    let path = |first: Option<&Path>| {
+        std::env::join_paths(
+            first.into_iter().map(Path::to_path_buf).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+        )
+        .unwrap()
+    };
+    // What another program that started platoon left in its environment never reaches the session.
+    let inherited = ("CLAUDE_CODE_RESUME_HINT_COMMAND", "other-launcher".into());
+    let hint_in = |name: &str, env: &[(&str, std::ffi::OsString)]| {
+        let cache = base.join(name);
+        let (pid, sock) = start_host_with(&cache, "sh", env);
+        let mut v = Viewer::connect(&sock, 24, 80);
+        // `$((6*7))` makes the answer's line apart from the typed one.
+        v.type_line("echo \"hint:$((6*7)):[${CLAUDE_CODE_RESUME_HINT_COMMAND-unset}]\"");
+        v.wait_for("hint:42:[");
+        until("the whole line", || v.text().lines().any(|l| l.starts_with("hint:42:[") && l.trim_end().ends_with(']')));
+        let line = v.text().lines().find(|l| l.starts_with("hint:42:[")).unwrap_or_default().trim_end().replace("hint:42:", "hint:");
+        v.type_line("exit");
+        until("host to exit", || !alive(pid));
+        line
+    };
+    assert_eq!(hint_in("on-path", &[("PATH", path(Some(&bin))), inherited.clone()]), "hint:[platoon]");
+    assert_eq!(hint_in("not-on-path", &[("PATH", path(None)), inherited.clone()]), "hint:[unset]", "a shell would not run this platoon");
+    let task = ("PLATOON_TASK", "1:p1".into());
+    assert_eq!(hint_in("task", &[("PATH", path(Some(&bin))), inherited, task]), "hint:[unset]", "a task's session opens from its task");
+}
+
+#[test]
+fn platoon_resume_as_claude_codes_exit_hint_has_it_opens_like_platoon_open() {
+    let w = World::new("missing-resume");
+    let mut t = Term::spawn(&["--resume", "zzzz"], &w.env(&w.shell()), &w.work, 24, 80);
+    assert_eq!(t.wait_exit(), 1);
+    assert!(t.text().contains("no session matches"), "{}", t.text());
 }
 
 #[test]

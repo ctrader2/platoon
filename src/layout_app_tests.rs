@@ -83,7 +83,7 @@ fn on_a_wide_screen_the_columns_share_the_spare_width_and_the_row_fills_it() {
         let (lo, hi) = (shares.iter().min().unwrap(), shares.iter().max().unwrap());
         assert!(hi - lo <= 1 && *lo > 0, "{width}: the columns share what is over: {shares:?}\n{head}");
         // The context figure sits at the start of its column, under its title; the share is the air after it.
-        assert_eq!(col_of(row, "25%"), Some(starts[5]), "{width}: the figure under CONTEXT\n{head}\n{row}");
+        assert_eq!(col_of(row, " 5%").map(|c| c + 1), Some(starts[5]), "{width}: the figure under CONTEXT\n{head}\n{row}");
         // Nothing is cut: the text sits at the left of its column, the share is clear air after it.
         assert!(row.contains("alpha-one") && row.contains("/srv/alpha-one"), "{row}");
     }

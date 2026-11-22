@@ -107,9 +107,12 @@ when there is no room). It asks nothing and adds nothing to the conversation. It
   on concrete work with several steps or pieces that isn't tasks yet. That is a question added to the same request, not
   a request of its own, so it only comes for conversations in a project, with **Project notes** on, a few minutes after
   the conversation goes quiet (**Update notes after**);
-- or you approved a plan in the session (Claude Code's plan mode).
+- or you approved a plan in the session (Claude Code's plan mode). In Claude Code's Code Mode (an experimental opt-in in
+  which Claude writes JavaScript that calls its tools), a plan Claude puts to you from such a script isn't recorded in
+  the conversation, so it brings no reminder; a plan it puts to you directly does.
 
-It goes away once `/hand-to-squad` (or an old name of it) has been used in that conversation, when a later notes update
+It goes away once `/hand-to-squad` (or an old name of it) has been used in that conversation (typed, or run by Claude,
+from a Code Mode script too), when a later notes update
 says the conversation no longer qualifies, or 30 minutes after it appeared. New agreed work can bring it back. It shows
 only where the `/hand-to-squad` skill is installed and platoon's status line is the one Claude Code uses, never in a
 task's own session and never in Codex. Where only an old name of the skill, `/to-tasks` or `/to-tickets`, is installed
@@ -236,6 +239,12 @@ the plan with its hook. The same setting keeps Claude's file tools off Claude Co
 session to another worktree. It covers Claude's file tools, not the commands it runs. To let a task write in another
 folder, add it in the session with `/add-dir`. A task on Codex is kept to its worktree by Codex's own sandbox (see
 [Tasks on Codex](#tasks-on-codex)).
+
+The task's own folder in platoon's config is given to the session as a working folder through its settings for that
+session, not with `--add-dir`: since Claude Code 2.1.326, `--add-dir` asks you to trust a folder you haven't trusted
+yet, and every task has a new one. So starting a task asks no question about that folder. Nor about the worktree, when
+you already trust its repository: Claude Code counts a repository's trust for its worktrees too. (Claude Code asks once
+about a repository you have never started it in.)
 
 ### After the work
 

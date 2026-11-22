@@ -12,12 +12,31 @@ here.
   ends in each answer of the calls platoon makes; when it can end within a week, a line above the key hints of the
   Sessions, Projects or Tasks list says so once, for example ``Your Claude Code sign-in ends between Nov 18 and Nov 21. Run `claude auth login` before then to
   keep sessions, task checks and smart features working.`` Nothing is said for an API key.
+- When you quit Claude Code in a session platoon started, Claude Code's goodbye line now says how to get back to it
+  through platoon: `platoon --resume <id>` (Claude Code 2.1.323 and later), which works like `platoon open <id>`. It
+  names platoon only when typing `platoon` in a shell runs this same platoon; a task's session keeps Claude Code's own
+  line.
 
 ### Changed
 
 - A task on Claude Code edits files only in its worktree and the task's own folder. An edit anywhere else, your main
   checkout included, is refused (Claude Code 2.1.314 and later), as a task on Codex already was by Codex's sandbox. A
   squad that plans first works as before. `/add-dir` in the task's session lets it write in another folder.
+
+### Fixed
+
+- Starting a task on Claude Code no longer stops at a question asking whether you trust the task's own folder. Since
+  Claude Code 2.1.326, a folder given with `--add-dir` asks that for a folder you haven't trusted yet, and every task
+  has a new one; the session now gets that folder through its settings for the session, which asks nothing.
+- Idle stop no longer ends a Claude Code session that has a `/loop` or a scheduled task still to run. Claude Code keeps
+  that work in the running session only (since 2.1.330 a recurring one runs for up to 30 days), and says the session is
+  idle between runs. Now the session is kept until a turn of Claude's ends with nothing scheduled, and its row says
+  `Kept running: it has a scheduled task or /loop that runs later`.
+- The CONTEXT figure of a Claude conversation on a model Claude Code doesn't know is now counted against a 1M window, as
+  Claude Code itself does since 2.1.323 (200K with `CLAUDE_CODE_DISABLE_1M_CONTEXT`), and a conversation on Sonnet 5 is
+  counted against 1M as well; it was counted against 200K and looked fuller than it is.
+- The `/hand-to-squad` reminder in the status line now goes away when Claude runs the skill from a script in Claude
+  Code's Code Mode (an experimental opt-in) too.
 
 ## [1.5.2] - 2026-11-11
 

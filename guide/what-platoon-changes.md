@@ -85,7 +85,9 @@ Claude Code is started with:
 
 - `--permission-mode acceptEdits` (or `plan` first, for a squad that plans first): **Claude edits files without asking
   you first**, in the task's copy of its folder (a git worktree), or, for a folder that isn't in git, **in the folder as
-  it is**. The task's own folder in platoon's config is added (`--add-dir`), so it can read its squad and the others.
+  it is**. The task's own folder in platoon's config is one of its working folders (`permissions.additionalDirectories`
+  in the same `--settings`, not `--add-dir`, which asks the trust question for a new folder), so it can read its squad
+  and the others.
 - The squad's model (`--model`), and the squad with platoon's rules for the task added to its system prompt
   (`--append-system-prompt-file`).
 - Hooks for that session only (`--settings`), never written to your own settings: `platoon hook task-plan`,
@@ -153,6 +155,9 @@ small marks its parts leave for each other.
 - `ai-usage.json`: tokens used per day (numbers only), with `ai-usage.lock` beside it so two writers take turns, and
   `ai-work/`, the empty folder the `claude -p` and `codex exec` calls run in
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
+- `background-tool/`, `scheduled/`: one small file (a time) per Claude Code conversation whose last turn ended with a
+  tool still at work in the background, or with a `/loop` or scheduled task still to run, for
+  [idle stop](sessions.md#automatic-clean-up); taken away by the next turn that ends without it
 - `tickets-hint/`: one small file per conversation the notes update last judged for the
   [`/hand-to-squad` reminder](tasks-and-squads.md#hand-to-squad-in-a-session) (yes or no, and when); tidied after 30 minutes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and

@@ -258,7 +258,7 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     let argv = lab.session_argv();
     let at = |flag: &str| argv.iter().position(|a| a == flag).map(|i| argv[i + 1].clone());
     let task_dir = lab.config.join("projects/pweb/tasks/01-work");
-    assert_eq!(at("--add-dir"), Some(task_dir.to_string_lossy().into_owned()));
+    assert_eq!(at("--add-dir"), None, "a folder given with --add-dir asks the trust question (Claude Code 2.1.326)");
     assert_eq!(at("--session-id").as_deref(), Some(session.as_str()));
     assert_eq!(at("--model").as_deref(), Some("opus"));
     assert_eq!(at("--permission-mode").as_deref(), Some("plan"), "Feature plans first");
@@ -273,6 +273,8 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     assert_eq!(settings["permissions"]["allow"], json!([format!("Bash({BIN} task step:*)")]));
     // Its file tools write only in its working folders: the worktree it runs in and the task's folder it was given.
     assert_eq!(settings["permissions"]["blockWritesOutsideWorkingDirectories"], json!(true), "{settings}");
+    let real = std::fs::canonicalize(&task_dir).unwrap();
+    assert_eq!(settings["permissions"]["additionalDirectories"], json!([real.to_string_lossy()]), "{settings}");
     assert!(!argv.iter().any(|a| a == "--agents" || a == "--agent"));
     // The task's own folder: squad.md (platoon's rules, then the squad's steps) and every squad beside it.
     let squad_md = fs::read_to_string(task_dir.join("squad.md")).unwrap();

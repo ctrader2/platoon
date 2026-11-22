@@ -214,6 +214,7 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
             last_message: text("last_assistant_message").map(String::from),
             subagents_working: false,
             background_tool: false,
+            scheduled: false,
         }),
     };
     Some(HookInput { session, cwd, event })
@@ -1468,7 +1469,13 @@ pub(crate) mod tests {
         assert_eq!((prompt.session.as_str(), prompt.event), (FINISHED, HookEvent::PromptSubmitted));
         for (name, last) in [("Stop-first", "Teal."), ("Stop-after-block", "CHECKED")] {
             let stop = hook_input(HookKind::Stop, &hook(name)).unwrap();
-            let end = TurnEnd { planning: false, last_message: Some(last.into()), subagents_working: false, background_tool: false };
+            let end = TurnEnd {
+                planning: false,
+                last_message: Some(last.into()),
+                subagents_working: false,
+                background_tool: false,
+                scheduled: false,
+            };
             assert_eq!(stop.event, HookEvent::Stop(end), "{name}");
         }
         let perm = hook_input(HookKind::PermissionWait, &hook("PermissionRequest")).unwrap();

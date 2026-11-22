@@ -149,7 +149,7 @@ fn the_context_column_is_blank_for_a_conversation_nothing_is_known_about() {
     let (lines, _) = shown(&app, 80, 24);
     let known = &lines[row_of(&lines, "known ")];
     let bare = &lines[row_of(&lines, "bare ")];
-    assert!(known.contains(" 25% "), "the figure where there is data: {known}");
+    assert!(known.contains(" 5% "), "the figure where there is data: {known}");
     assert!(!bare.contains('%'), "blank, not 0%: {bare}");
     // Blank, but the row still lines up: LAST ends where it does on the other row.
     assert_eq!(bare.trim_end_matches(['│', ' ']).chars().count(), known.trim_end_matches(['│', ' ']).chars().count());
