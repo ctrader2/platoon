@@ -6,6 +6,8 @@ here.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-22
+
 ### Added
 
 - platoon tells you before your Claude Code sign-in ends. Claude Code 2.1.318 and later say when a claude.ai sign-in
@@ -275,7 +277,8 @@ both.
 - **Version notices**: platoon says once when your Claude Code or Codex is newer than the version it was checked with,
   and, once a day at most, whether a newer platoon is out (a setting switches this check off).
 
-[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/ctrader2/platoon/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/ctrader2/platoon/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/ctrader2/platoon/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/ctrader2/platoon/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/ctrader2/platoon/compare/v1.4.0...v1.5.0
