@@ -9,7 +9,7 @@ The color themes and the built-in squads are credited in [THIRD_PARTY_NOTICES.md
 
 ## Overview
 
-- MIT License: 118 crates
+- MIT License: 120 crates
 - Apache License 2.0: 3 crates
 - zlib License: 2 crates
 - Unicode License v3: 1 crate
@@ -230,7 +230,7 @@ limitations under the License.
 Used by:
 
 - ryu 1.0.23 (https://github.com/dtolnay/ryu)
-- serial2 0.2.38 (https://github.com/de-vri-es/serial2-rs)
+- serial2 0.2.39 (https://github.com/de-vri-es/serial2-rs)
 
 ````text
 Apache License
@@ -480,7 +480,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - bitflags 2.13.2 (https://github.com/bitflags/bitflags)
-- log 0.4.34 (https://github.com/rust-lang/log)
+- log 0.4.35 (https://github.com/rust-lang/log)
 
 ````text
 Copyright (c) 2014 The Rust Project Developers
@@ -648,7 +648,7 @@ Used by:
 
 - heck 0.5.0 (https://github.com/withoutboats/heck)
 - unicode-segmentation 1.13.3 (https://github.com/unicode-rs/unicode-segmentation)
-- unicode-width 0.2.2 (https://github.com/unicode-rs/unicode-width)
+- unicode-width 0.2.3 (https://github.com/unicode-rs/unicode-width)
 
 ````text
 Copyright (c) 2015 The Rust Project Developers
@@ -683,7 +683,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- fixedbitset 0.5.7 (https://github.com/petgraph/fixedbitset)
+- fixedbitset 0.5.9 (https://github.com/petgraph/fixedbitset)
 
 ````text
 Copyright (c) 2015-2017
@@ -1004,7 +1004,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- smallvec 1.16.4 (https://github.com/servo/rust-smallvec)
+- smallvec 1.16.5 (https://github.com/servo/rust-smallvec)
 
 ````text
 Copyright (c) 2018 The Servo Project Developers
@@ -1074,7 +1074,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- wl-clipboard-rs 0.9.4 (https://github.com/YaLTeR/wl-clipboard-rs)
+- wl-clipboard-rs 0.9.5 (https://github.com/YaLTeR/wl-clipboard-rs)
 
 ````text
 Copyright (c) 2019 Ivan Molodetskikh
@@ -1360,9 +1360,9 @@ SOFTWARE.
 
 Used by:
 
-- serde_spanned 1.1.2 (https://github.com/toml-rs/toml)
-- toml 1.1.8+spec-1.1.0 (https://github.com/toml-rs/toml)
-- toml_datetime 1.1.2+spec-1.1.0 (https://github.com/toml-rs/toml)
+- serde_spanned 1.1.3 (https://github.com/toml-rs/toml)
+- toml 1.2.1+spec-1.1.0 (https://github.com/toml-rs/toml)
+- toml_datetime 1.1.3+spec-1.1.0 (https://github.com/toml-rs/toml)
 - toml_parser 1.1.5+spec-1.1.0 (https://github.com/toml-rs/toml)
 
 ````text
@@ -1757,6 +1757,37 @@ SOFTWARE.
 
 Used by:
 
+- ruzstd 0.9.1 (https://github.com/KillingSpark/zstd-rs)
+
+````text
+MIT License
+
+Copyright (c) 2019 Moritz Borcherding
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+````
+
+## MIT License
+
+Used by:
+
 - strum 0.28.0 (https://github.com/Peternator7/strum)
 - strum_macros 0.28.0 (https://github.com/Peternator7/strum)
 
@@ -1943,7 +1974,7 @@ SOFTWARE.
 
 Used by:
 
-- platoon-tui 1.0.0 (https://github.com/ctrader2/platoon)
+- platoon-tui 1.5.2 (https://github.com/ctrader2/platoon)
 
 ````text
 MIT License
@@ -2069,11 +2100,11 @@ Used by:
 
 - anyhow 1.0.104 (https://github.com/dtolnay/anyhow)
 - indoc 2.0.8 (https://github.com/dtolnay/indoc)
-- itoa 1.0.18 (https://github.com/dtolnay/itoa)
+- itoa 1.0.19 (https://github.com/dtolnay/itoa)
 - linux-raw-sys 0.12.1 (https://github.com/sunfishcode/linux-raw-sys)
 - proc-macro2 1.0.107 (https://github.com/dtolnay/proc-macro2)
 - quote 1.0.47 (https://github.com/dtolnay/quote)
-- rustix 1.1.5 (https://github.com/bytecodealliance/rustix)
+- rustix 1.1.6 (https://github.com/bytecodealliance/rustix)
 - rustversion 1.0.23 (https://github.com/dtolnay/rustversion)
 - serde_core 1.0.229 (https://github.com/serde-rs/serde)
 - serde_json 1.0.154 (https://github.com/serde-rs/json)
@@ -2150,7 +2181,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- winnow 1.0.4 (https://github.com/winnow-rs/winnow)
+- winnow 1.0.5 (https://github.com/winnow-rs/winnow)
 
 ````text
 Permission is hereby granted, free of charge, to any person obtaining
@@ -2178,7 +2209,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- pulldown-cmark 0.13.5 (https://github.com/raphlinus/pulldown-cmark)
+- pulldown-cmark 0.13.6 (https://github.com/raphlinus/pulldown-cmark)
 
 ````text
 The MIT License
@@ -2304,6 +2335,37 @@ SOFTWARE.
 
 Used by:
 
+- twox-hash 2.1.5 (https://github.com/shepmaster/twox-hash)
+
+````text
+The MIT License (MIT)
+
+Copyright (c) 2015 Jake Goulding
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+````
+
+## MIT License
+
+Used by:
+
 - kasuari 0.4.13 (https://github.com/ratatui/kasuari)
 
 ````text
@@ -2368,7 +2430,7 @@ SOFTWARE.
 
 Used by:
 
-- vt100 0.16.2 (https://github.com/doy/vt100-rust)
+- vt100 0.18.1 (https://github.com/doy/vt100-rust)
 
 ````text
 The MIT License (MIT)
